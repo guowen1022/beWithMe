@@ -161,6 +161,11 @@ async def run_scenario(scenario: dict, base_url: str):
             "edges": len(graph["edges"]),
             "avg_time": round(avg_time, 1),
             "concepts_extraction_rate": f"{concepts_found}/{total_questions}",
+            # Detailed data for analysis
+            "answers": answers,
+            "concept_list": [c["name"] for c in concepts],
+            "graph": graph,
+            "preferences": prefs,
         }
 
 
@@ -181,6 +186,18 @@ async def main():
 
     result = await run_scenario(ALL_SCENARIOS[idx], args.base_url)
     print(f"\n{json.dumps(result, indent=2)}")
+
+    # Save results to file
+    import os
+    from datetime import datetime
+    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(results_dir, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"scenario{args.scenario}_{ts}.json"
+    filepath = os.path.join(results_dir, filename)
+    with open(filepath, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"\nResults saved to: {filepath}")
 
 
 if __name__ == "__main__":
