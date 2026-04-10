@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS learning_preferences (
     meta_notes TEXT NOT NULL DEFAULT '',
     interaction_count INTEGER NOT NULL DEFAULT 0,
     last_distilled_at TIMESTAMPTZ,
+    preference_embedding vector(768),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -79,6 +80,9 @@ MIGRATE = """
 -- Add HLR columns to existing concept_nodes tables
 ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
 ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
+
+-- Add preference embedding to existing learning_preferences tables
+ALTER TABLE learning_preferences ADD COLUMN IF NOT EXISTS preference_embedding vector(768);
 """
 
 

@@ -1,1 +1,1 @@
-from app.distill.models import ConceptNode  # noqa: F401
+from app.knowledge.models import ConceptNode  # noqa: F401

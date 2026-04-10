@@ -1,1 +1,1 @@
-from app.distill.models import LearningPreferences  # noqa: F401
+from app.user_profile.models import LearningPreferences  # noqa: F401

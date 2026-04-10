@@ -13,7 +13,8 @@ from app.services.embedding import embed_text
 from app.services.retrieval import search_similar_interactions, search_document_chunks
 from app.services.prompt_builder import build_answer_prompt
 from app.services.llm import generate
-from app.distill import get_learner_state
+from app.user_profile import get_user_profile, boost_query_embedding
+from app.knowledge import get_graph_context, get_concepts
 from app.background.post_interaction import post_interaction_update
 
 router = APIRouter()
@@ -34,6 +35,10 @@ async def _build_context(body: AskRequest, db: AsyncSession):
     except Exception:
         query_embedding = None
 
+    # Boost query with user's preference embedding for personalized retrieval
+    if query_embedding:
+        query_embedding = await boost_query_embedding(db, query_embedding)
+
     similar = []
     if query_embedding:
         similar = await search_similar_interactions(db, query_embedding, top_k=5)
@@ -42,8 +47,20 @@ async def _build_context(body: AskRequest, db: AsyncSession):
     if body.document_id and query_embedding:
         doc_chunks = await search_document_chunks(db, body.document_id, query_embedding, top_k=5)
 
-    # Fetch unified learner state (preferences + concepts + session signals)
-    learner_state = await get_learner_state(db, session_id=body.session_id)
+    # Fetch user profile (static preferences + embedding + session signals)
+    user_profile = await get_user_profile(db, session_id=body.session_id)
+
+    # Fetch concepts from knowledge module (dynamic learning state)
+    concept_nodes = await get_concepts(db, limit=30)
+
+    # Walk the concept graph for related territory
+    graph_ctx = ""
+    if concept_nodes:
+        try:
+            concept_names = [c.name for c in concept_nodes[:10]]
+            graph_ctx = await get_graph_context(db, concept_names)
+        except Exception as e:
+            print(f"[ask] graph walk error: {e}", flush=True)
 
     system_prompt, user_prompt = build_answer_prompt(
         passage=body.passage_text,
@@ -52,7 +69,9 @@ async def _build_context(body: AskRequest, db: AsyncSession):
         self_description=self_description,
         similar_interactions=similar,
         doc_chunks=doc_chunks,
-        learner=learner_state,
+        user_profile=user_profile,
+        concept_nodes=concept_nodes,
+        graph_context=graph_ctx,
     )
     return system_prompt, user_prompt, similar
 

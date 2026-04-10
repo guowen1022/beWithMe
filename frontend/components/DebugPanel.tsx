@@ -8,6 +8,7 @@ import {
   type Preferences,
   type Concept,
 } from "@/lib/api";
+import KnowledgeGraph from "./KnowledgeGraph";
 
 const PREF_LABELS: Record<string, string> = {
   explanation_style: "Explanation Style",
@@ -35,7 +36,8 @@ export default function DebugPanel({
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [distilling, setDistilling] = useState(false);
-  const [tab, setTab] = useState<"prefs" | "concepts">("prefs");
+  const [tab, setTab] = useState<"prefs" | "concepts" | "graph">("prefs");
+  const [graphKey, setGraphKey] = useState(0);
 
   const loadData = useCallback(() => {
     getPreferences().then(setPrefs).catch(() => setPrefs(null));
@@ -66,7 +68,9 @@ export default function DebugPanel({
 
   return (
     <div
-      className={`fixed top-0 left-0 h-full w-80 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-transform duration-300 ease-in-out ${
+      className={`fixed top-0 left-0 h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-all duration-300 ease-in-out ${
+        tab === "graph" ? "w-[60vw]" : "w-80"
+      } ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >
@@ -92,6 +96,16 @@ export default function DebugPanel({
             }`}
           >
             Concepts ({concepts.length})
+          </button>
+          <button
+            onClick={() => { setTab("graph"); setGraphKey((k) => k + 1); }}
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+              tab === "graph"
+                ? "bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            Graph
           </button>
         </div>
         <button
@@ -194,6 +208,12 @@ export default function DebugPanel({
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {tab === "graph" && (
+          <div className="h-full -mx-4 -my-3">
+            <KnowledgeGraph refreshKey={graphKey} />
           </div>
         )}
       </div>

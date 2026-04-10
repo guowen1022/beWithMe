@@ -6,8 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.distill.models import ConceptNode
-from app.distill.hlr import compute_mastery, mastery_to_state
+from app.knowledge import ConceptNode, compute_mastery, mastery_to_state, get_graph_data
 
 router = APIRouter()
 
@@ -54,3 +53,9 @@ async def list_concepts(
             last_seen=c.last_seen,
         ))
     return concepts
+
+
+@router.get("/graph")
+async def get_graph(db: AsyncSession = Depends(get_db)):
+    """Full graph data for visualization (nodes + edges)."""
+    return await get_graph_data(db)

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.distill import distill_preferences, get_or_create_preferences
+from app.user_profile import distill_preferences, get_or_create_preferences
 
 router = APIRouter()
 
@@ -18,6 +18,7 @@ class PreferencesRead(BaseModel):
     meta_notes: str
     interaction_count: int
     last_distilled_at: Optional[datetime]
+    has_preference_embedding: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -34,7 +35,9 @@ class PreferencesUpdate(BaseModel):
 @router.get("/preferences", response_model=PreferencesRead)
 async def get_preferences(db: AsyncSession = Depends(get_db)):
     prefs = await get_or_create_preferences(db)
-    return PreferencesRead.model_validate(prefs)
+    data = PreferencesRead.model_validate(prefs)
+    data.has_preference_embedding = prefs.preference_embedding is not None
+    return data
 
 
 @router.put("/preferences", response_model=PreferencesRead)

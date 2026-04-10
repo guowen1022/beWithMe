@@ -1,7 +1,10 @@
 from typing import Optional, List, Tuple
 from app.models.interaction import Interaction
 from app.models.document import DocumentChunk
-from app.distill.state import LearnerState
+from app.user_profile.state import UserProfileState
+from app.knowledge.models import ConceptNode
+from app.knowledge.hlr import compute_mastery, mastery_to_state
+from datetime import datetime
 
 
 def build_answer_prompt(
@@ -11,7 +14,9 @@ def build_answer_prompt(
     self_description: str,
     similar_interactions: List[Interaction],
     doc_chunks: List[DocumentChunk],
-    learner: Optional[LearnerState] = None,
+    user_profile: Optional[UserProfileState] = None,
+    concept_nodes: Optional[List[ConceptNode]] = None,
+    graph_context: str = "",
 ) -> Tuple[str, str]:
     """Returns (system_prompt, user_prompt)."""
 
@@ -25,9 +30,11 @@ def build_answer_prompt(
         "4. If the question needs current/specific facts beyond your knowledge or training data, you can browse the web to find up-to-date information.",
         "5. The passage is the starting point, not the boundary. Draw on everything you know about the topic.",
         "6. Past interactions show what the user has studied before — use them to personalize, not as the answer topic.",
+        "7. At the VERY END of your answer, add a line: CONCEPTS: concept1, concept2, concept3 — listing 1-5 domain knowledge concepts covered in your answer (textbook-level terms only, no generic words).",
     ]
 
-    if learner:
+    # User profile: static preferences
+    if user_profile:
         style_map = {
             "explanation_style": "Explanation style",
             "depth_preference": "Depth",
@@ -37,33 +44,45 @@ def build_answer_prompt(
         }
         pref_lines = []
         for key, label in style_map.items():
-            val = getattr(learner, key, None)
+            val = getattr(user_profile, key, None)
             if val and val != "moderate" and val != "balanced":
                 pref_lines.append(f"- {label}: {val}")
-        if learner.meta_notes:
-            pref_lines.append(f"- Notes: {learner.meta_notes}")
+        if user_profile.meta_notes:
+            pref_lines.append(f"- Notes: {user_profile.meta_notes}")
 
         if pref_lines:
             system_parts.append("")
             system_parts.append("USER'S LEARNING PREFERENCES (adapt your answer to match):")
             system_parts.extend(pref_lines)
 
-        if learner.concepts:
-            by_state = {}
-            for c in learner.concepts:
-                by_state.setdefault(c.state, []).append(c.name)
-            if by_state:
-                system_parts.append("")
-                system_parts.append("USER'S CONCEPT KNOWLEDGE (what they've studied before):")
-                for state in ["solid", "learning", "rusty", "faded"]:
-                    if state in by_state:
-                        names = ", ".join(by_state[state][:10])
-                        system_parts.append(f"- {state}: {names}")
-                system_parts.append("Build on what they already know. Explain new concepts more carefully.")
-
-        if learner.session_interest_summary:
+        if user_profile.session_interest_summary:
             system_parts.append("")
-            system_parts.append(f"CURRENT SESSION FOCUS:\n{learner.session_interest_summary}")
+            system_parts.append(f"CURRENT SESSION FOCUS:\n{user_profile.session_interest_summary}")
+
+    # Knowledge module: dynamic concept mastery
+    if concept_nodes:
+        now = datetime.utcnow()
+        by_state = {}
+        for node in concept_nodes:
+            ref_time = node.last_recalled_at or node.last_seen
+            if ref_time and ref_time.tzinfo is not None:
+                ref_time = ref_time.replace(tzinfo=None)
+            hours_since = max(0, (now - ref_time).total_seconds() / 3600.0)
+            p = compute_mastery(node.half_life_hours, hours_since)
+            state = mastery_to_state(p)
+            by_state.setdefault(state, []).append(node.name)
+        if by_state:
+            system_parts.append("")
+            system_parts.append("USER'S CONCEPT KNOWLEDGE (what they've studied before):")
+            for state in ["solid", "learning", "rusty", "faded"]:
+                if state in by_state:
+                    names = ", ".join(by_state[state][:10])
+                    system_parts.append(f"- {state}: {names}")
+            system_parts.append("Build on what they already know. Explain new concepts more carefully.")
+
+    if graph_context:
+        system_parts.append("")
+        system_parts.append(graph_context)
 
     if self_description:
         system_parts.append(f"\nUSER BACKGROUND:\n{self_description}")

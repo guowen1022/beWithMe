@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.interaction import Interaction
-from app.distill.models import LearningPreferences
+from app.user_profile.models import LearningPreferences
 from app.services.llm import generate
 
 DISTILL_PROMPT = """Analyze these recent reading interactions and produce a learning preferences profile.

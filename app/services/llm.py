@@ -51,7 +51,7 @@ async def generate_json(prompt: str, max_tokens: int = 512) -> str:
     kwargs = {"api_key": settings.anthropic_api_key}
     if settings.anthropic_base_url:
         kwargs["base_url"] = settings.anthropic_base_url
-    client = anthropic.AsyncAnthropic(**kwargs)
+    client = anthropic.AsyncAnthropic(**kwargs, timeout=120.0)
     response = await client.messages.create(
         model=settings.llm_model,
         max_tokens=max_tokens,

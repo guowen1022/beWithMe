@@ -1,1 +1,1 @@
-from app.distill.concept_tracker import extract_concepts, upsert_concepts_hlr as upsert_concepts  # noqa: F401
+from app.knowledge import parse_concepts as extract_concepts, upsert_concepts  # noqa: F401

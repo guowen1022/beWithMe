@@ -159,3 +159,29 @@ export async function getConcepts(): Promise<Concept[]> {
   if (!res.ok) throw new Error("Failed to fetch concepts");
   return res.json();
 }
+
+export interface GraphNode {
+  id: string;
+  state: string;
+  mastery: number;
+  encounters: number;
+  halfLife: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  weight: number;
+  type: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export async function getGraphData(): Promise<GraphData> {
+  const res = await fetch(`${API_BASE}/graph`);
+  if (!res.ok) throw new Error("Failed to fetch graph");
+  return res.json();
+}
