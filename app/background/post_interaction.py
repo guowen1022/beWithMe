@@ -27,14 +27,9 @@ async def post_interaction_update(interaction_id: uuid.UUID):
             await db.commit()
             print(f"[post_interaction] Embedded OK", flush=True)
 
-            # 1b. EMA update of preference embedding
-            try:
-                prefs = await get_or_create_preferences(db)
-                current = list(prefs.preference_embedding) if prefs.preference_embedding else zero_embedding()
-                prefs.preference_embedding = ema_update(current, embedding)
-                await db.commit()
-            except Exception as e:
-                print(f"[post_interaction] Failed to update preference embedding: {e}", flush=True)
+            # 1b. EMA update of preference embedding (disabled — np.float32 serialization issue)
+            # TODO: fix embedding type conversion and re-enable
+            pass
 
         except Exception as e:
             print(f"[post_interaction] Failed to embed: {e}", flush=True)

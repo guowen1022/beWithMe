@@ -54,7 +54,7 @@ async def get_user_profile(
         math_comfort=prefs.math_comfort,
         pacing=prefs.pacing,
         meta_notes=prefs.meta_notes,
-        preference_embedding=list(prefs.preference_embedding) if prefs.preference_embedding else None,
+        preference_embedding=list(prefs.preference_embedding) if prefs.preference_embedding is not None else None,
         session_interest_summary=session_summary,
     )
 
@@ -68,6 +68,6 @@ async def boost_query_embedding(
     Returns the original query if no preference embedding exists yet.
     """
     prefs = await get_or_create_preferences(db)
-    if prefs.preference_embedding:
+    if prefs.preference_embedding is not None:
         return boost_query(query_embedding, list(prefs.preference_embedding))
     return query_embedding

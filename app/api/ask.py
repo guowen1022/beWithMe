@@ -35,9 +35,9 @@ async def _build_context(body: AskRequest, db: AsyncSession):
     except Exception:
         query_embedding = None
 
-    # Boost query with user's preference embedding for personalized retrieval
-    if query_embedding:
-        query_embedding = await boost_query_embedding(db, query_embedding)
+    # Boost query with user's preference embedding (disabled — serialization issue)
+    # if query_embedding:
+    #     query_embedding = await boost_query_embedding(db, query_embedding)
 
     similar = []
     if query_embedding:

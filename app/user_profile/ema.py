@@ -14,7 +14,7 @@ def ema_update(
     current: List[float], new: List[float], alpha: float = EMA_ALPHA
 ) -> List[float]:
     """Blend a new interaction embedding into the running preference embedding."""
-    return [alpha * n + (1.0 - alpha) * c for c, n in zip(current, new)]
+    return [float(alpha * n + (1.0 - alpha) * c) for c, n in zip(current, new)]
 
 
 def zero_embedding(dim: int = 768) -> List[float]:

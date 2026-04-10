@@ -9,3 +9,4 @@ node_modules/
 frontend/.next/
 frontend/out/
 .pytest_cache/
+.claude/worktrees/
