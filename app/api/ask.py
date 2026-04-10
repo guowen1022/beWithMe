@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from app.services.llm import generate
 from app.user_profile import get_user_profile, boost_query_embedding
 from app.knowledge import get_graph_context, get_concepts
 from app.background.post_interaction import post_interaction_update
+from app.api.deps import get_current_user_id
 
 router = APIRouter()
 
@@ -23,8 +25,8 @@ router = APIRouter()
 _background_tasks: set = set()
 
 
-async def _build_context(body: AskRequest, db: AsyncSession):
-    result = await db.execute(select(Profile).limit(1))
+async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
+    result = await db.execute(select(Profile).where(Profile.user_id == user_id))
     profile = result.scalar_one_or_none()
     self_description = profile.self_description if profile else ""
 
@@ -35,30 +37,30 @@ async def _build_context(body: AskRequest, db: AsyncSession):
     except Exception:
         query_embedding = None
 
-    # Boost query with user's preference embedding (disabled — serialization issue)
-    # if query_embedding:
-    #     query_embedding = await boost_query_embedding(db, query_embedding)
+    # Boost query with user's preference embedding for personalized retrieval
+    if query_embedding:
+        query_embedding = await boost_query_embedding(db, user_id, query_embedding)
 
     similar = []
     if query_embedding:
-        similar = await search_similar_interactions(db, query_embedding, top_k=5)
+        similar = await search_similar_interactions(db, user_id, query_embedding, top_k=5)
 
     doc_chunks = []
     if body.document_id and query_embedding:
         doc_chunks = await search_document_chunks(db, body.document_id, query_embedding, top_k=5)
 
     # Fetch user profile (static preferences + embedding + session signals)
-    user_profile = await get_user_profile(db, session_id=body.session_id)
+    user_profile = await get_user_profile(db, user_id, session_id=body.session_id)
 
     # Fetch concepts from knowledge module (dynamic learning state)
-    concept_nodes = await get_concepts(db, limit=30)
+    concept_nodes = await get_concepts(db, user_id, limit=30)
 
     # Walk the concept graph for related territory
     graph_ctx = ""
     if concept_nodes:
         try:
             concept_names = [c.name for c in concept_nodes[:10]]
-            graph_ctx = await get_graph_context(db, concept_names)
+            graph_ctx = await get_graph_context(db, user_id, concept_names)
         except Exception as e:
             print(f"[ask] graph walk error: {e}", flush=True)
 
@@ -77,9 +79,13 @@ async def _build_context(body: AskRequest, db: AsyncSession):
 
 
 @router.post("/ask/stream")
-async def ask_stream(body: AskRequest, db: AsyncSession = Depends(get_db)):
+async def ask_stream(
+    body: AskRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
     """SSE endpoint with streaming — detects proxy search events."""
-    system_prompt, user_prompt, similar = await _build_context(body, db)
+    system_prompt, user_prompt, similar = await _build_context(body, db, user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -103,6 +109,7 @@ async def ask_stream(body: AskRequest, db: AsyncSession = Depends(get_db)):
         try:
             async with async_session() as bg_db:
                 interaction = Interaction(
+                    user_id=user_id,
                     session_id=body.session_id,
                     passage_text=body.passage_text,
                     question=body.question,
@@ -116,7 +123,7 @@ async def ask_stream(body: AskRequest, db: AsyncSession = Depends(get_db)):
                 # Fire-and-forget: schedule background task on the event loop
                 print(f"[ask/stream] scheduling background task for {interaction.id}", flush=True)
                 task = asyncio.get_event_loop().create_task(
-                    post_interaction_update(interaction.id)
+                    post_interaction_update(interaction.id, user_id)
                 )
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
@@ -145,11 +152,13 @@ async def ask(
     body: AskRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
 ):
-    system_prompt, user_prompt, similar = await _build_context(body, db)
+    system_prompt, user_prompt, similar = await _build_context(body, db, user_id)
     answer = await generate(user_prompt, system=system_prompt)
 
     interaction = Interaction(
+        user_id=user_id,
         session_id=body.session_id,
         passage_text=body.passage_text,
         question=body.question,
@@ -160,7 +169,7 @@ async def ask(
     await db.commit()
     await db.refresh(interaction)
 
-    background_tasks.add_task(post_interaction_update, interaction.id)
+    background_tasks.add_task(post_interaction_update, interaction.id, user_id)
 
     return AskResponse(
         interaction_id=interaction.id,

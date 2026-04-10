@@ -1,4 +1,5 @@
 """Edge operations: create, reinforce, and decay concept edges."""
+import uuid
 from typing import List, Optional
 from datetime import datetime
 from itertools import combinations
@@ -10,6 +11,7 @@ from app.knowledge.hlr import DECAY_HALF_LIFE_DAYS
 
 async def link_concepts(
     db: AsyncSession,
+    user_id: uuid.UUID,
     concept_names: List[str],
     edge_type: str = "temporal",
     context: Optional[str] = None,
@@ -19,7 +21,7 @@ async def link_concepts(
         return []
 
     result = await db.execute(
-        select(ConceptNode).where(ConceptNode.name.in_(concept_names))
+        select(ConceptNode).where(ConceptNode.user_id == user_id, ConceptNode.name.in_(concept_names))
     )
     nodes = {n.name: n for n in result.scalars().all()}
 
@@ -44,6 +46,7 @@ async def link_concepts(
             edge.last_reinforced = now
         else:
             edge = ConceptEdge(
+                user_id=user_id,
                 source_id=src.id,
                 target_id=tgt.id,
                 edge_type=edge_type,
@@ -57,14 +60,14 @@ async def link_concepts(
     return edges
 
 
-async def decay_edges(db: AsyncSession, half_life_days: float = DECAY_HALF_LIFE_DAYS):
+async def decay_edges(db: AsyncSession, user_id: uuid.UUID, half_life_days: float = DECAY_HALF_LIFE_DAYS):
     """Decay edge weights and prune edges below threshold.
 
     weight = weight * 0.5^(days_since_reinforced / half_life_days)
     Edges below 0.1 are deleted.
     """
     now = datetime.utcnow()
-    result = await db.execute(select(ConceptEdge))
+    result = await db.execute(select(ConceptEdge).where(ConceptEdge.user_id == user_id))
     pruned = 0
     decayed = 0
 

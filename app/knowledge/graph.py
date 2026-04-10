@@ -1,4 +1,5 @@
 """NetworkX graph operations: load, walk, format for prompts."""
+import uuid
 from typing import List, Dict, Tuple
 from datetime import datetime
 import networkx as nx
@@ -7,19 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.knowledge.models import ConceptNode, ConceptEdge
 
 
-async def load_graph(db: AsyncSession) -> nx.Graph:
-    """Load the full concept graph into NetworkX."""
+async def load_graph(db: AsyncSession, user_id: uuid.UUID) -> nx.Graph:
+    """Load the user's concept graph into NetworkX."""
     g = nx.Graph()
 
-    node_result = await db.execute(select(ConceptNode))
+    node_result = await db.execute(select(ConceptNode).where(ConceptNode.user_id == user_id))
     for node in node_result.scalars().all():
         g.add_node(node.name, state=node.state, count=node.encounter_count,
                     half_life=node.half_life_hours)
 
-    id_result = await db.execute(select(ConceptNode.id, ConceptNode.name))
+    id_result = await db.execute(
+        select(ConceptNode.id, ConceptNode.name).where(ConceptNode.user_id == user_id)
+    )
     id_to_name = {row[0]: row[1] for row in id_result.all()}
 
-    edge_result = await db.execute(select(ConceptEdge))
+    edge_result = await db.execute(select(ConceptEdge).where(ConceptEdge.user_id == user_id))
     for edge in edge_result.scalars().all():
         src = id_to_name.get(edge.source_id)
         tgt = id_to_name.get(edge.target_id)
@@ -67,12 +70,12 @@ def walk_neighborhood(
     return results
 
 
-async def get_graph_context(db: AsyncSession, concept_names: List[str]) -> str:
+async def get_graph_context(db: AsyncSession, user_id: uuid.UUID, concept_names: List[str]) -> str:
     """Load graph, walk neighborhoods, return prompt-ready text."""
     if not concept_names:
         return ""
 
-    graph = await load_graph(db)
+    graph = await load_graph(db, user_id)
     neighborhood = walk_neighborhood(graph, concept_names)
 
     if not neighborhood:

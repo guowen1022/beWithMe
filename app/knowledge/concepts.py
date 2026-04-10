@@ -1,5 +1,6 @@
 """Concept node operations: parse from answers, upsert with HLR, query."""
 import re
+import uuid
 from typing import List
 from datetime import datetime
 from sqlalchemy import select
@@ -21,6 +22,7 @@ def parse_concepts(answer: str) -> List[str]:
 
 async def upsert_concepts(
     db: AsyncSession,
+    user_id: uuid.UUID,
     concept_names: List[str],
     demonstrated_understanding: bool = True,
 ) -> List[ConceptNode]:
@@ -29,7 +31,7 @@ async def upsert_concepts(
     nodes = []
     for name in concept_names:
         result = await db.execute(
-            select(ConceptNode).where(ConceptNode.name == name)
+            select(ConceptNode).where(ConceptNode.user_id == user_id, ConceptNode.name == name)
         )
         node = result.scalar_one_or_none()
 
@@ -48,6 +50,7 @@ async def upsert_concepts(
             node.state = mastery_to_state(compute_mastery(node.half_life_hours, hours_since))
         else:
             node = ConceptNode(
+                user_id=user_id,
                 name=name,
                 state="learning" if demonstrated_understanding else "faded",
                 encounter_count=1,
@@ -66,11 +69,12 @@ async def upsert_concepts(
 
 async def get_concepts(
     db: AsyncSession,
+    user_id: uuid.UUID,
     state: str = None,
     limit: int = 30,
 ) -> List[ConceptNode]:
     """Fetch concept nodes, optionally filtered by state."""
-    stmt = select(ConceptNode).order_by(ConceptNode.last_seen.desc()).limit(limit)
+    stmt = select(ConceptNode).where(ConceptNode.user_id == user_id).order_by(ConceptNode.last_seen.desc()).limit(limit)
     if state:
         stmt = stmt.where(ConceptNode.state == state)
     result = await db.execute(stmt)

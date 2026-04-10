@@ -28,18 +28,19 @@ class UserProfileState(BaseModel):
 
 async def get_user_profile(
     db: AsyncSession,
+    user_id: uuid.UUID,
     session_id: Optional[uuid.UUID] = None,
 ) -> UserProfileState:
     """Assemble the user profile: durable prefs + preference embedding + session focus."""
     # 1. Durable preferences
-    prefs = await get_or_create_preferences(db)
+    prefs = await get_or_create_preferences(db, user_id)
 
     # 2. Session interest summary (last 3 questions in this session)
     session_summary = None
     if session_id:
         session_result = await db.execute(
             select(Interaction.question)
-            .where(Interaction.session_id == session_id)
+            .where(Interaction.user_id == user_id, Interaction.session_id == session_id)
             .order_by(Interaction.created_at.desc())
             .limit(3)
         )
@@ -61,13 +62,14 @@ async def get_user_profile(
 
 async def boost_query_embedding(
     db: AsyncSession,
+    user_id: uuid.UUID,
     query_embedding: List[float],
 ) -> List[float]:
     """Blend a query embedding with the user's preference embedding for retrieval.
 
     Returns the original query if no preference embedding exists yet.
     """
-    prefs = await get_or_create_preferences(db)
-    if prefs.preference_embedding is not None:
+    prefs = await get_or_create_preferences(db, user_id)
+    if prefs.preference_embedding:
         return boost_query(query_embedding, list(prefs.preference_embedding))
     return query_embedding

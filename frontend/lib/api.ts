@@ -1,6 +1,60 @@
 const API_BASE = "/api";
 const API_STREAM = "/api"; // use Next.js route handler for SSE
 
+// --- User management ---
+
+let currentUserId: string | null = null;
+
+export function setCurrentUserId(id: string) {
+  currentUserId = id;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("bewithme_user_id", id);
+  }
+}
+
+export function getCurrentUserId(): string | null {
+  if (!currentUserId && typeof window !== "undefined") {
+    currentUserId = localStorage.getItem("bewithme_user_id");
+  }
+  return currentUserId;
+}
+
+function authHeaders(): Record<string, string> {
+  const userId = getCurrentUserId();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (userId) {
+    headers["X-User-Id"] = userId;
+  }
+  return headers;
+}
+
+export interface User {
+  id: string;
+  username: string;
+  created_at: string;
+}
+
+export async function createUser(username: string): Promise<User> {
+  const res = await fetch(`${API_BASE}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to create user");
+  }
+  return res.json();
+}
+
+export async function listUsers(): Promise<User[]> {
+  const res = await fetch(`${API_BASE}/users`);
+  if (!res.ok) throw new Error("Failed to fetch users");
+  return res.json();
+}
+
+// --- Profile ---
+
 export interface Profile {
   self_description: string;
   created_at: string;
@@ -32,7 +86,7 @@ export interface AskResponse {
 }
 
 export async function getProfile(): Promise<Profile> {
-  const res = await fetch(`${API_BASE}/profile`);
+  const res = await fetch(`${API_BASE}/profile`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch profile");
   return res.json();
 }
@@ -42,7 +96,7 @@ export async function updateProfile(
 ): Promise<Profile> {
   const res = await fetch(`${API_BASE}/profile`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ self_description }),
   });
   if (!res.ok) throw new Error("Failed to update profile");
@@ -69,7 +123,7 @@ export async function askStream(
 ): Promise<void> {
   const res = await fetch(`${API_STREAM}/ask/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error("Failed to get answer");
@@ -102,7 +156,7 @@ export async function askStream(
 export async function ask(req: AskRequest): Promise<AskResponse> {
   const res = await fetch(`${API_BASE}/ask`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error("Failed to get answer");
@@ -114,7 +168,8 @@ export async function getInteractions(
   offset = 0
 ): Promise<Interaction[]> {
   const res = await fetch(
-    `${API_BASE}/interactions?limit=${limit}&offset=${offset}`
+    `${API_BASE}/interactions?limit=${limit}&offset=${offset}`,
+    { headers: authHeaders() }
   );
   if (!res.ok) throw new Error("Failed to fetch interactions");
   return res.json();
@@ -132,7 +187,7 @@ export interface Preferences {
 }
 
 export async function getPreferences(): Promise<Preferences> {
-  const res = await fetch(`${API_BASE}/preferences`);
+  const res = await fetch(`${API_BASE}/preferences`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch preferences");
   return res.json();
 }
@@ -140,6 +195,7 @@ export async function getPreferences(): Promise<Preferences> {
 export async function distillPreferences(): Promise<Preferences> {
   const res = await fetch(`${API_BASE}/preferences/distill`, {
     method: "POST",
+    headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to distill preferences");
   return res.json();
@@ -155,7 +211,7 @@ export interface Concept {
 }
 
 export async function getConcepts(): Promise<Concept[]> {
-  const res = await fetch(`${API_BASE}/concepts`);
+  const res = await fetch(`${API_BASE}/concepts`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch concepts");
   return res.json();
 }
@@ -181,7 +237,7 @@ export interface GraphData {
 }
 
 export async function getGraphData(): Promise<GraphData> {
-  const res = await fetch(`${API_BASE}/graph`);
+  const res = await fetch(`${API_BASE}/graph`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch graph");
   return res.json();
 }

@@ -2,11 +2,11 @@
 
 Public API:
     parse_concepts(answer)       -> list[str]       # extract concept names from model answer
-    upsert_concepts(db, names)   -> list[ConceptNode]  # create/update nodes with HLR
-    link_concepts(db, names, context)  -> list[ConceptEdge]  # create temporal edges
-    get_graph_context(db, concept_names) -> str  # walk graph, return prompt-ready text
-    get_concepts(db)             -> list[ConceptNode]  # all concepts for debug panel
-    decay_edges(db, half_life_days)     # prune weak edges
+    upsert_concepts(db, user_id, names)   -> list[ConceptNode]  # create/update nodes with HLR
+    link_concepts(db, user_id, names, context)  -> list[ConceptEdge]  # create temporal edges
+    get_graph_context(db, user_id, concept_names) -> str  # walk graph, return prompt-ready text
+    get_concepts(db, user_id)    -> list[ConceptNode]  # all concepts for debug panel
+    decay_edges(db, user_id, half_life_days)     # prune weak edges
 """
 
 from app.knowledge.concepts import (

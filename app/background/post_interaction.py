@@ -9,7 +9,7 @@ from app.user_profile.ema import ema_update, zero_embedding
 from app.models.interaction import Interaction
 
 
-async def post_interaction_update(interaction_id: uuid.UUID):
+async def post_interaction_update(interaction_id: uuid.UUID, user_id: uuid.UUID):
     """Async background task: embed, extract concepts, create edges, auto-distill."""
     print(f"[post_interaction] Starting for {interaction_id}", flush=True)
     async with async_session() as db:
@@ -27,9 +27,14 @@ async def post_interaction_update(interaction_id: uuid.UUID):
             await db.commit()
             print(f"[post_interaction] Embedded OK", flush=True)
 
-            # 1b. EMA update of preference embedding (disabled — np.float32 serialization issue)
-            # TODO: fix embedding type conversion and re-enable
-            pass
+            # 1b. EMA update of preference embedding
+            try:
+                prefs = await get_or_create_preferences(db, user_id)
+                current = list(prefs.preference_embedding) if prefs.preference_embedding else zero_embedding()
+                prefs.preference_embedding = ema_update(current, embedding)
+                await db.commit()
+            except Exception as e:
+                print(f"[post_interaction] Failed to update preference embedding: {e}", flush=True)
 
         except Exception as e:
             print(f"[post_interaction] Failed to embed: {e}", flush=True)
@@ -38,12 +43,12 @@ async def post_interaction_update(interaction_id: uuid.UUID):
         try:
             concepts = parse_concepts(result.answer)
             if concepts:
-                nodes = await upsert_concepts(db, concepts)
+                nodes = await upsert_concepts(db, user_id, concepts)
                 print(f"[post_interaction] Concepts: {[n.name for n in nodes]}", flush=True)
 
                 # 3. Create temporal edges between co-occurring concepts
                 if len(concepts) >= 2:
-                    edges = await link_concepts(db, concepts, context=result.question[:100])
+                    edges = await link_concepts(db, user_id, concepts, context=result.question[:100])
                     print(f"[post_interaction] Edges: {len(edges)}", flush=True)
             else:
                 print(f"[post_interaction] No CONCEPTS: line in answer", flush=True)
@@ -52,9 +57,9 @@ async def post_interaction_update(interaction_id: uuid.UUID):
 
         # 4. Auto-distill preferences
         try:
-            if await should_auto_distill(db):
+            if await should_auto_distill(db, user_id):
                 print(f"[post_interaction] Auto-distilling", flush=True)
-                await distill_preferences(db)
+                await distill_preferences(db, user_id)
         except Exception as e:
             print(f"[post_interaction] Failed auto-distill: {e}", flush=True)
 
