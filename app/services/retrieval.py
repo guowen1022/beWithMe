@@ -7,21 +7,21 @@ from app.models.document import DocumentChunk
 
 
 async def search_similar_interactions(
-    db: AsyncSession, query_embedding: List[float], top_k: int = 5
+    db: AsyncSession, user_id: UUID, query_embedding: List[float], top_k: int = 5
 ) -> List[Interaction]:
     stmt = text("""
-        SELECT id, session_id, passage_text, question, answer, source_document, metadata, created_at
+        SELECT id, user_id, session_id, passage_text, question, answer, source_document, metadata, created_at
         FROM interactions
-        WHERE embedding IS NOT NULL
+        WHERE user_id = :user_id AND embedding IS NOT NULL
         ORDER BY embedding <=> :embedding
         LIMIT :limit
     """)
-    result = await db.execute(stmt, {"embedding": str(query_embedding), "limit": top_k})
+    result = await db.execute(stmt, {"user_id": str(user_id), "embedding": str(query_embedding), "limit": top_k})
     rows = result.fetchall()
     interactions = []
     for row in rows:
         i = Interaction()
-        i.id, i.session_id, i.passage_text, i.question, i.answer, i.source_document, i.metadata_, i.created_at = row
+        i.id, i.user_id, i.session_id, i.passage_text, i.question, i.answer, i.source_document, i.metadata_, i.created_at = row
         interactions.append(i)
     return interactions
 

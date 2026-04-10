@@ -1,4 +1,5 @@
 """Graph visualization data: export nodes + edges for frontend rendering."""
+import uuid
 from typing import List, Dict, Any
 from datetime import datetime
 from sqlalchemy import select
@@ -7,13 +8,13 @@ from app.knowledge.models import ConceptNode, ConceptEdge
 from app.knowledge.hlr import compute_mastery, mastery_to_state
 
 
-async def get_graph_data(db: AsyncSession) -> Dict[str, Any]:
+async def get_graph_data(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:
     """Return full graph as {nodes, edges} for D3/vis.js visualization."""
     now = datetime.utcnow()
 
     # Nodes
     node_result = await db.execute(
-        select(ConceptNode).order_by(ConceptNode.last_seen.desc())
+        select(ConceptNode).where(ConceptNode.user_id == user_id).order_by(ConceptNode.last_seen.desc())
     )
     nodes = []
     id_to_name = {}
@@ -35,7 +36,7 @@ async def get_graph_data(db: AsyncSession) -> Dict[str, Any]:
         })
 
     # Edges
-    edge_result = await db.execute(select(ConceptEdge))
+    edge_result = await db.execute(select(ConceptEdge).where(ConceptEdge.user_id == user_id))
     edges = []
     for e in edge_result.scalars().all():
         src = id_to_name.get(e.source_id)

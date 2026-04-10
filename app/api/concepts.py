@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.knowledge import ConceptNode, compute_mastery, mastery_to_state, get_graph_data
+from app.api.deps import get_current_user_id
 
 router = APIRouter()
 
@@ -28,8 +29,9 @@ class ConceptRead(BaseModel):
 async def list_concepts(
     state: Optional[str] = Query(None, description="Filter by state"),
     db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
 ):
-    stmt = select(ConceptNode).order_by(ConceptNode.last_seen.desc())
+    stmt = select(ConceptNode).where(ConceptNode.user_id == user_id).order_by(ConceptNode.last_seen.desc())
     if state:
         stmt = stmt.where(ConceptNode.state == state)
     result = await db.execute(stmt)
@@ -56,6 +58,9 @@ async def list_concepts(
 
 
 @router.get("/graph")
-async def get_graph(db: AsyncSession = Depends(get_db)):
+async def get_graph(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
     """Full graph data for visualization (nodes + edges)."""
-    return await get_graph_data(db)
+    return await get_graph_data(db, user_id)

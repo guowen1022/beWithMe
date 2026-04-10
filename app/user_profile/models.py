@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 from datetime import datetime
-from sqlalchemy import Text, DateTime, Integer
+from sqlalchemy import Text, DateTime, Integer, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
@@ -12,8 +12,10 @@ from app.db_base import Base
 
 class LearningPreferences(Base):
     __tablename__ = "learning_preferences"
+    __table_args__ = (UniqueConstraint("user_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     explanation_style: Mapped[str] = mapped_column(Text, default="balanced")
     depth_preference: Mapped[str] = mapped_column(Text, default="moderate")
     analogy_affinity: Mapped[str] = mapped_column(Text, default="moderate")

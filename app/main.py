@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import health, profile, ask, interactions, documents, preferences, concepts
+from app.api import health, users, profile, ask, interactions, documents, preferences, concepts
 
 app = FastAPI(title="beWithMe", description="Personalized Reading Assistant")
 
@@ -13,6 +13,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
 app.include_router(interactions.router, prefix="/api")

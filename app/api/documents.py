@@ -1,4 +1,5 @@
 import re
+from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,7 @@ from app.database import get_db, async_session
 from app.models.document import Document, DocumentChunk
 from app.schemas.query import DocumentCreate, DocumentRead
 from app.services.embedding import embed_batch
+from app.api.deps import get_current_user_id
 
 router = APIRouter()
 
@@ -64,8 +66,9 @@ async def create_document(
     body: DocumentCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
 ):
-    doc = Document(title=body.title, filename=body.filename, content=body.content)
+    doc = Document(user_id=user_id, title=body.title, filename=body.filename, content=body.content)
     db.add(doc)
     await db.flush()
 
@@ -82,6 +85,11 @@ async def create_document(
 
 
 @router.get("/documents", response_model=list[DocumentRead])
-async def list_documents(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Document).order_by(Document.created_at.desc()))
+async def list_documents(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    result = await db.execute(
+        select(Document).where(Document.user_id == user_id).order_by(Document.created_at.desc())
+    )
     return [DocumentRead.model_validate(d) for d in result.scalars().all()]

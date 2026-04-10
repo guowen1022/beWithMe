@@ -2,6 +2,7 @@
 
 import json
 import re
+import uuid
 from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,28 +27,31 @@ Based on how the user asks questions, what they focus on, what confuses them, an
 Return ONLY valid JSON, no other text."""
 
 
-async def get_or_create_preferences(db: AsyncSession) -> LearningPreferences:
-    result = await db.execute(select(LearningPreferences).limit(1))
+async def get_or_create_preferences(db: AsyncSession, user_id: uuid.UUID) -> LearningPreferences:
+    result = await db.execute(
+        select(LearningPreferences).where(LearningPreferences.user_id == user_id)
+    )
     prefs = result.scalar_one_or_none()
     if not prefs:
-        prefs = LearningPreferences()
+        prefs = LearningPreferences(user_id=user_id)
         db.add(prefs)
         await db.commit()
         await db.refresh(prefs)
     return prefs
 
 
-async def distill_preferences(db: AsyncSession) -> LearningPreferences:
+async def distill_preferences(db: AsyncSession, user_id: uuid.UUID) -> LearningPreferences:
     """Distill learning preferences from recent interactions."""
     result = await db.execute(
         select(Interaction)
+        .where(Interaction.user_id == user_id)
         .order_by(Interaction.created_at.desc())
         .limit(20)
     )
     interactions = result.scalars().all()
 
     if not interactions:
-        return await get_or_create_preferences(db)
+        return await get_or_create_preferences(db, user_id)
 
     formatted = []
     for i in interactions:
@@ -71,9 +75,9 @@ async def distill_preferences(db: AsyncSession) -> LearningPreferences:
         data = json.loads(json_match)
     except (json.JSONDecodeError, AttributeError):
         print(f"[distiller] Failed to parse LLM response as JSON: {raw[:200]}")
-        return await get_or_create_preferences(db)
+        return await get_or_create_preferences(db, user_id)
 
-    prefs = await get_or_create_preferences(db)
+    prefs = await get_or_create_preferences(db, user_id)
     valid_styles = {"formal", "conversational", "socratic", "narrative", "balanced"}
     valid_depth = {"shallow", "moderate", "deep"}
     valid_analogy = {"low", "moderate", "high"}
@@ -103,15 +107,20 @@ async def distill_preferences(db: AsyncSession) -> LearningPreferences:
     return prefs
 
 
-async def should_auto_distill(db: AsyncSession) -> bool:
+async def should_auto_distill(db: AsyncSession, user_id: uuid.UUID) -> bool:
     """Check if enough new interactions have accumulated to trigger auto-distillation."""
-    prefs = await get_or_create_preferences(db)
+    prefs = await get_or_create_preferences(db, user_id)
     last = prefs.last_distilled_at
 
     if last is None:
-        count = await db.scalar(select(func.count()).select_from(Interaction))
+        count = await db.scalar(
+            select(func.count()).select_from(Interaction).where(Interaction.user_id == user_id)
+        )
     else:
         count = await db.scalar(
-            select(func.count()).select_from(Interaction).where(Interaction.created_at > last)
+            select(func.count()).select_from(Interaction).where(
+                Interaction.user_id == user_id,
+                Interaction.created_at > last,
+            )
         )
     return (count or 0) >= 10
