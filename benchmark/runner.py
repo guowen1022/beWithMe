@@ -4,165 +4,191 @@ Benchmark runner — executes scenarios against the live beWithMe API.
 Usage:
     python -m benchmark.runner [--scenario 1] [--reset] [--base-url http://localhost:8000]
 
-Workflow:
-    1. Optionally reset the database (concepts, edges, interactions, preferences)
-    2. Set up user profile from scenario
-    3. For each session: set the passage, ask each question
-    4. Wait for background tasks (embedding + concept extraction)
-    5. Collect and report results: concepts extracted, edges created, preferences distilled
+Questions within a session run concurrently (up to 5 QPS).
+Sessions run sequentially (each builds on the previous context).
 """
 
 import asyncio
 import argparse
 import json
+import os
 import time
+import uuid
 import httpx
 import asyncpg
+from datetime import datetime
 from benchmark.scenarios import ALL_SCENARIOS
+
+MAX_CONCURRENT = 5  # safe QPS for the LLM
 
 
 async def reset_db():
-    """Clear all user data for a fresh benchmark run."""
     conn = await asyncpg.connect("postgresql://weng@localhost/bewithme")
     await conn.execute("DELETE FROM concept_edges")
     await conn.execute("DELETE FROM concept_nodes")
     await conn.execute("DELETE FROM interactions")
+    await conn.execute("DELETE FROM document_chunks")
+    await conn.execute("DELETE FROM documents")
     await conn.execute("DELETE FROM learning_preferences")
     await conn.execute("DELETE FROM profile")
-    # Re-create singleton rows
-    await conn.execute("INSERT INTO profile (self_description) VALUES ('') ON CONFLICT DO NOTHING")
-    await conn.execute("INSERT INTO learning_preferences (explanation_style) VALUES ('balanced') ON CONFLICT DO NOTHING")
+    await conn.execute("DELETE FROM users")
     await conn.close()
     print("[reset] Database cleared")
 
 
+def auth_headers(user_id: str) -> dict:
+    return {"Content-Type": "application/json", "X-User-Id": user_id}
+
+
+async def ask_question(
+    client: httpx.AsyncClient,
+    headers: dict,
+    passage: str,
+    selected_text: str,
+    question: str,
+    session_id: str,
+    semaphore: asyncio.Semaphore,
+    q_num: int,
+) -> dict:
+    """Ask a single question — runs under semaphore for rate limiting."""
+    async with semaphore:
+        payload = {
+            "passage_text": passage,
+            "selected_text": selected_text,
+            "question": question,
+            "session_id": session_id,
+        }
+        start = time.time()
+        try:
+            resp = await client.post("/api/ask/stream", headers=headers, json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            print(f"  Q{q_num}: ERROR {e.response.status_code}", flush=True)
+            return {"question": question, "answer_length": 0, "concepts_line": "", "elapsed": 0, "error": str(e)}
+
+        answer_text = ""
+        for line in resp.text.split("\n"):
+            if line.startswith("data: "):
+                try:
+                    event = json.loads(line[6:])
+                    if event.get("type") == "answer":
+                        answer_text = event["answer"]
+                except json.JSONDecodeError:
+                    pass
+
+        elapsed = time.time() - start
+        concepts_line = ""
+        for l in answer_text.split("\n"):
+            if l.strip().upper().startswith("CONCEPTS:"):
+                concepts_line = l.strip()
+                break
+
+        print(f"  Q{q_num}: {len(answer_text)} chars in {elapsed:.1f}s {'✓' if concepts_line else '✗'}", flush=True)
+        return {
+            "question": question,
+            "answer_length": len(answer_text),
+            "concepts_line": concepts_line,
+            "elapsed": round(elapsed, 1),
+        }
+
+
 async def run_scenario(scenario: dict, base_url: str):
-    """Execute a full scenario against the API."""
     print(f"\n{'='*60}")
     print(f"SCENARIO: {scenario['name']}")
     print(f"{'='*60}")
 
-    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
-        # Set up profile
-        resp = await client.put("/api/profile", json={"self_description": scenario["profile"]})
-        resp.raise_for_status()
-        print(f"[profile] Set: {scenario['profile'][:60]}...")
+    scenario_start = time.time()
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-        session_id = None
-        total_questions = 0
-        answers = []
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        # Create user
+        username = f"bench_{scenario['name'][:20].lower().replace(' ', '_')}"
+        resp = await client.post("/api/users", json={"username": username})
+        if resp.status_code == 409:
+            resp = await client.get("/api/users")
+            users = resp.json()
+            user_id = next(u["id"] for u in users if u["username"] == username)
+        else:
+            resp.raise_for_status()
+            user_id = resp.json()["id"]
+        headers = auth_headers(user_id)
+        print(f"[user] {username} (id={user_id[:8]}...)")
+
+        # Set profile
+        await client.put("/api/profile", headers=headers,
+                         json={"self_description": scenario["profile"]})
+        print(f"[profile] Set")
+
+        all_answers = []
+        q_num = 0
 
         for session in scenario["sessions"]:
-            print(f"\n--- Session: {session['title']} ---")
-            # New session ID per reading session
-            import uuid
+            print(f"\n--- {session['title']} ({len(session['interactions'])} questions, parallel) ---", flush=True)
             session_id = str(uuid.uuid4())
 
+            # Launch all questions in this session concurrently
+            tasks = []
             for selected_text, question in session["interactions"]:
-                total_questions += 1
-                payload = {
-                    "passage_text": session["passage"],
-                    "selected_text": selected_text,
-                    "question": question,
-                    "session_id": session_id,
-                }
+                q_num += 1
+                tasks.append(
+                    ask_question(client, headers, session["passage"], selected_text,
+                                 question, session_id, semaphore, q_num)
+                )
 
-                print(f"  Q{total_questions}: {question[:60]}...")
-                start = time.time()
+            results = await asyncio.gather(*tasks)
+            all_answers.extend(results)
 
-                # Use the streaming endpoint
-                try:
-                    resp = await client.post("/api/ask/stream", json=payload)
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    print(f"    ERROR: {e.response.status_code} - retrying in 3s...")
-                    await asyncio.sleep(3)
-                    resp = await client.post("/api/ask/stream", json=payload)
-                    resp.raise_for_status()
-
-                # Parse SSE response
-                answer_text = ""
-                for line in resp.text.split("\n"):
-                    if line.startswith("data: "):
-                        try:
-                            event = json.loads(line[6:])
-                            if event.get("type") == "answer":
-                                answer_text = event["answer"]
-                        except json.JSONDecodeError:
-                            pass
-
-                elapsed = time.time() - start
-                # Check for CONCEPTS: line
-                concepts_line = ""
-                for l in answer_text.split("\n"):
-                    if l.strip().upper().startswith("CONCEPTS:"):
-                        concepts_line = l.strip()
-                        break
-
-                answers.append({
-                    "question": question,
-                    "answer_length": len(answer_text),
-                    "concepts_line": concepts_line,
-                    "elapsed": round(elapsed, 1),
-                })
-                print(f"    Answer: {len(answer_text)} chars in {elapsed:.1f}s")
-                if concepts_line:
-                    print(f"    {concepts_line}")
-
-                # Small delay between questions
-                await asyncio.sleep(1)
-
-        # Wait for background tasks to complete
-        print(f"\n[waiting] 60s for background tasks (embedding + concept extraction)...")
-        await asyncio.sleep(60)
+        # Wait for background tasks (3s per question should be enough)
+        wait_time = max(15, len(all_answers) * 2)
+        print(f"\n[waiting] {wait_time}s for background tasks...", flush=True)
+        await asyncio.sleep(wait_time)
 
         # Collect results
         print(f"\n{'='*60}")
         print("RESULTS")
         print(f"{'='*60}")
 
-        # Concepts
-        resp = await client.get("/api/concepts")
+        resp = await client.get("/api/concepts", headers=headers)
         concepts = resp.json()
-        print(f"\nConcepts extracted: {len(concepts)}")
-        for c in concepts:
-            print(f"  - {c['name']} (state={c['state']}, encounters={c['encounter_count']})")
+        print(f"\nConcepts: {len(concepts)}")
+        for c in concepts[:15]:
+            print(f"  - {c['name']} ({c['state']}, x{c['encounter_count']})")
+        if len(concepts) > 15:
+            print(f"  ... and {len(concepts) - 15} more")
 
-        # Graph
-        resp = await client.get("/api/graph")
+        resp = await client.get("/api/graph", headers=headers)
         graph = resp.json()
         print(f"\nGraph: {len(graph['nodes'])} nodes, {len(graph['edges'])} edges")
-        for e in graph["edges"][:10]:
-            print(f"  - {e['source']} -- {e['target']} (w={e['weight']}, type={e['type']})")
 
-        # Preferences
-        resp = await client.get("/api/preferences")
+        resp = await client.get("/api/preferences", headers=headers)
         prefs = resp.json()
-        print(f"\nPreferences:")
-        for k in ["explanation_style", "depth_preference", "analogy_affinity", "math_comfort", "pacing"]:
-            print(f"  {k}: {prefs[k]}")
-        if prefs["meta_notes"]:
-            print(f"  meta: {prefs['meta_notes'][:100]}")
+        print(f"\nPreferences: style={prefs['explanation_style']}, depth={prefs['depth_preference']}, analogy={prefs['analogy_affinity']}")
 
-        # Summary
+        valid = [a for a in all_answers if "error" not in a]
+        avg_time = sum(a["elapsed"] for a in valid) / max(len(valid), 1)
+        concepts_found = sum(1 for a in valid if a["concepts_line"])
+        total_time = time.time() - scenario_start
+
         print(f"\n--- Summary ---")
-        print(f"Total questions: {total_questions}")
-        print(f"Total concepts: {len(concepts)}")
-        print(f"Total edges: {len(graph['edges'])}")
-        avg_time = sum(a["elapsed"] for a in answers) / len(answers)
-        print(f"Avg response time: {avg_time:.1f}s")
-        concepts_found = sum(1 for a in answers if a["concepts_line"])
-        print(f"Answers with CONCEPTS line: {concepts_found}/{total_questions}")
+        print(f"Total questions: {len(all_answers)}")
+        print(f"Successful: {len(valid)}/{len(all_answers)}")
+        print(f"Concepts: {len(concepts)}")
+        print(f"Edges: {len(graph['edges'])}")
+        print(f"Avg LLM time: {avg_time:.1f}s")
+        print(f"CONCEPTS rate: {concepts_found}/{len(valid)}")
+        print(f"Total wall time: {total_time:.0f}s")
 
         return {
             "scenario": scenario["name"],
-            "questions": total_questions,
+            "user_id": user_id,
+            "questions": len(all_answers),
+            "successful": len(valid),
             "concepts": len(concepts),
             "edges": len(graph["edges"]),
-            "avg_time": round(avg_time, 1),
-            "concepts_extraction_rate": f"{concepts_found}/{total_questions}",
-            # Detailed data for analysis
-            "answers": answers,
+            "avg_llm_time": round(avg_time, 1),
+            "total_wall_time": round(total_time, 0),
+            "concepts_extraction_rate": f"{concepts_found}/{len(valid)}",
+            "answers": all_answers,
             "concept_list": [c["name"] for c in concepts],
             "graph": graph,
             "preferences": prefs,
@@ -185,16 +211,11 @@ async def main():
         return
 
     result = await run_scenario(ALL_SCENARIOS[idx], args.base_url)
-    print(f"\n{json.dumps(result, indent=2)}")
 
-    # Save results to file
-    import os
-    from datetime import datetime
     results_dir = os.path.join(os.path.dirname(__file__), "results")
     os.makedirs(results_dir, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"scenario{args.scenario}_{ts}.json"
-    filepath = os.path.join(results_dir, filename)
+    filepath = os.path.join(results_dir, f"scenario{args.scenario}_{ts}.json")
     with open(filepath, "w") as f:
         json.dump(result, f, indent=2)
     print(f"\nResults saved to: {filepath}")

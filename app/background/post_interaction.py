@@ -30,8 +30,9 @@ async def post_interaction_update(interaction_id: uuid.UUID, user_id: uuid.UUID)
             # 1b. EMA update of preference embedding
             try:
                 prefs = await get_or_create_preferences(db, user_id)
-                current = list(prefs.preference_embedding) if prefs.preference_embedding else zero_embedding()
-                prefs.preference_embedding = ema_update(current, embedding)
+                current = [float(x) for x in prefs.preference_embedding] if prefs.preference_embedding is not None else zero_embedding()
+                updated = ema_update(current, [float(x) for x in embedding])
+                prefs.preference_embedding = [float(x) for x in updated]
                 await db.commit()
             except Exception as e:
                 print(f"[post_interaction] Failed to update preference embedding: {e}", flush=True)
