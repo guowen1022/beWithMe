@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -12,9 +13,13 @@ from app.services.embedding import embed_text
 from app.services.retrieval import search_similar_interactions, search_document_chunks
 from app.services.prompt_builder import build_answer_prompt
 from app.services.llm import generate
+from app.distill import get_learner_state
 from app.background.post_interaction import post_interaction_update
 
 router = APIRouter()
+
+# Hold references to background tasks so they don't get garbage collected
+_background_tasks: set = set()
 
 
 async def _build_context(body: AskRequest, db: AsyncSession):
@@ -37,6 +42,9 @@ async def _build_context(body: AskRequest, db: AsyncSession):
     if body.document_id and query_embedding:
         doc_chunks = await search_document_chunks(db, body.document_id, query_embedding, top_k=5)
 
+    # Fetch unified learner state (preferences + concepts + session signals)
+    learner_state = await get_learner_state(db, session_id=body.session_id)
+
     system_prompt, user_prompt = build_answer_prompt(
         passage=body.passage_text,
         selected_text=body.selected_text,
@@ -44,6 +52,7 @@ async def _build_context(body: AskRequest, db: AsyncSession):
         self_description=self_description,
         similar_interactions=similar,
         doc_chunks=doc_chunks,
+        learner=learner_state,
     )
     return system_prompt, user_prompt, similar
 
@@ -59,19 +68,19 @@ async def ask_stream(body: AskRequest, db: AsyncSession = Depends(get_db)):
         answer = ""
         try:
             answer = await generate(user_prompt, system=system_prompt)
-            print(f"[ask/stream] answer length={len(answer)}, first 100={answer[:100]!r}")
+            print(f"[ask/stream] answer length={len(answer)}, first 100={answer[:100]!r}", flush=True)
             await status_queue.put({
                 "type": "answer",
                 "answer": answer,
                 "related_interaction_ids": [str(i.id) for i in similar],
             })
         except Exception as e:
-            print(f"[ask/stream] error: {e}")
+            print(f"[ask/stream] error: {e}", flush=True)
             import traceback
             traceback.print_exc()
             await status_queue.put({"type": "error", "message": str(e)})
 
-        # Store interaction
+        # Store interaction and schedule background processing
         try:
             async with async_session() as bg_db:
                 interaction = Interaction(
@@ -83,8 +92,20 @@ async def ask_stream(body: AskRequest, db: AsyncSession = Depends(get_db)):
                 )
                 bg_db.add(interaction)
                 await bg_db.commit()
-        except Exception:
-            pass
+                await bg_db.refresh(interaction)
+
+                # Fire-and-forget: schedule background task on the event loop
+                print(f"[ask/stream] scheduling background task for {interaction.id}", flush=True)
+                task = asyncio.get_event_loop().create_task(
+                    post_interaction_update(interaction.id)
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+                print(f"[ask/stream] background task scheduled", flush=True)
+        except Exception as e:
+            print(f"[ask/stream] store error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
         await status_queue.put(None)
 

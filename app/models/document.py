@@ -5,7 +5,7 @@ from sqlalchemy import Text, DateTime, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.models.profile import Base
+from app.db_base import Base
 from app.config import settings
 
 

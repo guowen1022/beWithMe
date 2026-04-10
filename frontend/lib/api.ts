@@ -119,3 +119,43 @@ export async function getInteractions(
   if (!res.ok) throw new Error("Failed to fetch interactions");
   return res.json();
 }
+
+export interface Preferences {
+  explanation_style: string;
+  depth_preference: string;
+  analogy_affinity: string;
+  math_comfort: string;
+  pacing: string;
+  meta_notes: string;
+  interaction_count: number;
+  last_distilled_at: string | null;
+}
+
+export async function getPreferences(): Promise<Preferences> {
+  const res = await fetch(`${API_BASE}/preferences`);
+  if (!res.ok) throw new Error("Failed to fetch preferences");
+  return res.json();
+}
+
+export async function distillPreferences(): Promise<Preferences> {
+  const res = await fetch(`${API_BASE}/preferences/distill`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to distill preferences");
+  return res.json();
+}
+
+export interface Concept {
+  id: string;
+  name: string;
+  state: string;
+  encounter_count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export async function getConcepts(): Promise<Concept[]> {
+  const res = await fetch(`${API_BASE}/concepts`);
+  if (!res.ok) throw new Error("Failed to fetch concepts");
+  return res.json();
+}

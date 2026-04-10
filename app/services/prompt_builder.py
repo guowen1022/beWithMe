@@ -1,6 +1,7 @@
 from typing import Optional, List, Tuple
 from app.models.interaction import Interaction
 from app.models.document import DocumentChunk
+from app.distill.state import LearnerState
 
 
 def build_answer_prompt(
@@ -10,6 +11,7 @@ def build_answer_prompt(
     self_description: str,
     similar_interactions: List[Interaction],
     doc_chunks: List[DocumentChunk],
+    learner: Optional[LearnerState] = None,
 ) -> Tuple[str, str]:
     """Returns (system_prompt, user_prompt)."""
 
@@ -24,6 +26,45 @@ def build_answer_prompt(
         "5. The passage is the starting point, not the boundary. Draw on everything you know about the topic.",
         "6. Past interactions show what the user has studied before — use them to personalize, not as the answer topic.",
     ]
+
+    if learner:
+        style_map = {
+            "explanation_style": "Explanation style",
+            "depth_preference": "Depth",
+            "analogy_affinity": "Use of analogies",
+            "math_comfort": "Math comfort level",
+            "pacing": "Pacing",
+        }
+        pref_lines = []
+        for key, label in style_map.items():
+            val = getattr(learner, key, None)
+            if val and val != "moderate" and val != "balanced":
+                pref_lines.append(f"- {label}: {val}")
+        if learner.meta_notes:
+            pref_lines.append(f"- Notes: {learner.meta_notes}")
+
+        if pref_lines:
+            system_parts.append("")
+            system_parts.append("USER'S LEARNING PREFERENCES (adapt your answer to match):")
+            system_parts.extend(pref_lines)
+
+        if learner.concepts:
+            by_state = {}
+            for c in learner.concepts:
+                by_state.setdefault(c.state, []).append(c.name)
+            if by_state:
+                system_parts.append("")
+                system_parts.append("USER'S CONCEPT KNOWLEDGE (what they've studied before):")
+                for state in ["solid", "learning", "rusty", "faded"]:
+                    if state in by_state:
+                        names = ", ".join(by_state[state][:10])
+                        system_parts.append(f"- {state}: {names}")
+                system_parts.append("Build on what they already know. Explain new concepts more carefully.")
+
+        if learner.session_interest_summary:
+            system_parts.append("")
+            system_parts.append(f"CURRENT SESSION FOCUS:\n{learner.session_interest_summary}")
+
     if self_description:
         system_parts.append(f"\nUSER BACKGROUND:\n{self_description}")
 
@@ -31,11 +72,9 @@ def build_answer_prompt(
 
     user_parts = []
 
-    # Full passage for context
     if passage:
         user_parts.append(f"=== FULL PASSAGE ===\n{passage}")
 
-    # Highlighted selection
     if selected_text:
         user_parts.append(f"=== HIGHLIGHTED TEXT (user is asking about this part) ===\n{selected_text}")
 
@@ -43,10 +82,8 @@ def build_answer_prompt(
         context = "\n---\n".join(c.text for c in doc_chunks)
         user_parts.append(f"=== ADDITIONAL CONTEXT FROM DOCUMENT ===\n{context}")
 
-    # Question
     user_parts.append(f"=== QUESTION ===\n{question}")
 
-    # Past interactions are LAST and clearly secondary
     if similar_interactions:
         past = []
         for i in similar_interactions:

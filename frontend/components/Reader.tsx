@@ -5,6 +5,7 @@ import ContentInput from "./ContentInput";
 import ReadingPane from "./ReadingPane";
 import QuestionBar from "./QuestionBar";
 import AnswerDrawer from "./AnswerDrawer";
+import DebugPanel from "./DebugPanel";
 import { askStream, type AnswerEvent } from "@/lib/api";
 
 export type AgentStatus = "idle" | "thinking" | "searching" | "done";
@@ -14,6 +15,7 @@ export default function Reader() {
   const [selectedText, setSelectedText] = useState("");
   const [answer, setAnswer] = useState<AnswerEvent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [hasAnswer, setHasAnswer] = useState(false);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<AgentStatus>("idle");
@@ -43,14 +45,12 @@ export default function Reader() {
           session_id: sessionId,
         },
         (event) => {
-          console.log("[beWithMe] SSE event:", event);
           if (event.type === "status") {
             setStatus(event.status as AgentStatus);
             if (event.status === "searching") {
               setSearchDetail(event.detail);
             }
           } else if (event.type === "answer") {
-            console.log("[beWithMe] Answer received, length:", event.answer?.length);
             setAnswer(event as AnswerEvent);
             setHasAnswer(true);
             setStatus("done");
@@ -71,14 +71,33 @@ export default function Reader() {
 
   return (
     <div className="relative flex h-screen">
+      {/* Debug panel (left) */}
+      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} />
+
+      {/* Toggle debug panel button */}
+      {!debugOpen && (
+        <button
+          onClick={() => setDebugOpen(true)}
+          className="fixed top-1/2 left-0 -translate-y-1/2 z-40 rounded-r-lg bg-purple-600 p-2.5 text-white shadow-lg hover:bg-purple-700 transition-colors"
+          aria-label="Show learning profile"
+          title="Learning profile (debug)"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      )}
+
+      {/* Reading area — adjusts margins for both panels */}
       <div
         className={`flex-1 flex flex-col overflow-y-auto pb-20 transition-all duration-300 ${
           drawerOpen ? "mr-[28rem]" : "mr-0"
-        }`}
+        } ${debugOpen ? "ml-80" : "ml-0"}`}
       >
         <ReadingPane content={content} onSelection={handleSelection} />
       </div>
 
+      {/* Answer drawer (right) */}
       <AnswerDrawer
         open={drawerOpen}
         loading={loading}
@@ -101,12 +120,14 @@ export default function Reader() {
         </button>
       )}
 
+      {/* Bottom question bar — adjusts for both panels */}
       <QuestionBar
         selectedText={selectedText}
         onAsk={handleAsk}
         loading={loading}
         onClearSelection={() => setSelectedText("")}
         drawerOpen={drawerOpen}
+        debugOpen={debugOpen}
         recordTrigger={recordTrigger}
       />
     </div>

@@ -8,6 +8,7 @@ export default function QuestionBar({
   loading,
   onClearSelection,
   drawerOpen,
+  debugOpen,
   recordTrigger,
 }: {
   selectedText: string;
@@ -15,6 +16,7 @@ export default function QuestionBar({
   loading: boolean;
   onClearSelection: () => void;
   drawerOpen: boolean;
+  debugOpen: boolean;
   recordTrigger: number;
 }) {
   const [question, setQuestion] = useState("");
@@ -152,9 +154,9 @@ export default function QuestionBar({
 
   return (
     <div
-      className={`fixed bottom-0 left-0 border-t border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm transition-all duration-300 z-20 ${
+      className={`fixed bottom-0 border-t border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm transition-all duration-300 z-20 ${
         drawerOpen ? "right-[28rem]" : "right-0"
-      }`}
+      } ${debugOpen ? "left-80" : "left-0"}`}
     >
       {/* Selected text chip */}
       {selectedText && (

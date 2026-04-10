@@ -21,6 +21,7 @@ def _strip_think_tags(text: str) -> str:
 
 
 def _extract_text(response) -> str:
+    """Extract only text blocks. Never use thinking blocks as output."""
     text_parts = []
     for block in response.content:
         if hasattr(block, "text"):
@@ -29,7 +30,7 @@ def _extract_text(response) -> str:
 
 
 async def generate(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
-    """Simple generate — let the proxy handle everything internally."""
+    """Generate a response. Only returns text blocks."""
     client = _get_client()
     messages = [{"role": "user", "content": prompt}]
     kwargs = {
@@ -42,3 +43,38 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 4096) -> str
     response = await client.messages.create(**kwargs)
     raw = _extract_text(response)
     return _strip_think_tags(raw)
+
+
+async def generate_json(prompt: str, max_tokens: int = 512) -> str:
+    """Generate a JSON array response. Uses assistant prefill to force text output."""
+    # Use a fresh client to avoid state issues with shared client
+    kwargs = {"api_key": settings.anthropic_api_key}
+    if settings.anthropic_base_url:
+        kwargs["base_url"] = settings.anthropic_base_url
+    client = anthropic.AsyncAnthropic(**kwargs)
+    response = await client.messages.create(
+        model=settings.llm_model,
+        max_tokens=max_tokens,
+        system="You extract structured data. Respond with ONLY the requested JSON array. No explanations.",
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": '["'},
+        ],
+    )
+    # Debug: log all response blocks
+    for i, block in enumerate(response.content):
+        bt = block.type
+        bt_text = getattr(block, 'text', '')[:80] if hasattr(block, 'text') else ''
+        bt_think = (getattr(block, 'thinking', '') or '')[:80]
+        print(f"[generate_json] block[{i}] type={bt} text={bt_text!r} think={bt_think!r}", flush=True)
+    raw = _extract_text(response)
+    raw = _strip_think_tags(raw)
+    # Strip markdown fences if present
+    if "```" in raw:
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
+        if match:
+            raw = match.group(1).strip()
+    # Prepend the prefill we started with
+    if raw and not raw.startswith("["):
+        raw = '["' + raw
+    return raw.strip()

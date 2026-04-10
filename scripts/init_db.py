@@ -1,4 +1,4 @@
-"""Create the bewithme database and run the Phase 1 schema."""
+"""Create the bewithme database and run the schema."""
 import asyncio
 import asyncpg
 
@@ -46,6 +46,39 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc ON document_chunks(document_id);
+
+CREATE TABLE IF NOT EXISTS learning_preferences (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    explanation_style TEXT NOT NULL DEFAULT 'balanced',
+    depth_preference TEXT NOT NULL DEFAULT 'moderate',
+    analogy_affinity TEXT NOT NULL DEFAULT 'moderate',
+    math_comfort TEXT NOT NULL DEFAULT 'moderate',
+    pacing TEXT NOT NULL DEFAULT 'moderate',
+    meta_notes TEXT NOT NULL DEFAULT '',
+    interaction_count INTEGER NOT NULL DEFAULT 0,
+    last_distilled_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS concept_nodes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT UNIQUE NOT NULL,
+    state TEXT NOT NULL DEFAULT 'new',
+    encounter_count INTEGER NOT NULL DEFAULT 1,
+    half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0,
+    last_recalled_at TIMESTAMPTZ,
+    first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_concept_nodes_name ON concept_nodes(name);
+CREATE INDEX IF NOT EXISTS idx_concept_nodes_last_seen ON concept_nodes(last_seen DESC);
+"""
+
+MIGRATE = """
+-- Add HLR columns to existing concept_nodes tables
+ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
+ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
 """
 
 
@@ -68,6 +101,11 @@ async def main():
     conn = await asyncpg.connect("postgresql://weng@localhost/bewithme")
     await conn.execute(SCHEMA)
     print("Schema created successfully")
+
+    # Run migrations for existing databases
+    await conn.execute(MIGRATE)
+    print("Migrations applied")
+
     await conn.close()
 
 
