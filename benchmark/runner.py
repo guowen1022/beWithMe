@@ -4,12 +4,12 @@ Benchmark runner — executes scenarios against the live beWithMe API.
 Usage:
     python -m benchmark.runner [--scenario 1] [--reset] [--base-url http://localhost:8000]
 
-Questions within a session run concurrently (up to 5 QPS).
-Sessions run sequentially (each builds on the previous context).
+Questions run sequentially within a session to model a real user reading an
+answer and then asking the next follow-up. Sessions also run sequentially.
 """
 
-import asyncio
 import argparse
+import asyncio
 import json
 import os
 import time
@@ -18,8 +18,6 @@ import httpx
 import asyncpg
 from datetime import datetime
 from benchmark.scenarios import ALL_SCENARIOS
-
-MAX_CONCURRENT = 5  # safe QPS for the LLM
 
 
 async def reset_db():
@@ -47,49 +45,58 @@ async def ask_question(
     selected_text: str,
     question: str,
     session_id: str,
-    semaphore: asyncio.Semaphore,
     q_num: int,
+    scenario_start: float,
 ) -> dict:
-    """Ask a single question — runs under semaphore for rate limiting."""
-    async with semaphore:
-        payload = {
-            "passage_text": passage,
-            "selected_text": selected_text,
-            "question": question,
-            "session_id": session_id,
-        }
-        start = time.time()
-        try:
-            resp = await client.post("/api/ask/stream", headers=headers, json=payload)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            print(f"  Q{q_num}: ERROR {e.response.status_code}", flush=True)
-            return {"question": question, "answer_length": 0, "concepts_line": "", "elapsed": 0, "error": str(e)}
+    """Ask a single question and return timing + extracted concepts line."""
+    payload = {
+        "passage_text": passage,
+        "selected_text": selected_text,
+        "question": question,
+        "session_id": session_id,
+    }
+    start = time.time()
+    try:
+        resp = await client.post("/api/ask/stream", headers=headers, json=payload)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        print(f"  Q{q_num}: ERROR {e.response.status_code}", flush=True)
+        return {"question": question, "answer_length": 0, "concepts_line": "", "elapsed": 0, "error": str(e)}
+    except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ReadTimeout, httpx.ConnectError) as e:
+        # SSE stream can be cut short by a server reload or flaky network.
+        # One bad question shouldn't torch the whole scenario.
+        print(f"  Q{q_num}: TRANSPORT ERROR {type(e).__name__}: {e}", flush=True)
+        return {"question": question, "answer_length": 0, "concepts_line": "", "elapsed": 0, "error": f"{type(e).__name__}: {e}"}
 
-        answer_text = ""
-        for line in resp.text.split("\n"):
-            if line.startswith("data: "):
-                try:
-                    event = json.loads(line[6:])
-                    if event.get("type") == "answer":
-                        answer_text = event["answer"]
-                except json.JSONDecodeError:
-                    pass
+    answer_text = ""
+    for line in resp.text.split("\n"):
+        if line.startswith("data: "):
+            try:
+                event = json.loads(line[6:])
+                if event.get("type") == "answer":
+                    answer_text = event["answer"]
+            except json.JSONDecodeError:
+                pass
 
-        elapsed = time.time() - start
-        concepts_line = ""
-        for l in answer_text.split("\n"):
-            if l.strip().upper().startswith("CONCEPTS:"):
-                concepts_line = l.strip()
-                break
+    elapsed = time.time() - start
+    concepts_line = ""
+    for l in answer_text.split("\n"):
+        if l.strip().upper().startswith("CONCEPTS:"):
+            concepts_line = l.strip()
+            break
 
-        print(f"  Q{q_num}: {len(answer_text)} chars in {elapsed:.1f}s {'✓' if concepts_line else '✗'}", flush=True)
-        return {
-            "question": question,
-            "answer_length": len(answer_text),
-            "concepts_line": concepts_line,
-            "elapsed": round(elapsed, 1),
-        }
+    cum = time.time() - scenario_start
+    print(
+        f"  Q{q_num}: {len(answer_text)} chars in {elapsed:.1f}s "
+        f"(cum {cum:.0f}s) {'✓' if concepts_line else '✗'}",
+        flush=True,
+    )
+    return {
+        "question": question,
+        "answer_length": len(answer_text),
+        "concepts_line": concepts_line,
+        "elapsed": round(elapsed, 1),
+    }
 
 
 async def run_scenario(scenario: dict, base_url: str):
@@ -98,7 +105,6 @@ async def run_scenario(scenario: dict, base_url: str):
     print(f"{'='*60}")
 
     scenario_start = time.time()
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
     async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
         # Create user
@@ -123,23 +129,22 @@ async def run_scenario(scenario: dict, base_url: str):
         q_num = 0
 
         for session in scenario["sessions"]:
-            print(f"\n--- {session['title']} ({len(session['interactions'])} questions, parallel) ---", flush=True)
+            print(f"\n--- {session['title']} ({len(session['interactions'])} questions, sequential) ---", flush=True)
             session_id = str(uuid.uuid4())
 
-            # Launch all questions in this session concurrently
-            tasks = []
+            # Ask questions one at a time — models a real reader working through
+            # an article: read passage, ask, read answer, ask follow-up.
             for selected_text, question in session["interactions"]:
                 q_num += 1
-                tasks.append(
-                    ask_question(client, headers, session["passage"], selected_text,
-                                 question, session_id, semaphore, q_num)
+                result = await ask_question(
+                    client, headers, session["passage"], selected_text,
+                    question, session_id, q_num, scenario_start,
                 )
+                all_answers.append(result)
 
-            results = await asyncio.gather(*tasks)
-            all_answers.extend(results)
-
-        # Wait for background tasks (3s per question should be enough)
-        wait_time = max(15, len(all_answers) * 2)
+        # Wait for trailing background tasks. Sequential execution lets most
+        # background work overlap with later LLM calls, so a shorter wait is fine.
+        wait_time = max(10, len(all_answers))
         print(f"\n[waiting] {wait_time}s for background tasks...", flush=True)
         await asyncio.sleep(wait_time)
 
