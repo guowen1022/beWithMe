@@ -19,6 +19,27 @@ export function getCurrentUserId(): string | null {
   return currentUserId;
 }
 
+export function clearCurrentUserId() {
+  currentUserId = null;
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("bewithme_user_id");
+  }
+}
+
+export class UnknownUserError extends Error {
+  constructor() {
+    super("unknown_user");
+    this.name = "UnknownUserError";
+  }
+}
+
+async function throwIfUnknownUser(res: Response) {
+  if (res.status === 401) {
+    clearCurrentUserId();
+    throw new UnknownUserError();
+  }
+}
+
 function authHeaders(): Record<string, string> {
   const userId = getCurrentUserId();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -87,6 +108,7 @@ export interface AskResponse {
 
 export async function getProfile(): Promise<Profile> {
   const res = await fetch(`${API_BASE}/profile`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to fetch profile");
   return res.json();
 }
@@ -99,6 +121,7 @@ export async function updateProfile(
     headers: authHeaders(),
     body: JSON.stringify({ self_description }),
   });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to update profile");
   return res.json();
 }
@@ -126,6 +149,7 @@ export async function askStream(
     headers: authHeaders(),
     body: JSON.stringify(req),
   });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to get answer");
 
   const reader = res.body!.getReader();
@@ -159,6 +183,7 @@ export async function ask(req: AskRequest): Promise<AskResponse> {
     headers: authHeaders(),
     body: JSON.stringify(req),
   });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to get answer");
   return res.json();
 }
@@ -171,6 +196,7 @@ export async function getInteractions(
     `${API_BASE}/interactions?limit=${limit}&offset=${offset}`,
     { headers: authHeaders() }
   );
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to fetch interactions");
   return res.json();
 }
@@ -188,6 +214,7 @@ export interface Preferences {
 
 export async function getPreferences(): Promise<Preferences> {
   const res = await fetch(`${API_BASE}/preferences`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to fetch preferences");
   return res.json();
 }
@@ -197,6 +224,7 @@ export async function distillPreferences(): Promise<Preferences> {
     method: "POST",
     headers: authHeaders(),
   });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to distill preferences");
   return res.json();
 }
@@ -212,6 +240,7 @@ export interface Concept {
 
 export async function getConcepts(): Promise<Concept[]> {
   const res = await fetch(`${API_BASE}/concepts`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to fetch concepts");
   return res.json();
 }
@@ -238,6 +267,7 @@ export interface GraphData {
 
 export async function getGraphData(): Promise<GraphData> {
   const res = await fetch(`${API_BASE}/graph`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
   if (!res.ok) throw new Error("Failed to fetch graph");
   return res.json();
 }
