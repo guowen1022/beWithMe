@@ -12,6 +12,42 @@ import type { AgentStatus } from "./Reader";
 // and the user isn't waiting long after the server stream finishes.
 const BASE_RATE = 80; // chars/sec
 const CATCH_UP_SEC = 0.8;
+// After finishing a sentence, pause briefly before starting the next one
+// so the reveal feels like natural reading cadence instead of a single
+// continuous crawl.
+const SENTENCE_PAUSE_MS = 500;
+
+/**
+ * Find the index (exclusive) just after the first sentence-ending
+ * punctuation within `target[from, to)`. Returns -1 if no boundary found.
+ *
+ * A "sentence end" is:
+ *   - `.`, `!`, `?` followed by whitespace or end-of-text — UNLESS the next
+ *     non-space char is a lowercase letter (catches common abbreviations
+ *     like "e.g." or "Dr. smith"),
+ *   - or a double newline `\n\n` (paragraph break).
+ */
+function findSentenceEnd(target: string, from: number, to: number): number {
+  for (let i = from; i < to; i++) {
+    const ch = target[i];
+    if (ch === "\n" && target[i + 1] === "\n") {
+      return i + 1;
+    }
+    if (ch !== "." && ch !== "!" && ch !== "?") continue;
+    const next = target[i + 1];
+    if (next === undefined) return i + 1;
+    if (next !== " " && next !== "\n" && next !== "\t") continue;
+    // Lookahead past whitespace: lowercase → probably an abbreviation.
+    let j = i + 1;
+    while (j < target.length && /\s/.test(target[j])) j++;
+    if (j < target.length) {
+      const after = target[j];
+      if (after >= "a" && after <= "z") continue;
+    }
+    return i + 1;
+  }
+  return -1;
+}
 
 function AnimatedDots() {
   const [count, setCount] = useState(1);
@@ -100,6 +136,7 @@ export default function AnswerDrawer({
   // in a ref so the rAF loop reads the latest value without re-subscribing
   // on every token.
   const targetRef = useRef<string>("");
+  const pausedUntilRef = useRef<number>(0);
   const [displayedText, setDisplayedText] = useState<string>("");
 
   useEffect(() => {
@@ -108,12 +145,17 @@ export default function AnswerDrawer({
 
   // Reset the typewriter when a new question starts (Reader sets answer to null).
   useEffect(() => {
-    if (answer === null) setDisplayedText("");
+    if (answer === null) {
+      setDisplayedText("");
+      pausedUntilRef.current = 0;
+    }
   }, [answer]);
 
   // Single rAF loop tied to drawer lifecycle. Advances `displayedText`
   // toward `targetRef.current` at BASE_RATE, accelerating when the gap is
-  // large so we never lag forever after the stream ends.
+  // large so we never lag forever after the stream ends. At each sentence
+  // boundary we pause SENTENCE_PAUSE_MS to give the reveal a natural
+  // reading-out-loud cadence.
   useEffect(() => {
     if (!open) return;
 
@@ -121,6 +163,14 @@ export default function AnswerDrawer({
     let lastTime = performance.now();
 
     const tick = (now: number) => {
+      // Mid-pause between sentences — still burn the frame budget, just
+      // don't advance the reveal.
+      if (now < pausedUntilRef.current) {
+        lastTime = now;
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+
       const dtSec = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
@@ -130,7 +180,18 @@ export default function AnswerDrawer({
         const remaining = target.length - prev.length;
         const rate = Math.max(BASE_RATE, remaining / CATCH_UP_SEC);
         const advance = Math.max(1, Math.floor(rate * dtSec));
-        return target.slice(0, Math.min(prev.length + advance, target.length));
+        const desiredEnd = Math.min(prev.length + advance, target.length);
+
+        // If a sentence boundary falls inside the advance window, stop
+        // there instead of overshooting, then schedule a pause.
+        const boundary = findSentenceEnd(target, prev.length, desiredEnd);
+        const stopAt = boundary === -1 ? desiredEnd : boundary;
+        // Only pause if there's more content to come — no pause at the
+        // very end of the final sentence.
+        if (boundary !== -1 && stopAt < target.length) {
+          pausedUntilRef.current = performance.now() + SENTENCE_PAUSE_MS;
+        }
+        return target.slice(0, stopAt);
       });
 
       rafId = requestAnimationFrame(tick);
