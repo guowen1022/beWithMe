@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, AsyncIterator, Dict, Any
 import re
 import anthropic
 from app.config import settings
@@ -113,6 +113,75 @@ async def generate_cached(
     raw = _extract_text(response)
     text = _strip_think_tags(raw)
     return text, _usage_dict(response.usage)
+
+
+async def stream_cached(
+    static_system: str,
+    static_user_passage: str,
+    dynamic_user: str,
+    max_tokens: int = 4096,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Streaming variant of `generate_cached`.
+
+    Yields dicts:
+      - {"kind": "delta", "text": "..."} for each text_delta from the LLM
+      - {"kind": "done", "text": full_text, "usage": {...}} once at the end
+
+    MiniMax emits model thinking as a separate content block (`thinking_delta`),
+    so iterating only `text_delta` events yields clean answer text — no regex
+    think-tag stripping needed. Note: text deltas only start AFTER the
+    thinking block completes, so for reasoning-heavy questions the user
+    still waits for the reasoning phase before tokens flow.
+    """
+    client = _get_client()
+
+    if static_user_passage:
+        full_static = (
+            (static_system + "\n\n" if static_system else "") + static_user_passage
+        )
+    else:
+        full_static = static_system
+
+    system_blocks = []
+    if full_static:
+        system_blocks.append({
+            "type": "text",
+            "text": full_static,
+            "cache_control": {"type": "ephemeral"},
+        })
+
+    kwargs: Dict[str, Any] = {
+        "model": settings.llm_model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": dynamic_user or ""}],
+    }
+    if system_blocks:
+        kwargs["system"] = system_blocks
+
+    full_text_parts: list[str] = []
+    async with client.messages.stream(**kwargs) as stream:
+        async for event in stream:
+            if getattr(event, "type", None) != "content_block_delta":
+                continue
+            delta = getattr(event, "delta", None)
+            if delta is None:
+                continue
+            if getattr(delta, "type", None) == "text_delta":
+                chunk = getattr(delta, "text", "") or ""
+                if chunk:
+                    full_text_parts.append(chunk)
+                    yield {"kind": "delta", "text": chunk}
+
+        final = await stream.get_final_message()
+        # Defensive: if the SDK surfaces text only via final message, fall back.
+        full_text = "".join(full_text_parts)
+        if not full_text:
+            full_text = _extract_text(final)
+        yield {
+            "kind": "done",
+            "text": full_text,
+            "usage": _usage_dict(final.usage),
+        }
 
 
 async def generate_json(prompt: str, max_tokens: int = 512) -> str:

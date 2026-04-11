@@ -138,6 +138,11 @@ export type AnswerEvent = {
   related_interaction_ids: string[];
 };
 
+export type TokenEvent = {
+  type: "token";
+  text: string;
+};
+
 export type LlmUsage = {
   input_tokens: number;
   output_tokens: number;
@@ -153,7 +158,11 @@ export type DebugEvent = {
   usage: LlmUsage;
 };
 
-export type StreamEvent = StatusEvent | AnswerEvent | DebugEvent;
+export type StreamEvent =
+  | StatusEvent
+  | AnswerEvent
+  | TokenEvent
+  | DebugEvent;
 
 export async function askStream(
   req: AskRequest,

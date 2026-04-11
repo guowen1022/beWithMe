@@ -13,7 +13,7 @@ from app.schemas.query import AskRequest, AskResponse
 from app.services.embedding import embed_text
 from app.services.retrieval import search_similar_interactions, search_document_chunks
 from app.services.prompt_builder import build_answer_prompt
-from app.services.llm import generate_cached
+from app.services.llm import generate_cached, stream_cached
 from app.user_profile import get_user_profile, boost_query_embedding
 from app.knowledge import get_graph_context, get_concepts
 from app.background.post_interaction import post_interaction_update
@@ -93,18 +93,25 @@ async def ask_stream(
         answer = ""
         usage: dict = {}
         try:
-            answer, usage = await generate_cached(
+            async for evt in stream_cached(
                 parts.static_system,
                 parts.static_user_passage,
                 parts.dynamic_user,
-            )
+            ):
+                if evt["kind"] == "delta":
+                    # Forward each text_delta to the client as it arrives —
+                    # the drawer appends these into a live answer.
+                    await status_queue.put({"type": "token", "text": evt["text"]})
+                elif evt["kind"] == "done":
+                    answer = evt["text"]
+                    usage = evt["usage"]
+
             print(
                 f"[ask/stream] answer length={len(answer)}, "
                 f"usage={usage}, first 100={answer[:100]!r}",
                 flush=True,
             )
-            # Emit a debug event alongside the answer so the frontend debug
-            # panel can show the exact prompt and token accounting.
+            # Debug event for the LLM tab (full prompt parts + token usage).
             await status_queue.put({
                 "type": "debug",
                 "static_system": parts.static_system,
@@ -112,6 +119,8 @@ async def ask_stream(
                 "dynamic_user": parts.dynamic_user,
                 "usage": usage,
             })
+            # Final answer — reconciles the accumulated stream and carries
+            # related_interaction_ids the incremental tokens don't have.
             await status_queue.put({
                 "type": "answer",
                 "answer": answer,
