@@ -138,7 +138,22 @@ export type AnswerEvent = {
   related_interaction_ids: string[];
 };
 
-export type StreamEvent = StatusEvent | AnswerEvent;
+export type LlmUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+};
+
+export type DebugEvent = {
+  type: "debug";
+  static_system: string;
+  static_user_passage: string;
+  dynamic_user: string;
+  usage: LlmUsage;
+};
+
+export type StreamEvent = StatusEvent | AnswerEvent | DebugEvent;
 
 export async function askStream(
   req: AskRequest,

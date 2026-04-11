@@ -6,7 +6,7 @@ import ReadingPane from "./ReadingPane";
 import QuestionBar from "./QuestionBar";
 import AnswerDrawer from "./AnswerDrawer";
 import DebugPanel from "./DebugPanel";
-import { askStream, type AnswerEvent } from "@/lib/api";
+import { askStream, type AnswerEvent, type DebugEvent } from "@/lib/api";
 
 export type AgentStatus = "idle" | "thinking" | "searching" | "done";
 
@@ -14,6 +14,7 @@ export default function Reader() {
   const [content, setContent] = useState("");
   const [selectedText, setSelectedText] = useState("");
   const [answer, setAnswer] = useState<AnswerEvent | null>(null);
+  const [lastDebug, setLastDebug] = useState<DebugEvent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [hasAnswer, setHasAnswer] = useState(false);
@@ -54,6 +55,8 @@ export default function Reader() {
             setAnswer(event as AnswerEvent);
             setHasAnswer(true);
             setStatus("done");
+          } else if (event.type === "debug") {
+            setLastDebug(event as DebugEvent);
           }
         }
       );
@@ -72,7 +75,7 @@ export default function Reader() {
   return (
     <div className="relative flex h-screen">
       {/* Debug panel (left) */}
-      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} />
+      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} lastDebug={lastDebug} />
 
       {/* Toggle debug panel button */}
       {!debugOpen && (

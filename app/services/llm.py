@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import re
 import anthropic
 from app.config import settings
@@ -43,6 +43,76 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 4096) -> str
     response = await client.messages.create(**kwargs)
     raw = _extract_text(response)
     return _strip_think_tags(raw)
+
+
+def _usage_dict(usage) -> dict:
+    """Flatten an Anthropic `usage` object into a JSON-serialisable dict.
+
+    Missing fields (e.g., cache_* when the provider doesn't support caching)
+    default to 0 so the frontend can render them unconditionally.
+    """
+    return {
+        "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+    }
+
+
+async def generate_cached(
+    static_system: str,
+    static_user_passage: str,
+    dynamic_user: str,
+    max_tokens: int = 4096,
+) -> Tuple[str, dict]:
+    """Generate with a single prompt-cache breakpoint at the end of the
+    system block.
+
+    Empirically, MiniMax only honors ONE `cache_control` marker per request:
+    placing a second breakpoint inside the user message is silently ignored
+    and that content is re-tokenized every call. So we fold the static passage
+    into the `system` block — the whole static prefix (instructions +
+    preferences + background + passage) becomes one cacheable chunk, and the
+    user message carries only the volatile tail.
+
+    Returns `(text, usage_dict)`. `usage_dict` exposes
+    `cache_creation_input_tokens` / `cache_read_input_tokens` so callers
+    (and the frontend debug panel) can see hit rates.
+    """
+    client = _get_client()
+
+    # Fold the static passage into the system block — see docstring.
+    if static_user_passage:
+        full_static = (
+            (static_system + "\n\n" if static_system else "") + static_user_passage
+        )
+    else:
+        full_static = static_system
+
+    system_blocks = []
+    if full_static:
+        system_blocks.append({
+            "type": "text",
+            "text": full_static,
+            "cache_control": {"type": "ephemeral"},
+        })
+
+    # Anthropic requires at least one user content block.
+    user_text = dynamic_user if dynamic_user else ""
+    messages = [{"role": "user", "content": user_text}]
+
+    kwargs = {
+        "model": settings.llm_model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if system_blocks:
+        kwargs["system"] = system_blocks
+
+    response = await client.messages.create(**kwargs)
+    raw = _extract_text(response)
+    text = _strip_think_tags(raw)
+    return text, _usage_dict(response.usage)
 
 
 async def generate_json(prompt: str, max_tokens: int = 512) -> str:

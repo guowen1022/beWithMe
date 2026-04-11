@@ -7,6 +7,7 @@ import {
   getConcepts,
   type Preferences,
   type Concept,
+  type DebugEvent,
 } from "@/lib/api";
 import KnowledgeGraph from "./KnowledgeGraph";
 
@@ -29,14 +30,16 @@ const STATE_COLORS: Record<string, string> = {
 export default function DebugPanel({
   open,
   onClose,
+  lastDebug,
 }: {
   open: boolean;
   onClose: () => void;
+  lastDebug?: DebugEvent | null;
 }) {
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [distilling, setDistilling] = useState(false);
-  const [tab, setTab] = useState<"prefs" | "concepts" | "graph">("prefs");
+  const [tab, setTab] = useState<"prefs" | "concepts" | "graph" | "llm">("prefs");
   const [graphKey, setGraphKey] = useState(0);
 
   const loadData = useCallback(() => {
@@ -69,7 +72,7 @@ export default function DebugPanel({
   return (
     <div
       className={`fixed top-0 left-0 h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-all duration-300 ease-in-out ${
-        tab === "graph" ? "w-[60vw]" : "w-80"
+        tab === "graph" ? "w-[60vw]" : tab === "llm" ? "w-[45vw]" : "w-80"
       } ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
@@ -106,6 +109,16 @@ export default function DebugPanel({
             }`}
           >
             Graph
+          </button>
+          <button
+            onClick={() => setTab("llm")}
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+              tab === "llm"
+                ? "bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            LLM
           </button>
         </div>
         <button
@@ -216,7 +229,101 @@ export default function DebugPanel({
             <KnowledgeGraph refreshKey={graphKey} />
           </div>
         )}
+
+        {tab === "llm" && <LlmTab debug={lastDebug ?? null} />}
       </div>
+    </div>
+  );
+}
+
+function LlmTab({ debug }: { debug: DebugEvent | null }) {
+  if (!debug) {
+    return (
+      <p className="text-sm text-gray-400">
+        Ask a question to see the exact prompt sent to the LLM and the token accounting.
+      </p>
+    );
+  }
+
+  const u = debug.usage;
+  const totalInput = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
+  const cacheHitPct = totalInput > 0 ? Math.round((u.cache_read_input_tokens / totalInput) * 100) : 0;
+  // Rough 4 chars ≈ 1 token heuristic for UI only — provider usage is the source of truth.
+  const approxTokens = (s: string) => Math.round(s.length / 4);
+
+  return (
+    <div className="space-y-4 text-sm">
+      {/* Token usage summary */}
+      <section className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+          Token usage
+        </h3>
+        <div className="grid grid-cols-2 gap-y-1 text-xs">
+          <span className="text-gray-500">Input (fresh)</span>
+          <span className="font-mono text-right">{u.input_tokens}</span>
+          <span className="text-gray-500">Cache write</span>
+          <span className="font-mono text-right">{u.cache_creation_input_tokens}</span>
+          <span className="text-gray-500">Cache read</span>
+          <span className="font-mono text-right text-green-600 dark:text-green-400">
+            {u.cache_read_input_tokens}
+          </span>
+          <span className="text-gray-500">Output</span>
+          <span className="font-mono text-right">{u.output_tokens}</span>
+          <span className="text-gray-500 border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
+            Total input
+          </span>
+          <span className="font-mono text-right border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
+            {totalInput}
+          </span>
+          <span className="text-gray-500">Cache hit rate</span>
+          <span className="font-mono text-right">{cacheHitPct}%</span>
+        </div>
+        {u.cache_creation_input_tokens === 0 && u.cache_read_input_tokens === 0 && (
+          <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+            Provider reported 0 cached tokens — either the static prefix is too small to cache,
+            or this endpoint doesn&apos;t honor <code>cache_control</code>.
+          </p>
+        )}
+      </section>
+
+      {/* Static system (cached) */}
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2">
+          Static system
+          <span className="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-[10px] font-normal text-green-700 dark:text-green-300">
+            cached · ~{approxTokens(debug.static_system)}t · {debug.static_system.length} chars
+          </span>
+        </h3>
+        <pre className="whitespace-pre-wrap break-words rounded bg-gray-50 dark:bg-gray-800 p-2 text-[11px] leading-snug font-mono max-h-60 overflow-y-auto">
+          {debug.static_system || "(empty)"}
+        </pre>
+      </section>
+
+      {/* Static user passage (cached) */}
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2">
+          Static user (passage)
+          <span className="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-[10px] font-normal text-green-700 dark:text-green-300">
+            cached · ~{approxTokens(debug.static_user_passage)}t · {debug.static_user_passage.length} chars
+          </span>
+        </h3>
+        <pre className="whitespace-pre-wrap break-words rounded bg-gray-50 dark:bg-gray-800 p-2 text-[11px] leading-snug font-mono max-h-40 overflow-y-auto">
+          {debug.static_user_passage || "(no passage)"}
+        </pre>
+      </section>
+
+      {/* Dynamic user (not cached) */}
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2">
+          Dynamic user
+          <span className="rounded bg-orange-100 dark:bg-orange-900 px-1.5 py-0.5 text-[10px] font-normal text-orange-700 dark:text-orange-300">
+            fresh · ~{approxTokens(debug.dynamic_user)}t · {debug.dynamic_user.length} chars
+          </span>
+        </h3>
+        <pre className="whitespace-pre-wrap break-words rounded bg-gray-50 dark:bg-gray-800 p-2 text-[11px] leading-snug font-mono max-h-96 overflow-y-auto">
+          {debug.dynamic_user || "(empty)"}
+        </pre>
+      </section>
     </div>
   );
 }

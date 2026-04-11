@@ -13,7 +13,7 @@ from app.schemas.query import AskRequest, AskResponse
 from app.services.embedding import embed_text
 from app.services.retrieval import search_similar_interactions, search_document_chunks
 from app.services.prompt_builder import build_answer_prompt
-from app.services.llm import generate
+from app.services.llm import generate_cached
 from app.user_profile import get_user_profile, boost_query_embedding
 from app.knowledge import get_graph_context, get_concepts
 from app.background.post_interaction import post_interaction_update
@@ -64,7 +64,7 @@ async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
         except Exception as e:
             print(f"[ask] graph walk error: {e}", flush=True)
 
-    system_prompt, user_prompt = build_answer_prompt(
+    parts = build_answer_prompt(
         passage=body.passage_text,
         selected_text=body.selected_text,
         question=body.question,
@@ -75,7 +75,7 @@ async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
         concept_nodes=concept_nodes,
         graph_context=graph_ctx,
     )
-    return system_prompt, user_prompt, similar
+    return parts, similar
 
 
 @router.post("/ask/stream")
@@ -85,15 +85,33 @@ async def ask_stream(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """SSE endpoint with streaming — detects proxy search events."""
-    system_prompt, user_prompt, similar = await _build_context(body, db, user_id)
+    parts, similar = await _build_context(body, db, user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
     async def run_generation():
         answer = ""
+        usage: dict = {}
         try:
-            answer = await generate(user_prompt, system=system_prompt)
-            print(f"[ask/stream] answer length={len(answer)}, first 100={answer[:100]!r}", flush=True)
+            answer, usage = await generate_cached(
+                parts.static_system,
+                parts.static_user_passage,
+                parts.dynamic_user,
+            )
+            print(
+                f"[ask/stream] answer length={len(answer)}, "
+                f"usage={usage}, first 100={answer[:100]!r}",
+                flush=True,
+            )
+            # Emit a debug event alongside the answer so the frontend debug
+            # panel can show the exact prompt and token accounting.
+            await status_queue.put({
+                "type": "debug",
+                "static_system": parts.static_system,
+                "static_user_passage": parts.static_user_passage,
+                "dynamic_user": parts.dynamic_user,
+                "usage": usage,
+            })
             await status_queue.put({
                 "type": "answer",
                 "answer": answer,
@@ -154,8 +172,12 @@ async def ask(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    system_prompt, user_prompt, similar = await _build_context(body, db, user_id)
-    answer = await generate(user_prompt, system=system_prompt)
+    parts, similar = await _build_context(body, db, user_id)
+    answer, _ = await generate_cached(
+        parts.static_system,
+        parts.static_user_passage,
+        parts.dynamic_user,
+    )
 
     interaction = Interaction(
         user_id=user_id,
