@@ -48,7 +48,7 @@ def build_answer_prompt(
         "",
         "HOW TO ANSWER:",
         "1. The passage tells you WHAT the user is reading. Use it to understand the topic and context.",
-        "2. If the user highlighted specific text, that's what they're curious about.",
+        "2. IF the user message contains a HIGHLIGHTED TEXT block, that highlighted text is the PRIMARY SUBJECT of their question. Read it carefully before answering. Interpret the question in DIRECT relation to the highlighted text — pronouns and references like 'this', 'it', 'the first one', 'the second', 'the next' refer to entities in the highlighted text, NOT the broader passage. If the question is ambiguous, resolve the ambiguity by re-reading the highlighted text.",
         "3. Use your FULL KNOWLEDGE to answer — explain, expand, provide background, examples, and connections.",
         "4. If the question needs current/specific facts beyond your knowledge or training data, you can browse the web to find up-to-date information.",
         "5. The passage is the starting point, not the boundary. Draw on everything you know about the topic.",
@@ -120,11 +120,6 @@ def build_answer_prompt(
             f"CURRENT SESSION FOCUS:\n{user_profile.session_interest_summary}"
         )
 
-    if selected_text:
-        dynamic_parts.append(
-            f"=== HIGHLIGHTED TEXT (user is asking about this part) ===\n{selected_text}"
-        )
-
     if doc_chunks:
         context = "\n---\n".join(c.text for c in doc_chunks)
         dynamic_parts.append(f"=== ADDITIONAL CONTEXT FROM DOCUMENT ===\n{context}")
@@ -139,7 +134,18 @@ def build_answer_prompt(
             + "\n---\n".join(past)
         )
 
-    dynamic_parts.append(f"=== QUESTION ===\n{question}")
+    # Highlighted text + question live together at the very end of the
+    # prompt so the model reads them as one unit. Pronouns in the question
+    # should resolve against the highlighted text, not the broader passage.
+    if selected_text:
+        dynamic_parts.append(
+            "=== HIGHLIGHTED TEXT (PRIMARY SUBJECT — the question below refers to this) ===\n"
+            f"{selected_text}\n\n"
+            "=== QUESTION (about the highlighted text above) ===\n"
+            f"{question}"
+        )
+    else:
+        dynamic_parts.append(f"=== QUESTION ===\n{question}")
 
     dynamic_user = "\n\n".join(dynamic_parts)
 
