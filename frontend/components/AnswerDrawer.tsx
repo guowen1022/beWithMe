@@ -3,8 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AnswerEvent } from "@/lib/api";
-import type { AgentStatus } from "./Reader";
+import type { AgentStatus, QuestionNode } from "./Reader";
 
 // Typewriter reveal rate. BASE_RATE sets the steady feel; if the source
 // text is far ahead (e.g. the final answer event just replaced the buffer
@@ -118,46 +117,38 @@ function StatusIndicator({
 }
 
 export default function AnswerDrawer({
-  open,
-  loading,
-  status,
-  searchDetail,
-  answer,
+  node,
   onClose,
+  instant = false,
 }: {
-  open: boolean;
-  loading: boolean;
-  status: AgentStatus;
-  searchDetail: string | null;
-  answer: AnswerEvent | null;
+  node: QuestionNode;
   onClose: () => void;
+  instant?: boolean;
 }) {
+  const open = true;
+  const loading = node.loading;
+  const status = node.status;
+  const searchDetail = node.searchDetail;
+
   // Target buffer — the authoritative text we're animating toward. Kept
   // in a ref so the rAF loop reads the latest value without re-subscribing
   // on every token.
   const targetRef = useRef<string>("");
   const pausedUntilRef = useRef<number>(0);
-  const [displayedText, setDisplayedText] = useState<string>("");
+  const [displayedText, setDisplayedText] = useState<string>(
+    instant ? node.displayedText : "",
+  );
 
   useEffect(() => {
-    targetRef.current = answer?.answer ?? "";
-  }, [answer?.answer]);
+    targetRef.current = node.displayedText;
+    if (instant) setDisplayedText(node.displayedText);
+  }, [node.displayedText, instant]);
 
-  // Reset the typewriter when a new question starts (Reader sets answer to null).
+  // Single rAF loop. The parent re-mounts this component whenever the
+  // active node changes (via a `key` on node.localId), so we don't need
+  // an explicit reset effect — the new mount starts with empty state.
   useEffect(() => {
-    if (answer === null) {
-      setDisplayedText("");
-      pausedUntilRef.current = 0;
-    }
-  }, [answer]);
-
-  // Single rAF loop tied to drawer lifecycle. Advances `displayedText`
-  // toward `targetRef.current` at BASE_RATE, accelerating when the gap is
-  // large so we never lag forever after the stream ends. At each sentence
-  // boundary we pause SENTENCE_PAUSE_MS to give the reveal a natural
-  // reading-out-loud cadence.
-  useEffect(() => {
-    if (!open) return;
+    if (!open || instant) return;
 
     let rafId = 0;
     let lastTime = performance.now();
@@ -203,16 +194,23 @@ export default function AnswerDrawer({
 
   return (
     <div
-      className={`fixed top-0 right-0 h-full w-[28rem] bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-transform duration-300 ease-in-out ${
-        open ? "translate-x-0" : "translate-x-full"
-      }`}
+      data-selection-source="active"
+      className="fixed top-0 right-0 h-full w-[28rem] bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl z-30 translate-x-0"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-gray-100 dark:border-gray-800 px-5 py-4">
-        <h2 className="text-sm font-semibold">Answer</h2>
+      {/* Header — title from the model + close button */}
+      <div className="flex items-start justify-between gap-3 border-b border-gray-100 dark:border-gray-800 px-5 py-4">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+            Active question
+          </p>
+          <h2 className="text-sm font-semibold mt-0.5 line-clamp-2 break-words">
+            {node.title || node.question}
+          </h2>
+        </div>
         <button
+          data-no-send
           onClick={onClose}
-          className="rounded-lg p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          className="rounded-lg p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors shrink-0"
           aria-label="Close"
         >
           <svg
@@ -228,7 +226,7 @@ export default function AnswerDrawer({
       </div>
 
       {/* Content */}
-      <div className="overflow-y-auto h-[calc(100%-3.5rem)] px-5 py-4">
+      <div className="overflow-y-auto h-[calc(100%-4.5rem)] px-5 py-4 selection:bg-blue-200 dark:selection:bg-blue-800 selection:text-inherit">
         {/* Spinner stays until the first character is actually revealed,
             avoiding a brief flicker between status end and content appearing. */}
         {(loading || (status !== "idle" && status !== "done")) && displayedText.length === 0 && (
@@ -236,19 +234,11 @@ export default function AnswerDrawer({
         )}
 
         {displayedText.length > 0 && (
-          <>
-            <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-li:my-0.5 prose-table:text-sm prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 prose-code:text-pink-600 dark:prose-code:text-pink-400">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {displayedText}
-              </ReactMarkdown>
-            </article>
-            {answer && answer.related_interaction_ids.length > 0 && (
-              <p className="mt-4 text-xs text-gray-400 border-t border-gray-100 dark:border-gray-800 pt-3">
-                Drew on {answer.related_interaction_ids.length} past interaction
-                {answer.related_interaction_ids.length !== 1 ? "s" : ""}
-              </p>
-            )}
-          </>
+          <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-li:my-0.5 prose-table:text-sm prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 prose-code:text-pink-600 dark:prose-code:text-pink-400">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {displayedText}
+            </ReactMarkdown>
+          </article>
         )}
       </div>
     </div>

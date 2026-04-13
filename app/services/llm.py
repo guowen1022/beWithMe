@@ -59,29 +59,22 @@ def _usage_dict(usage) -> dict:
     }
 
 
-async def generate_cached(
+def _build_request(
     static_system: str,
     static_user_passage: str,
     dynamic_user: str,
+    prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
-) -> Tuple[str, dict]:
-    """Generate with a single prompt-cache breakpoint at the end of the
-    system block.
+) -> Dict[str, Any]:
+    """Assemble the Anthropic request body shared by streaming and non-streaming.
 
-    Empirically, MiniMax only honors ONE `cache_control` marker per request:
-    placing a second breakpoint inside the user message is silently ignored
-    and that content is re-tokenized every call. So we fold the static passage
-    into the `system` block — the whole static prefix (instructions +
-    preferences + background + passage) becomes one cacheable chunk, and the
-    user message carries only the volatile tail.
-
-    Returns `(text, usage_dict)`. `usage_dict` exposes
-    `cache_creation_input_tokens` / `cache_read_input_tokens` so callers
-    (and the frontend debug panel) can see hit rates.
+    The cache breakpoint sits on the system block. MiniMax only honors ONE
+    `cache_control` marker per request, so the entire static prefix
+    (instructions + preferences + background + passage) folds into the system
+    block as one cacheable chunk. Prior session turns are passed verbatim as
+    plain user/assistant messages so the LLM sees one continuous chat —
+    they are not cached, since the suffix grows turn by turn.
     """
-    client = _get_client()
-
-    # Fold the static passage into the system block — see docstring.
     if static_user_passage:
         full_static = (
             (static_system + "\n\n" if static_system else "") + static_user_passage
@@ -97,18 +90,37 @@ async def generate_cached(
             "cache_control": {"type": "ephemeral"},
         })
 
-    # Anthropic requires at least one user content block.
-    user_text = dynamic_user if dynamic_user else ""
-    messages = [{"role": "user", "content": user_text}]
+    messages: list = list(prior_messages or [])
+    messages.append({"role": "user", "content": dynamic_user or ""})
 
-    kwargs = {
+    kwargs: Dict[str, Any] = {
         "model": settings.llm_model,
         "max_tokens": max_tokens,
         "messages": messages,
     }
     if system_blocks:
         kwargs["system"] = system_blocks
+    return kwargs
 
+
+async def generate_cached(
+    static_system: str,
+    static_user_passage: str,
+    dynamic_user: str,
+    prior_messages: Optional[list] = None,
+    max_tokens: int = 4096,
+) -> Tuple[str, dict]:
+    """Generate with a single prompt-cache breakpoint at the end of the
+    system block. See `_build_request` for the request shape.
+
+    Returns `(text, usage_dict)`. `usage_dict` exposes
+    `cache_creation_input_tokens` / `cache_read_input_tokens` so callers
+    (and the frontend debug panel) can see hit rates.
+    """
+    client = _get_client()
+    kwargs = _build_request(
+        static_system, static_user_passage, dynamic_user, prior_messages, max_tokens
+    )
     response = await client.messages.create(**kwargs)
     raw = _extract_text(response)
     text = _strip_think_tags(raw)
@@ -119,6 +131,7 @@ async def stream_cached(
     static_system: str,
     static_user_passage: str,
     dynamic_user: str,
+    prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming variant of `generate_cached`.
@@ -134,29 +147,9 @@ async def stream_cached(
     still waits for the reasoning phase before tokens flow.
     """
     client = _get_client()
-
-    if static_user_passage:
-        full_static = (
-            (static_system + "\n\n" if static_system else "") + static_user_passage
-        )
-    else:
-        full_static = static_system
-
-    system_blocks = []
-    if full_static:
-        system_blocks.append({
-            "type": "text",
-            "text": full_static,
-            "cache_control": {"type": "ephemeral"},
-        })
-
-    kwargs: Dict[str, Any] = {
-        "model": settings.llm_model,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": dynamic_user or ""}],
-    }
-    if system_blocks:
-        kwargs["system"] = system_blocks
+    kwargs = _build_request(
+        static_system, static_user_passage, dynamic_user, prior_messages, max_tokens
+    )
 
     full_text_parts: list[str] = []
     async with client.messages.stream(**kwargs) as stream:

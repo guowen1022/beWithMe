@@ -1,32 +1,28 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
-
 export default function ReadingPane({
   content,
-  onSelection,
+  onPlainClick,
 }: {
   content: string;
-  onSelection: (text: string) => void;
+  onPlainClick?: () => void;
 }) {
-  const handleMouseUp = useCallback(() => {
-    const selection = window.getSelection();
-    const text = selection?.toString().trim();
-    if (text && text.length > 0) {
-      onSelection(text);
-    }
-  }, [onSelection]);
-
-  useEffect(() => {
-    document.addEventListener("mouseup", handleMouseUp);
-    return () => document.removeEventListener("mouseup", handleMouseUp);
-  }, [handleMouseUp]);
-
   // Split content into paragraphs for nice rendering
   const paragraphs = content.split(/\n\s*\n/).filter(Boolean);
 
+  function handleClick() {
+    if (!onPlainClick) return;
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim().length > 0) return;
+    onPlainClick();
+  }
+
   return (
-    <article className="max-w-3xl mx-auto px-6 py-12 sm:px-12 sm:py-16">
+    <article
+      data-selection-source="passage"
+      onClick={handleClick}
+      className="max-w-3xl mx-auto px-6 py-12 sm:px-12 sm:py-16"
+    >
       {paragraphs.map((para, i) => (
         <p
           key={i}
