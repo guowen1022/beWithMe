@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS profile (
 CREATE TABLE IF NOT EXISTS interactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     session_id UUID NOT NULL,
+    parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL,
+    title VARCHAR(200),
     passage_text TEXT,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
@@ -33,6 +35,8 @@ CREATE TABLE IF NOT EXISTS interactions (
 
 CREATE INDEX IF NOT EXISTS idx_interactions_session ON interactions(session_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_created ON interactions(created_at DESC);
+-- idx_interactions_parent is created in MIGRATE, after the column is added
+-- on existing databases.
 
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -100,6 +104,11 @@ ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
 
 -- Add preference embedding to existing learning_preferences tables
 ALTER TABLE learning_preferences ADD COLUMN IF NOT EXISTS preference_embedding vector(768);
+
+-- Recursive question: parent link + title for each interaction
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL;
+ALTER TABLE interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);
+CREATE INDEX IF NOT EXISTS idx_interactions_parent ON interactions(parent_interaction_id);
 
 -- Multi-tenancy migration: ensure users table exists and has default user
 CREATE TABLE IF NOT EXISTS users (

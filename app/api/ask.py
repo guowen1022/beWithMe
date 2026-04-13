@@ -11,8 +11,12 @@ from app.models.profile import Profile
 from app.models.interaction import Interaction
 from app.schemas.query import AskRequest, AskResponse
 from app.services.embedding import embed_text
-from app.services.retrieval import search_similar_interactions, search_document_chunks
-from app.services.prompt_builder import build_answer_prompt
+from app.services.retrieval import search_document_chunks
+from app.services.prompt_builder import (
+    build_answer_prompt,
+    build_history_messages,
+    parse_title,
+)
 from app.services.llm import generate_cached, stream_cached
 from app.user_profile import get_user_profile, boost_query_embedding
 from app.knowledge import get_graph_context, get_concepts
@@ -23,6 +27,25 @@ router = APIRouter()
 
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
+
+
+async def _fetch_session_history(
+    db: AsyncSession, user_id: UUID, session_id: UUID
+) -> list[Interaction]:
+    """All prior interactions in this session, in chronological order.
+
+    The recursive-question feature treats every Q&A in a session as one
+    flat conversation from the model's perspective, regardless of how the
+    user navigated the tree in the UI. This is the source for the messages
+    array sent to the LLM.
+    """
+    stmt = (
+        select(Interaction)
+        .where(Interaction.user_id == user_id, Interaction.session_id == session_id)
+        .order_by(Interaction.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
@@ -40,10 +63,6 @@ async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
     # Boost query with user's preference embedding for personalized retrieval
     if query_embedding:
         query_embedding = await boost_query_embedding(db, user_id, query_embedding)
-
-    similar = []
-    if query_embedding:
-        similar = await search_similar_interactions(db, user_id, query_embedding, top_k=5)
 
     doc_chunks = []
     if body.document_id and query_embedding:
@@ -64,18 +83,22 @@ async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
         except Exception as e:
             print(f"[ask] graph walk error: {e}", flush=True)
 
+    # Flat session history → multi-turn messages. The tree the user sees in
+    # the UI is collapsed into one chronological dialogue here.
+    prior_interactions = await _fetch_session_history(db, user_id, body.session_id)
+    prior_messages = build_history_messages(prior_interactions)
+
     parts = build_answer_prompt(
         passage=body.passage_text,
         selected_text=body.selected_text,
         question=body.question,
         self_description=self_description,
-        similar_interactions=similar,
         doc_chunks=doc_chunks,
         user_profile=user_profile,
         concept_nodes=concept_nodes,
         graph_context=graph_ctx,
     )
-    return parts, similar
+    return parts, prior_messages
 
 
 @router.post("/ask/stream")
@@ -85,30 +108,74 @@ async def ask_stream(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """SSE endpoint with streaming — detects proxy search events."""
-    parts, similar = await _build_context(body, db, user_id)
+    parts, prior_messages = await _build_context(body, db, user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
     async def run_generation():
         answer = ""
+        answer_body = ""
+        extracted_title: str | None = None
         usage: dict = {}
         try:
+            # The model's first line is `TITLE: …\n`. Buffer leading deltas
+            # until we've isolated the title, then emit it as a `title` SSE
+            # event and stream the remainder as normal `token` events.
+            title_resolved = False
+            head_buffer = ""
+
             async for evt in stream_cached(
                 parts.static_system,
                 parts.static_user_passage,
                 parts.dynamic_user,
+                prior_messages=prior_messages,
             ):
                 if evt["kind"] == "delta":
-                    # Forward each text_delta to the client as it arrives —
-                    # the drawer appends these into a live answer.
-                    await status_queue.put({"type": "token", "text": evt["text"]})
+                    chunk = evt["text"]
+                    if not title_resolved:
+                        head_buffer += chunk
+                        title, body_text = parse_title(head_buffer)
+                        if title is not None:
+                            extracted_title = title
+                            await status_queue.put({"type": "title", "title": title})
+                            title_resolved = True
+                            if body_text:
+                                await status_queue.put({"type": "token", "text": body_text})
+                        elif "\n" in head_buffer and not head_buffer.lstrip().upper().startswith("TITLE:"):
+                            # Model didn't honor the format — flush as-is.
+                            await status_queue.put({"type": "token", "text": head_buffer})
+                            title_resolved = True
+                    else:
+                        await status_queue.put({"type": "token", "text": chunk})
                 elif evt["kind"] == "done":
                     answer = evt["text"]
                     usage = evt["usage"]
+                    # If the model never produced a newline mid-stream (very
+                    # short answer), flush whatever's still in the head buffer.
+                    if not title_resolved and head_buffer:
+                        title, body_text = parse_title(head_buffer)
+                        if title is not None:
+                            extracted_title = title
+                            await status_queue.put({"type": "title", "title": title})
+                            if body_text:
+                                await status_queue.put({"type": "token", "text": body_text})
+                        else:
+                            await status_queue.put({"type": "token", "text": head_buffer})
+                        title_resolved = True
+
+            # Authoritative title from the full answer (handles edge cases
+            # where the streamed parse missed it). `answer_body` is what we
+            # persist and what the frontend treats as the canonical text:
+            # the TITLE line is metadata, not part of the answer prose.
+            final_title, answer_body = parse_title(answer)
+            if extracted_title is None:
+                extracted_title = final_title
+            if not answer_body:
+                answer_body = answer
 
             print(
-                f"[ask/stream] answer length={len(answer)}, "
-                f"usage={usage}, first 100={answer[:100]!r}",
+                f"[ask/stream] answer length={len(answer_body)}, "
+                f"title={extracted_title!r}, usage={usage}, first 100={answer_body[:100]!r}",
                 flush=True,
             )
             # Debug event for the LLM tab (full prompt parts + token usage).
@@ -117,14 +184,16 @@ async def ask_stream(
                 "static_system": parts.static_system,
                 "static_user_passage": parts.static_user_passage,
                 "dynamic_user": parts.dynamic_user,
+                "prior_message_count": len(prior_messages),
                 "usage": usage,
             })
-            # Final answer — reconciles the accumulated stream and carries
-            # related_interaction_ids the incremental tokens don't have.
+            # Final answer — reconciles the accumulated stream. With flat
+            # session history we no longer surface separate similar matches.
             await status_queue.put({
                 "type": "answer",
-                "answer": answer,
-                "related_interaction_ids": [str(i.id) for i in similar],
+                "answer": answer_body,
+                "title": extracted_title,
+                "related_interaction_ids": [],
             })
         except Exception as e:
             print(f"[ask/stream] error: {e}", flush=True)
@@ -138,14 +207,23 @@ async def ask_stream(
                 interaction = Interaction(
                     user_id=user_id,
                     session_id=body.session_id,
+                    parent_interaction_id=body.parent_interaction_id,
+                    title=extracted_title,
                     passage_text=body.passage_text,
                     question=body.question,
-                    answer=answer,
+                    answer=answer_body or answer,
                     source_document=str(body.document_id) if body.document_id else None,
                 )
                 bg_db.add(interaction)
                 await bg_db.commit()
                 await bg_db.refresh(interaction)
+
+                # Echo the persisted id so the frontend can use it as the
+                # parent_interaction_id for any drill-down it spawns next.
+                await status_queue.put({
+                    "type": "interaction",
+                    "interaction_id": str(interaction.id),
+                })
 
                 # Fire-and-forget: schedule background task on the event loop
                 print(f"[ask/stream] scheduling background task for {interaction.id}", flush=True)
@@ -181,16 +259,20 @@ async def ask(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    parts, similar = await _build_context(body, db, user_id)
+    parts, prior_messages = await _build_context(body, db, user_id)
     answer, _ = await generate_cached(
         parts.static_system,
         parts.static_user_passage,
         parts.dynamic_user,
+        prior_messages=prior_messages,
     )
+    title, _ = parse_title(answer)
 
     interaction = Interaction(
         user_id=user_id,
         session_id=body.session_id,
+        parent_interaction_id=body.parent_interaction_id,
+        title=title,
         passage_text=body.passage_text,
         question=body.question,
         answer=answer,
@@ -206,5 +288,6 @@ async def ask(
         interaction_id=interaction.id,
         answer=answer,
         session_id=body.session_id,
-        related_interaction_ids=[i.id for i in similar],
+        title=title,
+        related_interaction_ids=[],
     )

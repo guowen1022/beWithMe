@@ -97,12 +97,14 @@ export interface AskRequest {
   question: string;
   document_id?: string;
   session_id?: string;
+  parent_interaction_id?: string;
 }
 
 export interface AskResponse {
   interaction_id: string;
   answer: string;
   session_id: string;
+  title?: string | null;
   related_interaction_ids: string[];
 }
 
@@ -135,12 +137,23 @@ export type StatusEvent = {
 export type AnswerEvent = {
   type: "answer";
   answer: string;
+  title: string | null;
   related_interaction_ids: string[];
 };
 
 export type TokenEvent = {
   type: "token";
   text: string;
+};
+
+export type TitleEvent = {
+  type: "title";
+  title: string;
+};
+
+export type InteractionEvent = {
+  type: "interaction";
+  interaction_id: string;
 };
 
 export type LlmUsage = {
@@ -155,6 +168,7 @@ export type DebugEvent = {
   static_system: string;
   static_user_passage: string;
   dynamic_user: string;
+  prior_message_count?: number;
   usage: LlmUsage;
 };
 
@@ -162,6 +176,8 @@ export type StreamEvent =
   | StatusEvent
   | AnswerEvent
   | TokenEvent
+  | TitleEvent
+  | InteractionEvent
   | DebugEvent;
 
 export async function askStream(

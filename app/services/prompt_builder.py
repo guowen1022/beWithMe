@@ -1,10 +1,51 @@
-from typing import Optional, List, NamedTuple
+import re
+from typing import Optional, List, NamedTuple, Tuple
 from app.models.interaction import Interaction
 from app.models.document import DocumentChunk
 from app.user_profile.state import UserProfileState
 from app.knowledge.models import ConceptNode
 from app.knowledge.hlr import compute_mastery, mastery_to_state
 from datetime import datetime
+
+
+_TITLE_RE = re.compile(r"^\s*TITLE:\s*(.+?)\s*(?:\n+|$)", re.IGNORECASE)
+_CONCEPTS_RE = re.compile(r"\n*\s*CONCEPTS:\s*[^\n]*\s*$", re.IGNORECASE)
+
+
+def parse_title(answer: str) -> Tuple[Optional[str], str]:
+    """Extract the leading TITLE: line emitted by the model.
+
+    Returns `(title, body)`. If no TITLE line is found, title is None and
+    body is the original answer untouched. The title is capped at 200 chars
+    so it always fits the DB column.
+    """
+    m = _TITLE_RE.match(answer)
+    if not m:
+        return None, answer
+    title = m.group(1).strip().rstrip(".!?")[:200]
+    body = answer[m.end():]
+    return title, body
+
+
+def clean_answer_for_history(answer: str) -> str:
+    """Strip TITLE: and CONCEPTS: metadata lines so historical assistant
+    turns sent back to the LLM contain only the prose the user actually saw.
+    """
+    _, body = parse_title(answer)
+    return _CONCEPTS_RE.sub("", body).strip()
+
+
+def build_history_messages(prior_interactions: List[Interaction]) -> List[dict]:
+    """Map a chronologically-ordered list of prior session interactions into
+    Anthropic messages: alternating user (question, with selected text inline
+    when present) and assistant (cleaned answer body) turns.
+    """
+    msgs: List[dict] = []
+    for i in prior_interactions:
+        user_text = i.question
+        msgs.append({"role": "user", "content": user_text})
+        msgs.append({"role": "assistant", "content": clean_answer_for_history(i.answer) or "(empty)"})
+    return msgs
 
 
 class PromptParts(NamedTuple):
@@ -30,7 +71,6 @@ def build_answer_prompt(
     selected_text: Optional[str],
     question: str,
     self_description: str,
-    similar_interactions: List[Interaction],
     doc_chunks: List[DocumentChunk],
     user_profile: Optional[UserProfileState] = None,
     concept_nodes: Optional[List[ConceptNode]] = None,
@@ -56,11 +96,15 @@ def build_answer_prompt(
         "1. The passage tells you WHAT the user is reading. Use it to understand the topic and context.",
         "2. IF the user message contains a HIGHLIGHTED TEXT block, that highlighted text is the PRIMARY SUBJECT of their question. Read it carefully before answering. Interpret the question in DIRECT relation to the highlighted text — pronouns and references like 'this', 'it', 'the first one', 'the second', 'the next' refer to entities in the highlighted text, NOT the broader passage. If the question is ambiguous, resolve the ambiguity by re-reading the highlighted text.",
         "3. Use your FULL KNOWLEDGE to answer — but in the shortest form that still answers the question well.",
-        "4. If the question needs current/specific facts beyond your knowledge or training data, you can browse the web to find up-to-date information.",
+        "4. If the question needs current/specific facts beyond your training data, say so honestly rather than guessing. State what you do know and where the user might find current numbers.",
         "5. The passage is the starting point, not the boundary. Draw on everything you know about the topic.",
-        "6. Past interactions show what the user has studied before — use them to personalize, not as the answer topic.",
+        "6. This may be a multi-turn conversation. Earlier user/assistant turns in the messages array are PRIOR exchanges in the same reading session — treat them as live context the user can still see, and resolve follow-up references against them.",
         "7. If the user message includes a USER'S CONCEPT KNOWLEDGE block, build on what they already know and explain unfamiliar concepts more carefully.",
-        "8. At the VERY END of your answer, add a line: CONCEPTS: concept1, concept2, concept3 — listing 1-5 domain knowledge concepts covered in your answer (textbook-level terms only, no generic words).",
+        "",
+        "OUTPUT FORMAT (STRICT — these two metadata lines are parsed by the app):",
+        "- The VERY FIRST line of your response must be: TITLE: <one-line summary of the question, max 60 chars, no trailing punctuation>",
+        "- Then a blank line, then the answer body.",
+        "- The VERY LAST line must be: CONCEPTS: concept1, concept2, concept3 — listing 1-5 domain knowledge concepts covered in your answer (textbook-level terms only, no generic words).",
     ]
 
     # Stable preferences live in the cached prefix. They change rarely
@@ -129,16 +173,6 @@ def build_answer_prompt(
     if doc_chunks:
         context = "\n---\n".join(c.text for c in doc_chunks)
         dynamic_parts.append(f"=== ADDITIONAL CONTEXT FROM DOCUMENT ===\n{context}")
-
-    if similar_interactions:
-        past = []
-        for i in similar_interactions:
-            entry = f"Q: {i.question}\nA: {i.answer[:200]}"
-            past.append(entry)
-        dynamic_parts.append(
-            "=== BACKGROUND: user's past questions (for reference only) ===\n"
-            + "\n---\n".join(past)
-        )
 
     # Highlighted text + question live together at the very end of the
     # prompt so the model reads them as one unit. Pronouns in the question
