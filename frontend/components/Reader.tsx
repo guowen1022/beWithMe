@@ -1,17 +1,21 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import ContentInput from "./ContentInput";
+import { useState, useCallback, lazy, Suspense } from "react";
+import ContentInput, { type ContentResult } from "./ContentInput";
 import ReadingPane from "./ReadingPane";
 import QuestionBar from "./QuestionBar";
 import AnswerDrawer from "./AnswerDrawer";
 import DebugPanel from "./DebugPanel";
 import { askStream, type AnswerEvent, type DebugEvent } from "@/lib/api";
 
+// Lazy-load the PDF viewer so pdf.js isn't in the initial bundle.
+const PdfViewer = lazy(() => import("./PdfViewer"));
+
 export type AgentStatus = "idle" | "thinking" | "searching" | "done";
 
 export default function Reader() {
   const [content, setContent] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [selectedText, setSelectedText] = useState("");
   const [answer, setAnswer] = useState<AnswerEvent | null>(null);
   const [lastDebug, setLastDebug] = useState<DebugEvent | null>(null);
@@ -28,6 +32,13 @@ export default function Reader() {
     setSelectedText(text);
     setRecordTrigger((n) => n + 1);
   }, []);
+
+  function handleContentSubmit(result: ContentResult) {
+    setContent(result.text);
+    if (result.type === "pdf" && result.file) {
+      setPdfFile(result.file);
+    }
+  }
 
   async function handleAsk(question: string) {
     if (!question.trim()) return;
@@ -104,7 +115,7 @@ export default function Reader() {
             debugOpen ? "ml-80" : "ml-0"
           }`}
         >
-          <ContentInput onSubmit={setContent} />
+          <ContentInput onSubmit={handleContentSubmit} />
         </div>
       </div>
     );
@@ -135,7 +146,19 @@ export default function Reader() {
           drawerOpen ? "mr-[28rem]" : "mr-0"
         } ${debugOpen ? "ml-80" : "ml-0"}`}
       >
-        <ReadingPane content={content} onSelection={handleSelection} />
+        {pdfFile ? (
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-20 text-gray-400">
+                Loading PDF viewer...
+              </div>
+            }
+          >
+            <PdfViewer file={pdfFile} onSelection={handleSelection} />
+          </Suspense>
+        ) : (
+          <ReadingPane content={content} onSelection={handleSelection} />
+        )}
       </div>
 
       {/* Answer drawer (right) */}

@@ -269,6 +269,35 @@ export async function getConcepts(): Promise<Concept[]> {
   return res.json();
 }
 
+// --- PDF upload ---
+
+export interface PdfUploadResult {
+  id: string;
+  title: string;
+  filename: string;
+  text: string;
+  pages: number;
+}
+
+export async function uploadPdf(file: File): Promise<PdfUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const userId = getCurrentUserId();
+  const headers: Record<string, string> = {};
+  if (userId) headers["X-User-Id"] = userId;
+  const res = await fetch(`${API_BASE}/documents/upload`, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to upload PDF");
+  }
+  return res.json();
+}
+
 export interface GraphNode {
   id: string;
   state: string;
