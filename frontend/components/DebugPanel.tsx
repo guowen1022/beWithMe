@@ -31,10 +31,14 @@ export default function DebugPanel({
   open,
   onClose,
   lastDebug,
+  promptVersion = "v1",
+  onPromptVersionChange,
 }: {
   open: boolean;
   onClose: () => void;
   lastDebug?: DebugEvent | null;
+  promptVersion?: "v1" | "v2";
+  onPromptVersionChange?: (v: "v1" | "v2") => void;
 }) {
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
@@ -135,6 +139,30 @@ export default function DebugPanel({
       <div className="overflow-y-auto h-[calc(100%-3rem)] px-4 py-3">
         {tab === "prefs" && (
           <div className="space-y-4">
+            {/* Prompt version toggle */}
+            {onPromptVersionChange && (
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                  Prompt Version
+                </p>
+                <div className="flex gap-1">
+                  {(["v1", "v2"] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => onPromptVersionChange(v)}
+                      className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                        promptVersion === v
+                          ? "bg-purple-600 text-white"
+                          : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+                      }`}
+                    >
+                      {v.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleDistill}
               disabled={distilling}

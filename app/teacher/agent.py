@@ -20,6 +20,13 @@ from app.silicon_brain.services.retrieval import search_document_chunks
 from app.silicon_brain.user_profile import get_user_profile, boost_query_embedding
 from app.silicon_brain.knowledge import get_graph_context, get_concepts
 from app.teacher.prompt import PromptParts, build_answer_prompt, build_history_messages
+from app.teacher.skills.v2_prompt import build_answer_prompt as build_answer_prompt_v2
+
+# Registry: maps version string -> builder callable
+_PROMPT_BUILDERS = {
+    "v1": build_answer_prompt,
+    "v2": build_answer_prompt_v2,
+}
 
 
 @dataclass
@@ -90,8 +97,9 @@ async def assemble_context(
     prior_interactions = await fetch_session_history(db, user_id, body.session_id)
     prior_messages = build_history_messages(prior_interactions)
 
-    # Build the prompt
-    parts = build_answer_prompt(
+    # Build the prompt — route to the selected version's builder
+    builder = _PROMPT_BUILDERS[body.prompt_version]
+    parts = builder(
         passage=body.passage_text,
         selected_text=body.selected_text,
         question=body.question,

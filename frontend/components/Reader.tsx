@@ -59,6 +59,7 @@ export default function Reader() {
   const [navigatedNodeId, setNavigatedNodeId] = useState<string | null>(null);
   const [lastDebug, setLastDebug] = useState<DebugEvent | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [promptVersion, setPromptVersion] = useState<"v1" | "v2">("v1");
   const [recordTrigger, setRecordTrigger] = useState(0);
   const [sessionId] = useState(() => crypto.randomUUID());
 
@@ -226,6 +227,7 @@ export default function Reader() {
           question: question.trim(),
           session_id: sessionId,
           parent_interaction_id: parent_interaction_id ?? undefined,
+          prompt_version: promptVersion,
         },
         (event) => {
           if (event.type === "status") {
@@ -269,7 +271,7 @@ export default function Reader() {
   if (!content) {
     return (
       <div className="relative flex h-screen">
-        <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} lastDebug={lastDebug} />
+        <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} lastDebug={lastDebug} promptVersion={promptVersion} onPromptVersionChange={setPromptVersion} />
         {!debugOpen && (
           <button
             onClick={() => setDebugOpen(true)}

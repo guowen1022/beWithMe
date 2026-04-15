@@ -98,6 +98,7 @@ export interface AskRequest {
   document_id?: string;
   session_id?: string;
   parent_interaction_id?: string;
+  prompt_version?: "v1" | "v2";
 }
 
 export interface AskResponse {
