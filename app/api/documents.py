@@ -7,9 +7,9 @@ from starlette.requests import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session
-from app.models.document import Document, DocumentChunk
-from app.schemas.query import DocumentCreate, DocumentRead
-from app.services.embedding import embed_batch
+from app.silicon_brain.models.document import Document, DocumentChunk
+from app.silicon_brain.schemas import DocumentCreate, DocumentRead
+from app.silicon_brain.services.embedding import embed_batch
 from app.api.deps import get_current_user_id
 
 router = APIRouter()

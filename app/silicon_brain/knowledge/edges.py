@@ -5,8 +5,8 @@ from datetime import datetime
 from itertools import combinations
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.knowledge.models import ConceptNode, ConceptEdge
-from app.knowledge.hlr import DECAY_HALF_LIFE_DAYS
+from app.silicon_brain.knowledge.models import ConceptNode, ConceptEdge
+from app.silicon_brain.knowledge.hlr import DECAY_HALF_LIFE_DAYS
 
 
 async def link_concepts(

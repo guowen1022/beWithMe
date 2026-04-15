@@ -4,8 +4,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.knowledge.models import ConceptNode, ConceptEdge
-from app.knowledge.hlr import compute_mastery, mastery_to_state
+from app.silicon_brain.knowledge.models import ConceptNode, ConceptEdge
+from app.silicon_brain.knowledge.hlr import compute_mastery, mastery_to_state
 
 
 async def get_graph_data(db: AsyncSession, user_id: uuid.UUID) -> Dict[str, Any]:

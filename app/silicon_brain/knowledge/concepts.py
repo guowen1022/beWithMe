@@ -5,8 +5,8 @@ from typing import List
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.knowledge.models import ConceptNode
-from app.knowledge.hlr import INITIAL_HALF_LIFE, compute_mastery, update_half_life, mastery_to_state
+from app.silicon_brain.knowledge.models import ConceptNode
+from app.silicon_brain.knowledge.hlr import INITIAL_HALF_LIFE, compute_mastery, update_half_life, mastery_to_state
 
 
 def parse_concepts(answer: str) -> List[str]:

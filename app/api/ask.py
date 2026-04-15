@@ -1,104 +1,21 @@
 import asyncio
 import json
-import sys
 from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session
-from app.models.profile import Profile
-from app.models.interaction import Interaction
-from app.schemas.query import AskRequest, AskResponse
-from app.services.embedding import embed_text
-from app.services.retrieval import search_document_chunks
-from app.services.prompt_builder import (
-    build_answer_prompt,
-    build_history_messages,
-    parse_title,
-)
+from app.silicon_brain.models.interaction import Interaction
+from app.teacher.schemas import AskRequest, AskResponse
+from app.teacher import assemble_context, parse_title
 from app.services.llm import generate_cached, stream_cached
-from app.user_profile import get_user_profile, boost_query_embedding
-from app.knowledge import get_graph_context, get_concepts
-from app.background.post_interaction import post_interaction_update
+from app.brain_builder.background import post_interaction_update
 from app.api.deps import get_current_user_id
 
 router = APIRouter()
 
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
-
-
-async def _fetch_session_history(
-    db: AsyncSession, user_id: UUID, session_id: UUID
-) -> list[Interaction]:
-    """All prior interactions in this session, in chronological order.
-
-    The recursive-question feature treats every Q&A in a session as one
-    flat conversation from the model's perspective, regardless of how the
-    user navigated the tree in the UI. This is the source for the messages
-    array sent to the LLM.
-    """
-    stmt = (
-        select(Interaction)
-        .where(Interaction.user_id == user_id, Interaction.session_id == session_id)
-        .order_by(Interaction.created_at.asc())
-    )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-
-async def _build_context(body: AskRequest, db: AsyncSession, user_id: UUID):
-    result = await db.execute(select(Profile).where(Profile.user_id == user_id))
-    profile = result.scalar_one_or_none()
-    self_description = profile.self_description if profile else ""
-
-    embed_context = body.selected_text or body.passage_text or ""
-    query_text = (embed_context + " " + body.question) if embed_context else body.question
-    try:
-        query_embedding = await embed_text(query_text)
-    except Exception:
-        query_embedding = None
-
-    # Boost query with user's preference embedding for personalized retrieval
-    if query_embedding:
-        query_embedding = await boost_query_embedding(db, user_id, query_embedding)
-
-    doc_chunks = []
-    if body.document_id and query_embedding:
-        doc_chunks = await search_document_chunks(db, body.document_id, query_embedding, top_k=5)
-
-    # Fetch user profile (static preferences + embedding + session signals)
-    user_profile = await get_user_profile(db, user_id, session_id=body.session_id)
-
-    # Fetch concepts from knowledge module (dynamic learning state)
-    concept_nodes = await get_concepts(db, user_id, limit=30)
-
-    # Walk the concept graph for related territory
-    graph_ctx = ""
-    if concept_nodes:
-        try:
-            concept_names = [c.name for c in concept_nodes[:10]]
-            graph_ctx = await get_graph_context(db, user_id, concept_names)
-        except Exception as e:
-            print(f"[ask] graph walk error: {e}", flush=True)
-
-    # Flat session history → multi-turn messages. The tree the user sees in
-    # the UI is collapsed into one chronological dialogue here.
-    prior_interactions = await _fetch_session_history(db, user_id, body.session_id)
-    prior_messages = build_history_messages(prior_interactions)
-
-    parts = build_answer_prompt(
-        passage=body.passage_text,
-        selected_text=body.selected_text,
-        question=body.question,
-        self_description=self_description,
-        doc_chunks=doc_chunks,
-        user_profile=user_profile,
-        concept_nodes=concept_nodes,
-        graph_context=graph_ctx,
-    )
-    return parts, prior_messages
 
 
 @router.post("/ask/stream")
@@ -108,7 +25,7 @@ async def ask_stream(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """SSE endpoint with streaming — detects proxy search events."""
-    parts, prior_messages = await _build_context(body, db, user_id)
+    ctx = await assemble_context(body, db, user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -125,10 +42,10 @@ async def ask_stream(
             head_buffer = ""
 
             async for evt in stream_cached(
-                parts.static_system,
-                parts.static_user_passage,
-                parts.dynamic_user,
-                prior_messages=prior_messages,
+                ctx.parts.static_system,
+                ctx.parts.static_user_passage,
+                ctx.parts.dynamic_user,
+                prior_messages=ctx.prior_messages,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]
@@ -181,10 +98,10 @@ async def ask_stream(
             # Debug event for the LLM tab (full prompt parts + token usage).
             await status_queue.put({
                 "type": "debug",
-                "static_system": parts.static_system,
-                "static_user_passage": parts.static_user_passage,
-                "dynamic_user": parts.dynamic_user,
-                "prior_message_count": len(prior_messages),
+                "static_system": ctx.parts.static_system,
+                "static_user_passage": ctx.parts.static_user_passage,
+                "dynamic_user": ctx.parts.dynamic_user,
+                "prior_message_count": len(ctx.prior_messages),
                 "usage": usage,
             })
             # Final answer — reconciles the accumulated stream. With flat
@@ -259,12 +176,12 @@ async def ask(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    parts, prior_messages = await _build_context(body, db, user_id)
+    ctx = await assemble_context(body, db, user_id)
     answer, _ = await generate_cached(
-        parts.static_system,
-        parts.static_user_passage,
-        parts.dynamic_user,
-        prior_messages=prior_messages,
+        ctx.parts.static_system,
+        ctx.parts.static_user_passage,
+        ctx.parts.dynamic_user,
+        prior_messages=ctx.prior_messages,
     )
     title, _ = parse_title(answer)
 

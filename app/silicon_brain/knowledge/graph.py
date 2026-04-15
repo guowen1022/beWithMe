@@ -5,7 +5,7 @@ from datetime import datetime
 import networkx as nx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.knowledge.models import ConceptNode, ConceptEdge
+from app.silicon_brain.knowledge.models import ConceptNode, ConceptEdge
 
 
 async def load_graph(db: AsyncSession, user_id: uuid.UUID) -> nx.Graph:

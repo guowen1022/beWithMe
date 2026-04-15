@@ -9,19 +9,19 @@ Public API:
     decay_edges(db, user_id, half_life_days)     # prune weak edges
 """
 
-from app.knowledge.concepts import (
+from app.silicon_brain.knowledge.concepts import (
     parse_concepts,
     upsert_concepts,
     get_concepts,
 )
-from app.knowledge.edges import (
+from app.silicon_brain.knowledge.edges import (
     link_concepts,
     decay_edges,
 )
-from app.knowledge.graph import get_graph_context
-from app.knowledge.hlr import compute_mastery, mastery_to_state
-from app.knowledge.models import ConceptNode, ConceptEdge
-from app.knowledge.visualize import get_graph_data
+from app.silicon_brain.knowledge.graph import get_graph_context
+from app.silicon_brain.knowledge.hlr import compute_mastery, mastery_to_state
+from app.silicon_brain.knowledge.models import ConceptNode, ConceptEdge
+from app.silicon_brain.knowledge.visualize import get_graph_data
 
 __all__ = [
     "parse_concepts",

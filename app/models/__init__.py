@@ -1,8 +1,2 @@
-from app.models.user import User
-from app.models.profile import Profile
-from app.models.interaction import Interaction
-from app.models.document import Document, DocumentChunk
-from app.models.preferences import LearningPreferences
-from app.models.concept import ConceptNode
-
-__all__ = ["User", "Profile", "Interaction", "Document", "DocumentChunk", "LearningPreferences", "ConceptNode"]
+"""Backward-compatible re-exports — models now live in silicon_brain/models/."""
+from app.silicon_brain.models import *  # noqa: F401,F403

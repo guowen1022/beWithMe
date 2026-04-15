@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.user_profile import distill_preferences, get_or_create_preferences
+from app.silicon_brain.user_profile import distill_preferences, get_or_create_preferences
 from app.api.deps import get_current_user_id
 
 router = APIRouter()

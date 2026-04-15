@@ -6,9 +6,9 @@ from datetime import datetime
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.user_profile.ema import boost_query
-from app.user_profile.preference_distiller import get_or_create_preferences
-from app.models.interaction import Interaction
+from app.silicon_brain.user_profile.ema import boost_query
+from app.silicon_brain.user_profile.preference_distiller import get_or_create_preferences
+from app.silicon_brain.models.interaction import Interaction
 
 
 class UserProfileState(BaseModel):
