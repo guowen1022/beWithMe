@@ -3,6 +3,7 @@ import re
 from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel, HttpUrl
 from starlette.requests import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,12 @@ from app.silicon_brain.models.document import Document, DocumentChunk
 from app.silicon_brain.schemas import DocumentCreate, DocumentRead
 from app.silicon_brain.services.embedding import embed_batch
 from app.api.deps import get_current_user_id
+from app.services.web_fetch import fetch_readable, WebFetchError
+
+
+class UrlIngestRequest(BaseModel):
+    url: HttpUrl
+
 
 router = APIRouter()
 
@@ -149,6 +156,62 @@ async def upload_pdf(
         "filename": doc.filename,
         "text": full_text,
         "pages": len(pages_text),
+    }
+
+
+@router.post("/documents/url")
+async def ingest_url(
+    body: UrlIngestRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Render a URL in the shared persistent Chromium context, extract readable
+    text, store as a document and trigger background embedding."""
+    context = getattr(request.app.state, "browser_context", None)
+    if context is None:
+        raise HTTPException(status_code=503, detail="Browser not ready")
+
+    headed = getattr(request.app.state, "browser_headed", False)
+    try:
+        title, text, page = await fetch_readable(str(body.url), context, keep_open=headed)
+    except WebFetchError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if page:
+        old = getattr(request.app.state, "browse_page", None)
+        if old and not old.is_closed():
+            await old.close()
+        request.app.state.browse_page = page
+        await page.bring_to_front()
+
+    doc = Document(
+        user_id=user_id,
+        title=title,
+        filename=None,
+        content=text,
+        pdf_data=None,
+    )
+    db.add(doc)
+    await db.flush()
+
+    texts = chunk_text(text)
+    for i, chunk_str in enumerate(texts):
+        chunk = DocumentChunk(document_id=doc.id, chunk_index=i, text=chunk_str)
+        db.add(chunk)
+
+    await db.commit()
+    await db.refresh(doc)
+
+    background_tasks.add_task(_embed_document_chunks, doc.id)
+
+    return {
+        "id": str(doc.id),
+        "title": doc.title,
+        "filename": None,
+        "text": text,
+        "pages": 0,
     }
 
 

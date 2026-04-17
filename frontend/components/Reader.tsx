@@ -9,7 +9,7 @@ import ParentCard from "./ParentCard";
 import PinnedPassageCard from "./PinnedPassageCard";
 import DebugPanel from "./DebugPanel";
 import ExplorationTreePanel from "./ExplorationTreePanel";
-import { askStream, type DebugEvent } from "@/lib/api";
+import { askStream, endSession, type DebugEvent } from "@/lib/api";
 import {
   type ExplorationTree,
   createTree,
@@ -62,6 +62,8 @@ export default function Reader() {
   const [promptVersion, setPromptVersion] = useState<"v1" | "v2">("v1");
   const [recordTrigger, setRecordTrigger] = useState(0);
   const [sessionId] = useState(() => crypto.randomUUID());
+  const [endingSession, setEndingSession] = useState(false);
+  const [browserMode, setBrowserMode] = useState(false);
 
   const activeNode = questionStack.length > 0 ? questionStack[questionStack.length - 1] : null;
   const parentNode = questionStack.length >= 2 ? questionStack[questionStack.length - 2] : null;
@@ -167,10 +169,27 @@ export default function Reader() {
 
   function handleContentSubmit(result: ContentResult) {
     setContent(result.text);
+    setBrowserMode(result.type === "browser");
     if (result.type === "pdf" && result.file) {
       setPdfFile(result.file);
     }
   }
+
+  // Poll browser selection when in browser mode
+  useEffect(() => {
+    if (!browserMode) return;
+    const interval = setInterval(async () => {
+      try {
+        const { getBrowserSelection } = await import("@/lib/api");
+        const { selection } = await getBrowserSelection();
+        if (selection) {
+          setSelectedText(selection);
+          setSelectionSource("passage");
+        }
+      } catch {}
+    }, 800);
+    return () => clearInterval(interval);
+  }, [browserMode]);
 
   async function handleAsk(question: string) {
     if (!question.trim()) return;
@@ -268,6 +287,27 @@ export default function Reader() {
     }
   }
 
+  async function handleEndSession() {
+    if (endingSession) return;
+    setEndingSession(true);
+    try {
+      await endSession(sessionId);
+    } catch (err) {
+      console.error("Failed to end session:", err);
+    }
+    // Reset reader state — return to content input
+    setContent("");
+    setPdfFile(null);
+    setSelectedText("");
+    setSelectionSource(null);
+    setQuestionStack([]);
+    setExplorationTree(null);
+    setTreePanelOpen(false);
+    setNavigatedNodeId(null);
+    setLastDebug(null);
+    setEndingSession(false);
+  }
+
   if (!content) {
     return (
       <div className="relative flex h-screen">
@@ -299,6 +339,17 @@ export default function Reader() {
 
   return (
     <div className="relative flex h-screen">
+      {/* End Session button (top-right) */}
+      {explorationTree && (
+        <button
+          onClick={handleEndSession}
+          disabled={endingSession}
+          className="fixed top-4 right-4 z-50 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+        >
+          {endingSession ? "Ending..." : "End Session"}
+        </button>
+      )}
+
       {/* Exploration tree panel (left) */}
       {explorationTree && (
         <ExplorationTreePanel
@@ -357,6 +408,21 @@ export default function Reader() {
       >
         {parentNode ? (
           <ParentCard node={parentNode} onPop={popActive} />
+        ) : browserMode && !parentNode ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-8 max-w-md">
+              <h2 className="text-lg font-semibold text-gray-200 mb-2">Reading in Browser</h2>
+              <p className="text-sm text-gray-400 mb-4">
+                Select text in the Chromium window, then ask questions below.
+              </p>
+              {selectedText && (
+                <div className="mt-3 p-3 rounded-lg bg-blue-900/30 border border-blue-700/50 text-left">
+                  <p className="text-xs text-blue-400 mb-1 font-medium">Selected:</p>
+                  <p className="text-sm text-gray-300 line-clamp-4">{selectedText}</p>
+                </div>
+              )}
+            </div>
+          </div>
         ) : pdfFile ? (
           <Suspense
             fallback={

@@ -11,3 +11,4 @@ frontend/out/
 .pytest_cache/
 .claude/worktrees/
 .gstack/
+data/browser_profile/

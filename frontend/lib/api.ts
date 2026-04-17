@@ -286,12 +286,12 @@ export async function getConcepts(): Promise<Concept[]> {
   return res.json();
 }
 
-// --- PDF upload ---
+// --- PDF / URL upload ---
 
 export interface PdfUploadResult {
   id: string;
   title: string;
-  filename: string;
+  filename: string | null;
   text: string;
   pages: number;
 }
@@ -315,6 +315,71 @@ export async function uploadPdf(file: File): Promise<PdfUploadResult> {
   return res.json();
 }
 
+export async function uploadUrl(url: string): Promise<PdfUploadResult> {
+  const userId = getCurrentUserId();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (userId) headers["X-User-Id"] = userId;
+  const res = await fetch(`${API_BASE}/documents/url`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ url }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to fetch URL");
+  }
+  return res.json();
+}
+
+// --- Browser handoff (captcha-solving) ---
+
+export interface BrowserStatus {
+  status: string;
+  headed: boolean;
+  pages: number;
+  urls: string[];
+}
+
+export async function getBrowserStatus(): Promise<BrowserStatus> {
+  const res = await fetch(`${API_BASE}/browser/status`);
+  return res.json();
+}
+
+export async function getBrowserSelection(): Promise<{ selection: string; url: string }> {
+  const res = await fetch(`${API_BASE}/browser/selection`);
+  return res.json();
+}
+
+export async function browserHandoff(url: string): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/browser/handoff`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to open browser");
+  }
+  return res.json();
+}
+
+export async function browserResume(): Promise<PdfUploadResult> {
+  const userId = getCurrentUserId();
+  const headers: Record<string, string> = {};
+  if (userId) headers["X-User-Id"] = userId;
+  const res = await fetch(`${API_BASE}/browser/resume`, {
+    method: "POST",
+    headers,
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to extract content");
+  }
+  return res.json();
+}
+
 export interface GraphNode {
   id: string;
   state: string;
@@ -333,6 +398,17 @@ export interface GraphEdge {
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+// --- Sessions ---
+
+export async function endSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/end`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to end session");
 }
 
 export async function getGraphData(): Promise<GraphData> {

@@ -20,7 +20,8 @@ from app.silicon_brain.services.retrieval import search_document_chunks
 from app.silicon_brain.user_profile import get_user_profile, boost_query_embedding
 from app.silicon_brain.knowledge import get_graph_context, get_concepts
 from app.teacher.prompt import PromptParts, build_answer_prompt, build_history_messages
-from app.teacher.skills.v2_prompt import build_answer_prompt as build_answer_prompt_v2
+from app.teacher.prompt_v2 import build_answer_prompt as build_answer_prompt_v2
+from app.teacher.session.summarizer import search_past_summaries
 
 # Registry: maps version string -> builder callable
 _PROMPT_BUILDERS = {
@@ -92,6 +93,20 @@ async def assemble_context(
             graph_ctx = await get_graph_context(db, user_id, concept_names)
         except Exception as e:
             print(f"[teacher] graph walk error: {e}", flush=True)
+
+    # Search past session summaries for relevant context
+    if query_embedding:
+        try:
+            past_summaries = await search_past_summaries(db, user_id, query_embedding, top_k=2)
+            if past_summaries:
+                summary_lines = ["RELEVANT PAST LEARNING SESSIONS:"]
+                for s in past_summaries:
+                    if s["content"]:
+                        summary_lines.append(f"---\n{s['content']}\n---")
+                past_ctx = "\n".join(summary_lines)
+                graph_ctx = f"{graph_ctx}\n\n{past_ctx}" if graph_ctx else past_ctx
+        except Exception as e:
+            print(f"[teacher] past summary search error: {e}", flush=True)
 
     # Session history → multi-turn messages
     prior_interactions = await fetch_session_history(db, user_id, body.session_id)

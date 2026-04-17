@@ -1,9 +1,15 @@
-"""v2 prompt builder — experimental dynamic system prompt.
+"""v2 prompt builder — skill-driven dynamic system prompt.
 
 Same interface as app.teacher.prompt.build_answer_prompt so it can be
 swapped in without touching the LLM layer.
+
+Key differences from v1:
+- Loads skills from app/teacher/skills/*.md and injects them into the system prompt
+- Concept mastery is woven into the system prompt (cached)
+- Tone adapts based on mastery distribution
 """
 
+from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
 from app.teacher.prompt import PromptParts
@@ -11,6 +17,19 @@ from app.silicon_brain.models.document import DocumentChunk
 from app.silicon_brain.user_profile.state import UserProfileState
 from app.silicon_brain.knowledge.models import ConceptNode
 from app.silicon_brain.knowledge.hlr import compute_mastery, mastery_to_state
+
+_SKILLS_DIR = Path(__file__).parent / "skills"
+
+
+def load_skill(name: str) -> str:
+    """Load a skill markdown file by name (without extension).
+
+    Returns the file contents, or empty string if not found.
+    """
+    path = _SKILLS_DIR / f"{name}.md"
+    if path.exists():
+        return path.read_text().strip()
+    return ""
 
 
 def build_answer_prompt(
@@ -23,17 +42,14 @@ def build_answer_prompt(
     concept_nodes: Optional[List[ConceptNode]] = None,
     graph_context: str = "",
 ) -> PromptParts:
-    """Build the answer prompt v2 — more dynamic system instructions.
+    """Build the answer prompt v2 — loads skills from markdown files."""
 
-    Key differences from v1:
-    - Concept mastery is woven into the system prompt (not just dynamic_user)
-    - Tone adapts based on mastery distribution (more beginner-friendly vs peer-level)
-    - Shorter, more opinionated instructions
-    """
+    # ---- Load skills --------------------------------------------------------
+    teaching_principle = load_skill("teaching_principle")
 
     # ---- Analyse learner state to set tone --------------------------------
     mastery_summary = ""
-    beginner_mode = True  # default if no concept data
+    beginner_mode = True
     if concept_nodes:
         now = datetime.utcnow()
         by_state: dict[str, list[str]] = {}
@@ -59,35 +75,16 @@ def build_answer_prompt(
             mastery_summary = "USER'S CONCEPT KNOWLEDGE:\n" + "\n".join(lines)
 
     # ---- STATIC SYSTEM (cacheable) ----------------------------------------
-    if beginner_mode:
-        tone = (
-            "The user is still building foundations. "
-            "Use simple language, define jargon inline, and connect new ideas to everyday analogies."
-        )
-    else:
-        tone = (
-            "The user has solid grounding. "
-            "Be concise and precise — skip basics they already know, go deeper on nuance."
-        )
-
     system_parts = [
-        "You are a reading assistant that adapts to the learner.",
-        "",
-        f"TONE: {tone}",
-        "",
-        "RULES:",
-        "- 3-6 sentences, ~120 words max. Short sentences (~15 words each).",
-        "- No preamble, no restating the question, no closing summary.",
-        "- If highlighted text is provided, it is the PRIMARY SUBJECT. Resolve pronouns against it.",
-        "- Draw on your full knowledge — the passage is context, not a boundary.",
-        "- For multi-turn sessions, prior turns are live context the user can see.",
-        "- If you don't know something, say so honestly.",
-        "",
-        "OUTPUT FORMAT:",
-        "- First line: TITLE: <one-line summary, max 60 chars, no trailing punctuation>",
-        "- Blank line, then answer body.",
-        "- Last line: CONCEPTS: concept1, concept2, concept3 (1-5 domain terms from your answer).",
+        f"You are a helpful and patient reading assistant. Please read the teaching principles (app/teacher/skills/teaching_principle.md).",
     ]
+
+    # Inject teaching principles from skill file
+    if teaching_principle:
+        system_parts.append("")
+        system_parts.append(teaching_principle)
+
+    system_parts.append("")
 
     if user_profile:
         style_map = {
@@ -113,8 +110,6 @@ def build_answer_prompt(
     if self_description:
         system_parts.append(f"\nUSER BACKGROUND:\n{self_description}")
 
-    # v2: mastery snapshot in the system prompt so it's cached across
-    # follow-up questions in the same session (concepts change slowly).
     if mastery_summary:
         system_parts.append("")
         system_parts.append(mastery_summary)

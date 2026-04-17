@@ -142,9 +142,20 @@ async def run_scenario(scenario: dict, base_url: str):
                 )
                 all_answers.append(result)
 
-        # Wait for trailing background tasks. Sequential execution lets most
-        # background work overlap with later LLM calls, so a shorter wait is fine.
-        wait_time = max(10, len(all_answers))
+            # End the session — saves transcript and triggers async summarization
+            try:
+                resp = await client.post(
+                    f"/api/sessions/{session_id}/end", headers=headers,
+                )
+                resp.raise_for_status()
+                print(f"  [end session] {session_id[:8]}... OK", flush=True)
+            except Exception as e:
+                print(f"  [end session] ERROR: {e}", flush=True)
+
+        # Wait for trailing background tasks — includes session summarization
+        # (one LLM call per session) which can take 15-30s each.
+        n_sessions = len(scenario["sessions"])
+        wait_time = max(15, len(all_answers)) + 30 * n_sessions
         print(f"\n[waiting] {wait_time}s for background tasks...", flush=True)
         await asyncio.sleep(wait_time)
 
@@ -168,6 +179,36 @@ async def run_scenario(scenario: dict, base_url: str):
         resp = await client.get("/api/preferences", headers=headers)
         prefs = resp.json()
         print(f"\nPreferences: style={prefs['explanation_style']}, depth={prefs['depth_preference']}, analogy={prefs['analogy_affinity']}")
+
+        # Show session transcripts and summaries
+        import pathlib
+        sessions_dir = pathlib.Path(__file__).resolve().parents[1] / "data" / "sessions" / user_id
+        if sessions_dir.exists():
+            print(f"\n{'='*60}")
+            print("SESSION TRANSCRIPTS & SUMMARIES")
+            print(f"{'='*60}")
+            for session_dir in sorted(sessions_dir.iterdir()):
+                if not session_dir.is_dir():
+                    continue
+                sid = session_dir.name[:8]
+                transcript_file = session_dir / "transcript.md"
+                summary_file = session_dir / "summary.md"
+                if transcript_file.exists():
+                    transcript = transcript_file.read_text()
+                    print(f"\n--- Transcript (session {sid}...) ---")
+                    # Show first 1500 chars to keep output manageable
+                    if len(transcript) > 1500:
+                        print(transcript[:1500])
+                        print(f"... ({len(transcript)} chars total, truncated)")
+                    else:
+                        print(transcript)
+                if summary_file.exists():
+                    summary = summary_file.read_text()
+                    print(f"\n--- Summary (session {sid}...) ---")
+                    print(summary)
+                else:
+                    print(f"\n--- Summary (session {sid}...) ---")
+                    print("(not yet generated — summarizer may still be running)")
 
         valid = [a for a in all_answers if "error" not in a]
         avg_time = sum(a["elapsed"] for a in valid) / max(len(valid), 1)

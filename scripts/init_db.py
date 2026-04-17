@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS concept_nodes (
 CREATE INDEX IF NOT EXISTS idx_concept_nodes_name ON concept_nodes(name);
 CREATE INDEX IF NOT EXISTS idx_concept_nodes_last_seen ON concept_nodes(last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS session_summaries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_id UUID NOT NULL,
+    file_path TEXT NOT NULL,
+    embedding vector(768),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_summaries_user ON session_summaries(user_id);
+CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id);
+
 CREATE TABLE IF NOT EXISTS concept_edges (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     source_id UUID NOT NULL REFERENCES concept_nodes(id) ON DELETE CASCADE,
