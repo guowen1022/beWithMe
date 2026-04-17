@@ -1,7 +1,7 @@
 """Recommendation engine — LLM + web search sources."""
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,15 +17,28 @@ RECOMMEND_SYSTEM_PROMPT = """\
 You are a learning recommendation engine. Given a learner's profile, concept mastery states, \
 and knowledge graph context, generate personalized recommendations for what they should study next.
 
+CRITICAL DESIGN PRINCIPLE: Keep every recommendation bite-sized and fractional. \
+The goal is small pieces that connect to each other, so users can learn with almost no time commitment.
+
+Categories and their scope:
+- "review" (~1 min): ONE concept only. A quick refresher — 5-6 sentences max to jog memory.
+- "explore" (~3 min): ONE new concept. A brief introduction — just enough for the user to \
+decide if they want to go deeper. 5-6 sentences covering the core idea.
+- "deepen" (~5 min): ONE concept the user partially knows. Go one level deeper with a \
+concrete example or connection to something they already understand.
+
+If a topic is large (e.g., a whole paper or broad subject), do NOT recommend learning the whole thing. \
+Instead, break it into the smallest meaningful piece — one concept, one insight, one connection. \
+For a paper with many concepts, recommend a quick overview (~5 min) just to let the user know \
+it exists and what it covers, not to learn everything in it.
+
 Output a JSON array of 5-8 recommendations. Each recommendation must have:
-- "category": one of "review" (revisit fading concepts), "explore" (new related topics), \
-"deepen" (go deeper on partially understood concepts), "article" (suggest a specific topic to search for)
+- "category": one of "review", "explore", "deepen"
 - "title": short, actionable title (e.g., "Review: Gradient Descent Basics")
 - "summary": 1-2 sentence explanation of what to study and why
 - "reasoning": why this is recommended based on their learning state
-- "concept_names": list of related concept names from their graph
+- "concept_names": list with 1-2 concept names only (keep it focused)
 - "priority": float 0-1 (1 = most urgent)
-- "search_query": for "article" category only, a web search query to find relevant content
 
 Prioritize:
 1. Concepts with "rusty" or "faded" mastery that connect to many other concepts
@@ -72,7 +85,7 @@ async def generate_llm_recommendations(
     brain = await get_brain_state(db, user_id, concept_limit=50)
 
     # Compute current mastery for each concept
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     concept_masteries = []
     for node in brain.concept_nodes:
         if node.last_recalled_at:
@@ -128,7 +141,7 @@ async def generate_llm_recommendations(
             concept_names=item.get("concept_names", []),
             priority=float(item.get("priority", 0.5)),
             status="active",
-            expires_at=datetime.utcnow() + timedelta(days=7),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
         )
         db.add(rec)
         recommendations.append(rec)
@@ -222,7 +235,7 @@ async def generate_web_recommendations(
             concept_names=query.split()[:3],
             priority=float(evaluation.get("priority", 0.4)),
             status="active",
-            expires_at=datetime.utcnow() + timedelta(days=3),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=3),
         )
         db.add(rec)
         recommendations.append(rec)

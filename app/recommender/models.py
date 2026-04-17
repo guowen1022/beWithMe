@@ -14,7 +14,7 @@ class Recommendation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     source: Mapped[str] = mapped_column(Text)  # "llm" | "web"
-    category: Mapped[str] = mapped_column(Text)  # "review" | "explore" | "deepen" | "article"
+    category: Mapped[str] = mapped_column(Text)  # "review" | "explore" | "deepen"
     title: Mapped[str] = mapped_column(Text)
     summary: Mapped[str] = mapped_column(Text)
     reasoning: Mapped[str] = mapped_column(Text)

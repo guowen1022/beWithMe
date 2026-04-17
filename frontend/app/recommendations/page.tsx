@@ -14,13 +14,19 @@ const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
   review: { label: "Review", color: "bg-amber-100 text-amber-800" },
   explore: { label: "Explore", color: "bg-blue-100 text-blue-800" },
   deepen: { label: "Deepen", color: "bg-purple-100 text-purple-800" },
-  article: { label: "Article", color: "bg-green-100 text-green-800" },
 };
 
 const SOURCE_LABELS: Record<string, string> = {
   llm: "AI",
   web: "Web",
 };
+
+function estimateMinutes(rec: RecommendationItem): number {
+  if (rec.category === "review") return 1;
+  if (rec.category === "explore") return 3;
+  if (rec.category === "deepen") return 5;
+  return 2;
+}
 
 function RecommendationCard({
   rec,
@@ -86,16 +92,9 @@ function RecommendationCard({
             Dismiss
           </button>
         </div>
-        {rec.url && (
-          <a
-            href={rec.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-blue-500 hover:underline"
-          >
-            Source
-          </a>
-        )}
+        <span className="text-xs text-gray-400">
+          ~{estimateMinutes(rec)} min
+        </span>
       </div>
     </div>
   );
@@ -179,7 +178,7 @@ export default function RecommendationsPage() {
     {} as Record<string, RecommendationItem[]>
   );
 
-  const categoryOrder = ["review", "explore", "deepen", "article"];
+  const categoryOrder = ["review", "explore", "deepen"];
   const sortedCategories = Object.keys(grouped).sort(
     (a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)
   );
