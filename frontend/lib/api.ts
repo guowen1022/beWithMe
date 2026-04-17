@@ -417,3 +417,103 @@ export async function getGraphData(): Promise<GraphData> {
   if (!res.ok) throw new Error("Failed to fetch graph");
   return res.json();
 }
+
+// --- Goal Planning ---
+
+export interface DAGNode {
+  id: string;
+  label: string;
+  type: "goal" | "prerequisite";
+  status: "pending" | "known" | "unknown" | "expanded";
+}
+
+export interface DAGEdge {
+  source: string;
+  target: string;
+}
+
+export interface DAGData {
+  nodes: DAGNode[];
+  edges: DAGEdge[];
+}
+
+export interface GoalSummary {
+  id: string;
+  title: string;
+  status: string;
+  node_count: number;
+  created_at: string;
+}
+
+export interface GoalFull {
+  id: string;
+  title: string;
+  dag: DAGData;
+  transcript: { role: string; text: string }[];
+  status: string;
+  created_at: string;
+}
+
+export interface GoalStepResult {
+  id: string;
+  dag: DAGData;
+  transcript: { role: string; text: string }[];
+  text: string;
+}
+
+export async function createGoal(title: string): Promise<GoalFull> {
+  const res = await fetch(`${API_BASE}/goals`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ title }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to create goal");
+  return res.json();
+}
+
+export async function expandNode(goalId: string, nodeId: string): Promise<GoalStepResult> {
+  const res = await fetch(`${API_BASE}/goals/${goalId}/expand`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ node_id: nodeId }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to expand node");
+  return res.json();
+}
+
+export async function feedbackNode(goalId: string, nodeId: string, action: "know" | "unknown"): Promise<GoalStepResult> {
+  const res = await fetch(`${API_BASE}/goals/${goalId}/feedback`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ node_id: nodeId, action }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to send feedback");
+  return res.json();
+}
+
+export async function finalizeGoal(goalId: string): Promise<{ id: string; status: string }> {
+  const res = await fetch(`${API_BASE}/goals/${goalId}/finalize`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to finalize goal");
+  return res.json();
+}
+
+export async function listGoals(): Promise<GoalSummary[]> {
+  const res = await fetch(`${API_BASE}/goals`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to list goals");
+  return res.json();
+}
+
+export async function getGoal(goalId: string): Promise<GoalFull> {
+  const res = await fetch(`${API_BASE}/goals/${goalId}`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to fetch goal");
+  return res.json();
+}

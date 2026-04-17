@@ -97,6 +97,18 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 CREATE INDEX IF NOT EXISTS idx_session_summaries_user ON session_summaries(user_id);
 CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id);
 
+CREATE TABLE IF NOT EXISTS learning_goals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    dag JSONB NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
+    transcript JSONB NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'planning',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_learning_goals_user ON learning_goals(user_id);
+
 CREATE TABLE IF NOT EXISTS concept_edges (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     source_id UUID NOT NULL REFERENCES concept_nodes(id) ON DELETE CASCADE,

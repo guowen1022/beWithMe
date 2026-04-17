@@ -48,7 +48,7 @@ export type QuestionNode = {
 
 type SelectionSource = "passage" | "parent" | "active";
 
-export default function Reader() {
+export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   const [content, setContent] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [selectedText, setSelectedText] = useState("");
@@ -329,7 +329,7 @@ export default function Reader() {
             debugOpen ? "ml-80" : "ml-0"
           }`}
         >
-          <ContentInput onSubmit={handleContentSubmit} />
+          <ContentInput onSubmit={handleContentSubmit} onGoalPlan={onGoalPlan} />
         </div>
       </div>
     );

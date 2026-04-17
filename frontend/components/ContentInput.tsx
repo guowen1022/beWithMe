@@ -10,8 +10,10 @@ export interface ContentResult {
 
 export default function ContentInput({
   onSubmit,
+  onGoalPlan,
 }: {
   onSubmit: (result: ContentResult) => void;
+  onGoalPlan?: () => void;
 }) {
   const [text, setText] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -225,6 +227,17 @@ export default function ContentInput({
             Open URL
           </button>
         </div>
+        {onGoalPlan && (
+          <div className="flex items-center justify-center pt-4 border-t border-gray-200 dark:border-gray-700">
+            <button
+              type="button"
+              onClick={onGoalPlan}
+              className="rounded-full border border-indigo-500 px-8 py-3 text-sm font-medium text-indigo-400 hover:bg-indigo-950 transition-colors"
+            >
+              Plan a Learning Goal
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );
