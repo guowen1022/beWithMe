@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_id UUID NOT NULL,
     file_path TEXT NOT NULL,
+    labels TEXT[],
     embedding vector(768),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (user_id, session_id)
@@ -127,6 +128,16 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_user_status ON recommendations(us
 """
 
 MIGRATE = """
+-- Add labels array to existing session_summaries tables
+ALTER TABLE session_summaries ADD COLUMN IF NOT EXISTS labels TEXT[];
+-- Migrate old domain column to labels if it exists
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='session_summaries' AND column_name='domain') THEN
+        UPDATE session_summaries SET labels = ARRAY[domain] WHERE domain IS NOT NULL AND labels IS NULL;
+        ALTER TABLE session_summaries DROP COLUMN domain;
+    END IF;
+END $$;
+
 -- Add HLR columns to existing concept_nodes tables
 ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
 ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;

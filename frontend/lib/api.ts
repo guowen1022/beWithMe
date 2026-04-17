@@ -411,6 +411,29 @@ export async function endSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to end session");
 }
 
+// --- Session graph ---
+
+export interface SessionNode {
+  session_id: string;
+  title: string;
+  labels: string[];
+  created_at: string;
+  duration_min: number;
+  summary: string;
+}
+
+export interface SessionGraphData {
+  nodes: SessionNode[];
+}
+
+export async function getSessionGraph(label?: string): Promise<SessionGraphData> {
+  const params = label ? `?label=${encodeURIComponent(label)}` : "";
+  const res = await fetch(`${API_BASE}/sessions/summaries/graph${params}`, { headers: authHeaders() });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to fetch session graph");
+  return res.json();
+}
+
 export async function getGraphData(): Promise<GraphData> {
   const res = await fetch(`${API_BASE}/graph`, { headers: authHeaders() });
   await throwIfUnknownUser(res);

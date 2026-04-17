@@ -12,6 +12,7 @@ The summarizer's input is strictly the transcript file — nothing else.
 All instructions for the LLM live in `app/teacher/skills/summarize_session.md`.
 """
 
+import re
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -84,14 +85,21 @@ async def index_summary(
     session_id: uuid.UUID,
     summary_path: Path,
 ) -> None:
-    """Embed the summary file and upsert its SessionSummary index row."""
+    """Embed the summary file, extract domain, and upsert its SessionSummary index row."""
     summary_text = summary_path.read_text(encoding="utf-8")
     embedding = await _embed_text(summary_text)
+
+    # Extract labels from Meta section
+    labels_match = re.search(r"\*\*Labels\*\*:\s*(.+)", summary_text[:600], re.IGNORECASE)
+    labels = None
+    if labels_match:
+        labels = [l.strip() for l in labels_match.group(1).split(",") if l.strip()]
 
     row = SessionSummary(
         user_id=user_id,
         session_id=session_id,
         file_path=str(summary_path),
+        labels=labels,
         embedding=embedding,
     )
     db.add(row)

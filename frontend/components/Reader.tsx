@@ -64,6 +64,7 @@ export default function Reader() {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [endingSession, setEndingSession] = useState(false);
   const [browserMode, setBrowserMode] = useState(false);
+  const [debugInitialTab, setDebugInitialTab] = useState<"prefs" | "sessions" | undefined>(undefined);
 
   const activeNode = questionStack.length > 0 ? questionStack[questionStack.length - 1] : null;
   const parentNode = questionStack.length >= 2 ? questionStack[questionStack.length - 2] : null;
@@ -305,13 +306,17 @@ export default function Reader() {
     setTreePanelOpen(false);
     setNavigatedNodeId(null);
     setLastDebug(null);
+
+    // Show debug panel on Sessions tab so user sees the result appear
+    setDebugInitialTab("sessions");
+    setDebugOpen(true);
     setEndingSession(false);
   }
 
   if (!content) {
     return (
       <div className="relative flex h-screen">
-        <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} lastDebug={lastDebug} promptVersion={promptVersion} onPromptVersionChange={setPromptVersion} />
+        <DebugPanel open={debugOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} promptVersion={promptVersion} onPromptVersionChange={setPromptVersion} initialTab={debugInitialTab} />
         {!debugOpen && (
           <button
             onClick={() => setDebugOpen(true)}
@@ -364,7 +369,7 @@ export default function Reader() {
       )}
 
       {/* Debug panel (left, behind tree panel) */}
-      <DebugPanel open={debugOpen && !treePanelOpen} onClose={() => setDebugOpen(false)} lastDebug={lastDebug} />
+      <DebugPanel open={debugOpen && !treePanelOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} initialTab={debugInitialTab} />
 
       {/* Left toggle buttons */}
       <div className={`fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 ${treePanelOpen ? "left-72" : "left-0"}`}>

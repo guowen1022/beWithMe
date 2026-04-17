@@ -10,6 +10,7 @@ import {
   type DebugEvent,
 } from "@/lib/api";
 import KnowledgeGraph from "./KnowledgeGraph";
+import SessionCanvas from "./SessionCanvas";
 
 const PREF_LABELS: Record<string, string> = {
   explanation_style: "Explanation Style",
@@ -27,24 +28,37 @@ const STATE_COLORS: Record<string, string> = {
   dormant: "bg-gray-600",
 };
 
+export type DebugTab = "prefs" | "concepts" | "graph" | "sessions" | "llm";
+
 export default function DebugPanel({
   open,
   onClose,
   lastDebug,
   promptVersion = "v1",
   onPromptVersionChange,
+  initialTab,
 }: {
   open: boolean;
   onClose: () => void;
   lastDebug?: DebugEvent | null;
   promptVersion?: "v1" | "v2";
   onPromptVersionChange?: (v: "v1" | "v2") => void;
+  initialTab?: DebugTab;
 }) {
   const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [distilling, setDistilling] = useState(false);
-  const [tab, setTab] = useState<"prefs" | "concepts" | "graph" | "llm">("prefs");
+  const [tab, setTab] = useState<DebugTab>(initialTab ?? "prefs");
   const [graphKey, setGraphKey] = useState(0);
+  const [sessionsKey, setSessionsKey] = useState(0);
+
+  // Switch tab when initialTab prop changes (e.g., after ending a session)
+  useEffect(() => {
+    if (initialTab) {
+      setTab(initialTab);
+      if (initialTab === "sessions") setSessionsKey((k) => k + 1);
+    }
+  }, [initialTab]);
 
   const loadData = useCallback(() => {
     getPreferences().then(setPrefs).catch(() => setPrefs(null));
@@ -76,7 +90,7 @@ export default function DebugPanel({
   return (
     <div
       className={`fixed top-0 left-0 h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-all duration-300 ease-in-out ${
-        tab === "graph" ? "w-[60vw]" : tab === "llm" ? "w-[45vw]" : "w-80"
+        tab === "graph" || tab === "sessions" ? "w-[60vw]" : tab === "llm" ? "w-[45vw]" : "w-80"
       } ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
@@ -113,6 +127,16 @@ export default function DebugPanel({
             }`}
           >
             Graph
+          </button>
+          <button
+            onClick={() => { setTab("sessions"); setSessionsKey((k) => k + 1); }}
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+              tab === "sessions"
+                ? "bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            Sessions
           </button>
           <button
             onClick={() => setTab("llm")}
@@ -255,6 +279,12 @@ export default function DebugPanel({
         {tab === "graph" && (
           <div className="h-full -mx-4 -my-3">
             <KnowledgeGraph refreshKey={graphKey} />
+          </div>
+        )}
+
+        {tab === "sessions" && (
+          <div className="h-full -mx-4 -my-3">
+            <SessionCanvas refreshKey={sessionsKey} />
           </div>
         )}
 

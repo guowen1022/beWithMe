@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import Text, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy import String
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db_base import Base
@@ -19,5 +20,6 @@ class SessionSummary(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     file_path: Mapped[str] = mapped_column(Text)
+    labels = mapped_column(ARRAY(String(100)), nullable=True, default=list)
     embedding = mapped_column(Vector(settings.embedding_dim), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
