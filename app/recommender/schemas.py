@@ -1,11 +1,12 @@
 """Pydantic schemas for recommendations."""
+import uuid
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
 
 
 class RecommendationRead(BaseModel):
-    id: str
+    id: uuid.UUID
     source: str
     category: str
     title: str

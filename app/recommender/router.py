@@ -48,8 +48,12 @@ async def generate_recommendations(
     llm_recs = await generate_llm_recommendations(db, user_id)
 
     # Step 2: Web-based recommendations (uses browser context from app state)
-    browser_context = request.app.state.browser_context
-    web_recs = await generate_web_recommendations(db, user_id, browser_context, llm_recs)
+    web_recs = []
+    try:
+        browser_context = request.app.state.browser_context
+        web_recs = await generate_web_recommendations(db, user_id, browser_context, llm_recs)
+    except Exception as e:
+        print(f"[recommender] Web recommendation generation failed: {e}", flush=True)
 
     await db.commit()
 
