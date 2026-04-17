@@ -417,3 +417,60 @@ export async function getGraphData(): Promise<GraphData> {
   if (!res.ok) throw new Error("Failed to fetch graph");
   return res.json();
 }
+
+// --- Recommendations ---
+
+export interface RecommendationItem {
+  id: string;
+  source: string;
+  category: string;
+  title: string;
+  summary: string;
+  reasoning: string;
+  url: string | null;
+  concept_names: string[];
+  priority: number;
+  status: string;
+  created_at: string;
+}
+
+export async function getRecommendations(
+  source?: string,
+  category?: string
+): Promise<RecommendationItem[]> {
+  const params = new URLSearchParams();
+  if (source) params.set("source", source);
+  if (category) params.set("category", category);
+  const qs = params.toString();
+  const res = await fetch(
+    `${API_BASE}/recommendations${qs ? `?${qs}` : ""}`,
+    { headers: authHeaders() }
+  );
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to fetch recommendations");
+  return res.json();
+}
+
+export async function generateRecommendations(): Promise<RecommendationItem[]> {
+  const res = await fetch(`${API_BASE}/recommendations/generate`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to generate recommendations");
+  return res.json();
+}
+
+export async function updateRecommendation(
+  id: string,
+  status: "dismissed" | "accepted"
+): Promise<RecommendationItem> {
+  const res = await fetch(`${API_BASE}/recommendations/${id}`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body: JSON.stringify({ status }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to update recommendation");
+  return res.json();
+}

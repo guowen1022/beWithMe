@@ -107,6 +107,23 @@ CREATE TABLE IF NOT EXISTS concept_edges (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_reinforced TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS recommendations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    url TEXT,
+    concept_names JSONB DEFAULT '[]',
+    priority DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_recommendations_user_status ON recommendations(user_id, status);
 """
 
 MIGRATE = """
