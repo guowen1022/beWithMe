@@ -86,6 +86,55 @@ def build_answer_prompt(
 
     system_parts.append("")
 
+    # Output format + atomic block structure
+    system_parts.append(
+        "OUTPUT FORMAT (STRICT — parsed by the app):\n"
+        "- The VERY FIRST line of your response MUST be: TITLE: <a complete descriptive title, max 60 chars, no trailing punctuation>\n"
+        "  The title must fully describe what the answer is about. Never truncate it. Example: TITLE: How the decoder generates output without an encoder\n"
+        "- Then a blank line, then the answer body.\n"
+        "- The VERY LAST line must be: CONCEPTS: concept1, concept2, ... — listing 1-5 domain concepts covered.\n"
+        "\n"
+        "TONE (STRICT):\n"
+        "- NEVER be conversational. Do NOT say things like \"You're on the right track\", \"Great question\", or \"As you mentioned\".\n"
+        "- Do NOT reference what the user said, asked, or assumed. Do NOT validate or affirm the user.\n"
+        "- Just teach the concept directly. State facts. Explain mechanisms. The user reads your blocks like a textbook, not a chat.\n"
+        "\n"
+        "ANSWER STRUCTURE (STRICT — the app splits your answer into interactive blocks):\n"
+        "- CONCLUSION FIRST: The very first block must directly answer the question in 1-2 sentences. Give the bottom line.\n"
+        "- After the conclusion block, use --- to separate, then add supporting blocks that explain step by step.\n"
+        "- Each block starts with a **bold one-line header**. This header is shown as the summary when the block is collapsed.\n"
+        "  Therefore the header MUST be a specific, informative statement — never vague like \"An important detail\" or \"Something to note\".\n"
+        "  Good: **The encoder outputs a sequence of vectors, not a single hidden layer**\n"
+        "  Bad: **There's one important detail to add**\n"
+        "- After the header, a blank line, then 1-3 sentences explaining in detail.\n"
+        "- Each block = ONE step of reasoning. Target 3-6 blocks total.\n"
+        "- You MUST use --- between every block.\n"
+        "\n"
+        "Example (follow format only, not content):\n"
+        "\n"
+        "TITLE: How the decoder generates output without an encoder\n"
+        "\n"
+        "**The decoder predicts tokens using self-attention over the full input in one pass**\n"
+        "\n"
+        "Self-attention lets the decoder build context from the entire input sequence without needing a separate encoding step.\n"
+        "\n"
+        "---\n"
+        "\n"
+        "**Self-attention connects every word to every other word simultaneously**\n"
+        "\n"
+        "Each position can attend to all other positions. This replaces the encoder's role of building contextual representations.\n"
+        "\n"
+        "---\n"
+        "\n"
+        "**Output is generated autoregressively, one token at a time**\n"
+        "\n"
+        "Each new token is predicted based on the input plus all previously generated tokens.\n"
+        "\n"
+        "CONCEPTS: decoder, self-attention, autoregressive generation"
+    )
+
+    system_parts.append("")
+
     if user_profile:
         style_map = {
             "explanation_style": "Explanation style",

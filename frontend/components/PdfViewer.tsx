@@ -14,9 +14,11 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 export default function PdfViewer({
   file,
   onSelection,
+  scrollToText,
 }: {
   file: File;
   onSelection: (text: string) => void;
+  scrollToText?: string | null;
 }) {
   const [numPages, setNumPages] = useState<number>(0);
   const [containerWidth, setContainerWidth] = useState<number>(700);
@@ -56,6 +58,33 @@ export default function PdfViewer({
     setFileUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [file]);
+
+  // Scroll to the page containing scrollToText
+  useEffect(() => {
+    if (!scrollToText || !containerRef.current) return;
+    // Strip the timestamp suffix used to re-trigger
+    const text = scrollToText.split("|")[0];
+    const searchWords = text.toLowerCase().split(/\s+/).filter(w => w.length > 2).slice(0, 5);
+    if (searchWords.length < 2) return;
+
+    // Search each page's text layer for the target text
+    const pages = containerRef.current.querySelectorAll(".react-pdf__Page");
+    for (const page of pages) {
+      const textLayer = page.querySelector(".react-pdf__Page__textContent");
+      if (!textLayer) continue;
+      const pageText = (textLayer.textContent || "").toLowerCase();
+      const matches = searchWords.filter(w => pageText.includes(w));
+      if (matches.length >= Math.min(3, searchWords.length)) {
+        page.scrollIntoView({ behavior: "smooth", block: "start" });
+        // Brief highlight border
+        const el = page as HTMLElement;
+        el.style.outline = "3px solid rgba(250, 204, 21, 0.6)";
+        el.style.outlineOffset = "4px";
+        setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2000);
+        return;
+      }
+    }
+  }, [scrollToText]);
 
   if (!fileUrl) return null;
 

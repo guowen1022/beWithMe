@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { AgentStatus, QuestionNode } from "./Reader";
+import { parseMarkdownBlocks } from "@/lib/markdownBlocks";
+import LogicBlock, { type Direction } from "./LogicBlock";
 
 // Typewriter reveal rate. BASE_RATE sets the steady feel; if the source
 // text is far ahead (e.g. the final answer event just replaced the buffer
@@ -19,12 +19,6 @@ const SENTENCE_PAUSE_MS = 500;
 /**
  * Find the index (exclusive) just after the first sentence-ending
  * punctuation within `target[from, to)`. Returns -1 if no boundary found.
- *
- * A "sentence end" is:
- *   - `.`, `!`, `?` followed by whitespace or end-of-text — UNLESS the next
- *     non-space char is a lowercase letter (catches common abbreviations
- *     like "e.g." or "Dr. smith"),
- *   - or a double newline `\n\n` (paragraph break).
  */
 function findSentenceEnd(target: string, from: number, to: number): number {
   for (let i = from; i < to; i++) {
@@ -36,7 +30,6 @@ function findSentenceEnd(target: string, from: number, to: number): number {
     const next = target[i + 1];
     if (next === undefined) return i + 1;
     if (next !== " " && next !== "\n" && next !== "\t") continue;
-    // Lookahead past whitespace: lowercase → probably an abbreviation.
     let j = i + 1;
     while (j < target.length && /\s/.test(target[j])) j++;
     if (j < target.length) {
@@ -116,23 +109,31 @@ function StatusIndicator({
   return null;
 }
 
+export type BlockStates = {
+  collapsed: Set<string>;
+  reviewLater: Set<string>;
+};
+
 export default function AnswerDrawer({
   node,
   onClose,
+  onBlockGesture,
   instant = false,
+  initialBlockStates,
+  onBlockStatesChange,
 }: {
   node: QuestionNode;
   onClose: () => void;
+  onBlockGesture: (blockText: string, direction: Direction) => void;
   instant?: boolean;
+  initialBlockStates?: BlockStates;
+  onBlockStatesChange?: (states: BlockStates) => void;
 }) {
-  const open = true;
   const loading = node.loading;
   const status = node.status;
   const searchDetail = node.searchDetail;
 
-  // Target buffer — the authoritative text we're animating toward. Kept
-  // in a ref so the rAF loop reads the latest value without re-subscribing
-  // on every token.
+  // --- Typewriter animation (unchanged) ---
   const targetRef = useRef<string>("");
   const pausedUntilRef = useRef<number>(0);
   const [displayedText, setDisplayedText] = useState<string>(
@@ -144,18 +145,13 @@ export default function AnswerDrawer({
     if (instant) setDisplayedText(node.displayedText);
   }, [node.displayedText, instant]);
 
-  // Single rAF loop. The parent re-mounts this component whenever the
-  // active node changes (via a `key` on node.localId), so we don't need
-  // an explicit reset effect — the new mount starts with empty state.
   useEffect(() => {
-    if (!open || instant) return;
+    if (instant) return;
 
     let rafId = 0;
     let lastTime = performance.now();
 
     const tick = (now: number) => {
-      // Mid-pause between sentences — still burn the frame budget, just
-      // don't advance the reveal.
       if (now < pausedUntilRef.current) {
         lastTime = now;
         rafId = requestAnimationFrame(tick);
@@ -173,12 +169,8 @@ export default function AnswerDrawer({
         const advance = Math.max(1, Math.floor(rate * dtSec));
         const desiredEnd = Math.min(prev.length + advance, target.length);
 
-        // If a sentence boundary falls inside the advance window, stop
-        // there instead of overshooting, then schedule a pause.
         const boundary = findSentenceEnd(target, prev.length, desiredEnd);
         const stopAt = boundary === -1 ? desiredEnd : boundary;
-        // Only pause if there's more content to come — no pause at the
-        // very end of the final sentence.
         if (boundary !== -1 && stopAt < target.length) {
           pausedUntilRef.current = performance.now() + SENTENCE_PAUSE_MS;
         }
@@ -190,14 +182,173 @@ export default function AnswerDrawer({
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [open]);
+  }, [instant]);
+
+  // --- Block parsing ---
+  const blocks = useMemo(
+    () => parseMarkdownBlocks(displayedText),
+    [displayedText],
+  );
+
+  // --- Block interaction state ---
+  const [focusedIdx, setFocusedIdx] = useState(0);
+  const [collapsedBlocks, setCollapsedBlocks] = useState<Set<string>>(
+    () => initialBlockStates?.collapsed ?? new Set(),
+  );
+  const [reviewLaterBlocks, setReviewLaterBlocks] = useState<Set<string>>(
+    () => initialBlockStates?.reviewLater ?? new Set(),
+  );
+  const [interactionModeBlock, setInteractionModeBlock] = useState<
+    string | null
+  >(null);
+
+  // Sync block states back to parent for persistence across navigation
+  useEffect(() => {
+    onBlockStatesChange?.({ collapsed: collapsedBlocks, reviewLater: reviewLaterBlocks });
+  }, [collapsedBlocks, reviewLaterBlocks, onBlockStatesChange]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Keep focusedIdx in bounds as blocks grow during streaming
+  useEffect(() => {
+    if (focusedIdx >= blocks.length && blocks.length > 0) {
+      setFocusedIdx(blocks.length - 1);
+    }
+  }, [blocks.length, focusedIdx]);
+
+  const handleGesture = useCallback(
+    (blockId: string, direction: Direction) => {
+      const block = blocks.find((b) => b.id === blockId);
+      if (!block) return;
+
+      if (direction === "left") {
+        if (interactionModeBlock === blockId) {
+          // Cancel interaction mode
+          setInteractionModeBlock(null);
+          return;
+        }
+        // "Got it" — collapse + signal
+        setCollapsedBlocks((prev) => new Set(prev).add(blockId));
+        onBlockGesture(block.markdown, "left");
+        return;
+      }
+
+      if (direction === "right" && interactionModeBlock !== blockId) {
+        // Enter interaction mode
+        setInteractionModeBlock(blockId);
+        return;
+      }
+
+      // In interaction mode: up/down/right → fire gesture
+      if (direction === "up") {
+        setReviewLaterBlocks((prev) => new Set(prev).add(blockId));
+        setInteractionModeBlock(null);
+        onBlockGesture(block.markdown, "up");
+        return;
+      }
+      if (direction === "down") {
+        setInteractionModeBlock(null);
+        onBlockGesture(block.markdown, "down");
+        return;
+      }
+      if (direction === "right") {
+        setInteractionModeBlock(null);
+        onBlockGesture(block.markdown, "right");
+        return;
+      }
+    },
+    [blocks, interactionModeBlock, onBlockGesture],
+  );
+
+  const handleToggleCollapse = useCallback((blockId: string) => {
+    setCollapsedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(blockId)) next.delete(blockId);
+      else next.add(blockId);
+      return next;
+    });
+    setReviewLaterBlocks((prev) => {
+      const next = new Set(prev);
+      next.delete(blockId);
+      return next;
+    });
+  }, []);
+
+  // --- Keyboard navigation ---
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (blocks.length === 0) return;
+
+      const focusedBlock = blocks[focusedIdx];
+      if (!focusedBlock) return;
+
+      const inIM = interactionModeBlock === focusedBlock.id;
+
+      switch (e.key) {
+        case "ArrowUp":
+          e.preventDefault();
+          if (inIM) {
+            // "Too hard"
+            handleGesture(focusedBlock.id, "up");
+          } else {
+            setFocusedIdx((i) => Math.max(0, i - 1));
+            setInteractionModeBlock(null);
+          }
+          break;
+
+        case "ArrowDown":
+          e.preventDefault();
+          if (inIM) {
+            // "Explain more"
+            handleGesture(focusedBlock.id, "down");
+          } else {
+            setFocusedIdx((i) => Math.min(blocks.length - 1, i + 1));
+            setInteractionModeBlock(null);
+          }
+          break;
+
+        case "ArrowLeft":
+          e.preventDefault();
+          handleGesture(focusedBlock.id, "left");
+          break;
+
+        case "ArrowRight":
+          e.preventDefault();
+          // If collapsed, expand first instead of entering interaction mode
+          if (collapsedBlocks.has(focusedBlock.id) || reviewLaterBlocks.has(focusedBlock.id)) {
+            handleToggleCollapse(focusedBlock.id);
+          } else {
+            handleGesture(focusedBlock.id, "right");
+          }
+          break;
+
+        case "Escape":
+          e.preventDefault();
+          if (inIM) {
+            setInteractionModeBlock(null);
+          } else {
+            onClose();
+          }
+          break;
+      }
+    },
+    [blocks, focusedIdx, interactionModeBlock, collapsedBlocks, reviewLaterBlocks, handleGesture, handleToggleCollapse, onClose],
+  );
+
+  // Auto-focus the container so keyboard events work immediately
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, []);
 
   return (
     <div
-      data-selection-source="active"
-      className="fixed top-0 right-0 h-full w-[28rem] bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl z-30 translate-x-0"
+      ref={containerRef}
+      data-panel="answer"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="fixed top-0 right-0 h-full w-[28rem] bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl z-30 translate-x-0 outline-none"
     >
-      {/* Header — title from the model + close button */}
+      {/* Header */}
       <div className="flex items-start justify-between gap-3 border-b border-gray-100 dark:border-gray-800 px-5 py-4">
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
@@ -225,20 +376,63 @@ export default function AnswerDrawer({
         </button>
       </div>
 
-      {/* Content */}
-      <div className="overflow-y-auto h-[calc(100%-4.5rem)] px-5 py-4 selection:bg-blue-200 dark:selection:bg-blue-800 selection:text-inherit">
-        {/* Spinner stays until the first character is actually revealed,
-            avoiding a brief flicker between status end and content appearing. */}
-        {(loading || (status !== "idle" && status !== "done")) && displayedText.length === 0 && (
-          <StatusIndicator status={status} searchDetail={searchDetail} />
-        )}
+      {/* Keyboard hint */}
+      {blocks.length > 0 && !loading && (
+        <div className="px-5 py-1.5 border-b border-gray-100 dark:border-gray-800 text-[10px] text-gray-400 flex gap-3">
+          <span>
+            <kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+              &uarr;&darr;
+            </kbd>{" "}
+            navigate
+          </span>
+          <span>
+            <kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+              &larr;
+            </kbd>{" "}
+            got it
+          </span>
+          <span>
+            <kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+              &rarr;
+            </kbd>{" "}
+            interact
+          </span>
+          <span>
+            <kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+              [ ]
+            </kbd>{" "}
+            switch panel
+          </span>
+        </div>
+      )}
 
-        {displayedText.length > 0 && (
-          <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-li:my-0.5 prose-table:text-sm prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 prose-code:text-pink-600 dark:prose-code:text-pink-400">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {displayedText}
-            </ReactMarkdown>
-          </article>
+      {/* Content */}
+      <div className="overflow-y-auto h-[calc(100%-4.5rem)] px-3 py-3">
+        {/* Status spinner */}
+        {(loading || (status !== "idle" && status !== "done")) &&
+          displayedText.length === 0 && (
+            <div className="px-2">
+              <StatusIndicator status={status} searchDetail={searchDetail} />
+            </div>
+          )}
+
+        {/* Logic blocks */}
+        {blocks.length > 0 && (
+          <div className="space-y-1">
+            {blocks.map((block, i) => (
+              <LogicBlock
+                key={block.id}
+                block={block}
+                focused={i === focusedIdx}
+                collapsed={collapsedBlocks.has(block.id)}
+                reviewLater={reviewLaterBlocks.has(block.id)}
+                inProgress={loading && i === blocks.length - 1}
+                interactionMode={interactionModeBlock === block.id}
+                onGesture={handleGesture}
+                onToggleCollapse={handleToggleCollapse}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>

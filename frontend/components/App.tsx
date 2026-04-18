@@ -89,12 +89,7 @@ export default function App() {
   }
 
   // Step 4: Main reader
-  return (
-    <>
-      <Reader />
-      <UserBadge username={username} onSwitch={handleSwitchUser} />
-    </>
-  );
+  return <Reader />;
 }
 
 function UserBadge({
