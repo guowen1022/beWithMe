@@ -194,10 +194,20 @@ export default function Reader() {
   );
 
   const handleSectionClick = useCallback((section: OutlineSection) => {
-    // For PDF mode, pass a long text anchor from the passage content
+    // For PDF mode: skip past the title heading and use the body text as anchor.
+    // The title itself is often short and non-unique (e.g. "Attention" appears in abstract too).
+    // The body text right after the heading is unique to that section.
     if (pdfFile) {
-      const anchor = content.slice(section.textStart, Math.min(section.textStart + 300, section.textEnd));
-      setPdfScrollTarget(anchor + "|||" + Date.now());
+      const sectionContent = content.slice(section.textStart, section.textEnd);
+      // Skip past the first line (the heading) to get body text
+      const firstNewline = sectionContent.indexOf("\n");
+      const bodyStart = firstNewline >= 0 ? firstNewline + 1 : 0;
+      const bodyText = sectionContent.slice(bodyStart).trim();
+      // Use at least 50 chars of body text for reliable matching
+      const anchor = bodyText.slice(0, Math.max(100, Math.min(300, bodyText.length)));
+      if (anchor.length >= 20) {
+        setPdfScrollTarget(anchor + "|||" + Date.now());
+      }
       return;
     }
 
