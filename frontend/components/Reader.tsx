@@ -194,9 +194,10 @@ export default function Reader() {
   );
 
   const handleSectionClick = useCallback((section: OutlineSection) => {
-    // For PDF mode, scroll PdfViewer to the page containing this section
+    // For PDF mode, pass a long text anchor from the passage content
     if (pdfFile) {
-      setPdfScrollTarget(section.title + "|" + Date.now());
+      const anchor = content.slice(section.textStart, Math.min(section.textStart + 300, section.textEnd));
+      setPdfScrollTarget(anchor + "|||" + Date.now());
       return;
     }
 
@@ -253,7 +254,7 @@ export default function Reader() {
       el.style.backgroundColor = "rgba(250, 204, 21, 0.4)";
       setTimeout(() => { el.style.backgroundColor = ""; }, 2000);
     }
-  }, [content]);
+  }, [content, pdfFile]);
 
   const navigateToNode = useCallback((localId: string) => {
     const tree = treeRef.current;
