@@ -110,3 +110,15 @@ Configured via `.env` in project root (loaded by pydantic-settings):
 ## Frontend Note
 
 The frontend uses a custom Next.js version with breaking changes. Always read `node_modules/next/dist/docs/` before modifying Next.js-specific code (see `frontend/AGENTS.md`).
+
+## TODO Policy
+
+When implementing a feature using a workaround or hack that is likely to be replaced by a built-in API in the future (e.g. a library or framework adding native support), add a line to `TODO.md` in the project root. Format:
+
+```
+- [urgency/10][module-name] Description of the hack and what should replace it.
+```
+
+- **Urgency**: 1/10 = low priority (works fine, just ugly), 10/10 = critical (blocking or fragile)
+- **Module**: the area of the codebase, e.g. `frontend/pdf-viewer`, `backend/brain-builder`
+- **Description**: what the hack does, why it exists, and what built-in API would replace it
