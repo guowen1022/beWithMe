@@ -12,12 +12,14 @@ import {
 import UserSelector from "./UserSelector";
 import Onboarding from "./Onboarding";
 import Reader from "./Reader";
+import GoalPlanner from "./GoalPlanner";
 
 export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [hasProfile, setHasProfile] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
+  const [goalMode, setGoalMode] = useState(false);
 
   function handleSwitchUser() {
     clearCurrentUserId();
@@ -88,8 +90,22 @@ export default function App() {
     );
   }
 
-  // Step 4: Main reader
-  return <Reader />;
+  // Step 4: Goal planner or main reader
+  if (goalMode) {
+    return (
+      <>
+        <GoalPlanner onBack={() => setGoalMode(false)} />
+        <UserBadge username={username} onSwitch={handleSwitchUser} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Reader onGoalPlan={() => setGoalMode(true)} />
+      <UserBadge username={username} onSwitch={handleSwitchUser} />
+    </>
+  );
 }
 
 function UserBadge({

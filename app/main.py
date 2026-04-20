@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright
-from app.api import health, users, profile, ask, interactions, documents, preferences, concepts, sessions, browser
+from app.api import health, users, profile, ask, interactions, documents, preferences, concepts, sessions, browser, goals
 from app.recommender.router import router as recommender_router
 import app.recommender.models  # noqa: F401 — register ORM model for create_all
 
@@ -53,3 +53,4 @@ app.include_router(concepts.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")
 app.include_router(recommender_router, prefix="/api")
+app.include_router(goals.router, prefix="/api")
