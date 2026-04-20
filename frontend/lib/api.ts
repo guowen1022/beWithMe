@@ -402,6 +402,27 @@ export interface GraphData {
 
 // --- Sessions ---
 
+export async function recordSignal(
+  sessionId: string,
+  parentInteractionId: string,
+  blockText: string,
+  signal: "got_it" | "review_later",
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/interactions/signal`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      session_id: sessionId,
+      parent_interaction_id: parentInteractionId,
+      block_text: blockText,
+      signal,
+    }),
+  });
+  if (!res.ok) {
+    console.error("[recordSignal] failed:", res.status);
+  }
+}
+
 export async function endSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${sessionId}/end`, {
     method: "POST",

@@ -12,7 +12,15 @@ class AskRequest(BaseModel):
     document_id: Optional[UUID] = None
     session_id: UUID = Field(default_factory=uuid4)
     parent_interaction_id: Optional[UUID] = None
-    prompt_version: Literal["v1", "v2"] = "v1"
+    prompt_version: Literal["v1", "v2"] = "v2"
+
+
+class SignalRequest(BaseModel):
+    """Lightweight signal from block-level interaction (e.g. 'got it', 'review later')."""
+    session_id: UUID
+    parent_interaction_id: UUID
+    block_text: str
+    signal: Literal["got_it", "review_later"]
 
 
 class AskResponse(BaseModel):

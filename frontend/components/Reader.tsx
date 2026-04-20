@@ -6,10 +6,11 @@ import ReadingPane from "./ReadingPane";
 import QuestionBar from "./QuestionBar";
 import AnswerDrawer from "./AnswerDrawer";
 import ParentCard from "./ParentCard";
-import PinnedPassageCard from "./PinnedPassageCard";
 import DebugPanel from "./DebugPanel";
 import ExplorationTreePanel from "./ExplorationTreePanel";
-import { askStream, endSession, type DebugEvent } from "@/lib/api";
+import { askStream, endSession, recordSignal, type DebugEvent } from "@/lib/api";
+import type { Direction } from "./LogicBlock";
+import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
 import {
   type ExplorationTree,
   createTree,
@@ -59,12 +60,17 @@ export default function Reader() {
   const [navigatedNodeId, setNavigatedNodeId] = useState<string | null>(null);
   const [lastDebug, setLastDebug] = useState<DebugEvent | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
-  const [promptVersion, setPromptVersion] = useState<"v1" | "v2">("v1");
+  const [promptVersion, setPromptVersion] = useState<"v1" | "v2">("v2");
   const [recordTrigger, setRecordTrigger] = useState(0);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [endingSession, setEndingSession] = useState(false);
   const [browserMode, setBrowserMode] = useState(false);
   const [debugInitialTab, setDebugInitialTab] = useState<"prefs" | "sessions" | undefined>(undefined);
+
+  // Persist block collapse/review-later state across navigation
+  // Key: nodeLocalId, Value: { collapsed: Set<blockId>, reviewLater: Set<blockId> }
+  const blockStatesRef = useRef<Map<string, { collapsed: Set<string>; reviewLater: Set<string> }>>(new Map());
+  const [pdfScrollTarget, setPdfScrollTarget] = useState<string | null>(null);
 
   const activeNode = questionStack.length > 0 ? questionStack[questionStack.length - 1] : null;
   const parentNode = questionStack.length >= 2 ? questionStack[questionStack.length - 2] : null;
@@ -76,6 +82,12 @@ export default function Reader() {
   const activePathIds = useMemo(
     () => new Set(questionStack.map((n) => n.localId)),
     [questionStack],
+  );
+
+  // Parse passage into structural outline for the exploration panel
+  const outlineSections = useMemo(
+    () => (content ? parsePassageOutline(content) : []),
+    [content],
   );
 
   const treeRef = useRef(explorationTree);
@@ -108,6 +120,31 @@ export default function Reader() {
     }
     document.addEventListener("mouseup", handleMouseUp);
     return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  // Global keyboard: [ and ] to switch focus between panels
+  // Panels: left (exploration) → center (passage/parent) → right (answer drawer)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Don't intercept if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (e.key === "]") {
+        e.preventDefault();
+        // Focus right: try answer drawer first, then center
+        const answer = document.querySelector("[data-panel='answer']") as HTMLElement | null;
+        if (answer) { answer.focus(); return; }
+      }
+      if (e.key === "[") {
+        e.preventDefault();
+        // Focus left: try exploration panel, or center reading area
+        const center = document.querySelector("[data-panel='center']") as HTMLElement | null;
+        if (center) { center.focus(); return; }
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   // Callback-based selection for components that can't use the global
@@ -157,6 +194,79 @@ export default function Reader() {
     [],
   );
 
+  const handleSectionClick = useCallback((section: OutlineSection) => {
+    // For PDF mode: skip past the title heading and use the body text as anchor.
+    // The title itself is often short and non-unique (e.g. "Attention" appears in abstract too).
+    // The body text right after the heading is unique to that section.
+    if (pdfFile) {
+      const sectionContent = content.slice(section.textStart, section.textEnd);
+      // Skip past the first line (the heading) to get body text
+      const firstNewline = sectionContent.indexOf("\n");
+      const bodyStart = firstNewline >= 0 ? firstNewline + 1 : 0;
+      const bodyText = sectionContent.slice(bodyStart).trim();
+      // Use at least 50 chars of body text for reliable matching
+      const anchor = bodyText.slice(0, Math.max(100, Math.min(300, bodyText.length)));
+      if (anchor.length >= 20) {
+        setPdfScrollTarget(anchor + "|||" + Date.now());
+      }
+      return;
+    }
+
+    const pane = document.querySelector("[data-panel='center']");
+    if (!pane) return;
+
+    const sectionText = content.slice(section.textStart, section.textStart + 60);
+    let best: Element | null = null;
+
+    // Strategy 1: match by data-offset (ReadingPane paragraphs)
+    const offsetEls = pane.querySelectorAll("p[data-offset]");
+    for (const p of offsetEls) {
+      const offset = parseInt(p.getAttribute("data-offset") || "-1", 10);
+      if (offset >= section.textStart && offset < section.textEnd) {
+        best = p;
+        break;
+      }
+    }
+
+    // Strategy 2: search by section title in all text elements (works for PDF text layers)
+    if (!best) {
+      const title = section.title;
+      // Split title into key words for fuzzy matching
+      const titleWords = title.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      const allEls = pane.querySelectorAll("p, span, div, .textLayer span");
+
+      // First try: exact title substring match
+      for (const el of allEls) {
+        const text = el.textContent || "";
+        if (text.toLowerCase().includes(title.toLowerCase().slice(0, 30))) {
+          best = el;
+          break;
+        }
+      }
+
+      // Second try: word-level match on page containers
+      if (!best && titleWords.length >= 2) {
+        const pages = pane.querySelectorAll(".react-pdf__Page, article, section");
+        for (const page of pages) {
+          const text = (page.textContent || "").toLowerCase();
+          const matches = titleWords.filter((w) => text.includes(w));
+          if (matches.length >= Math.min(2, titleWords.length)) {
+            best = page;
+            break;
+          }
+        }
+      }
+    }
+
+    if (best) {
+      best.scrollIntoView({ behavior: "smooth", block: "start" });
+      const el = best as HTMLElement;
+      el.style.transition = "background-color 0.3s";
+      el.style.backgroundColor = "rgba(250, 204, 21, 0.4)";
+      setTimeout(() => { el.style.backgroundColor = ""; }, 2000);
+    }
+  }, [content, pdfFile]);
+
   const navigateToNode = useCallback((localId: string) => {
     const tree = treeRef.current;
     if (!tree || !tree.nodes[localId]) return;
@@ -171,6 +281,9 @@ export default function Reader() {
   function handleContentSubmit(result: ContentResult) {
     setContent(result.text);
     setBrowserMode(result.type === "browser");
+    // Create exploration tree and open outline panel immediately
+    setExplorationTree(createTree(result.text));
+    setTreePanelOpen(true);
     if (result.type === "pdf" && result.file) {
       setPdfFile(result.file);
     }
@@ -192,36 +305,29 @@ export default function Reader() {
     return () => clearInterval(interval);
   }, [browserMode]);
 
-  async function handleAsk(question: string) {
-    if (!question.trim()) return;
-    const source = selectionSource;
-    const sel = selectedText;
-    if (!source) return; // selection-required
-
-    // Determine parent_interaction_id and how the new node fits into the stack.
-    // - passage  → top-level question, resets the stack
-    // - parent   → sibling at the parent's level, replaces the active node
-    // - active   → drills deeper, pushes a new child onto the stack
-    let parent_interaction_id: string | null = null;
-    let parentLocalId: string | null = null;
+  /**
+   * Core question-firing helper. Creates a QuestionNode, adds it to the
+   * stack and exploration tree, and streams the answer from the backend.
+   */
+  async function fireQuestion(
+    question: string,
+    sel: string | null,
+    parentInteractionId: string | null,
+    parentLocalId: string | null,
+    source: SelectionSource,
+  ) {
     let nextStack: QuestionNode[];
     const currentStack = stackRef.current;
 
     if (source === "passage") {
       nextStack = [makeNode(question, sel, null)];
     } else if (source === "parent" && currentStack.length >= 2) {
-      const parent = currentStack[currentStack.length - 2];
-      parent_interaction_id = parent.interactionId;
-      parentLocalId = parent.localId;
       nextStack = [
         ...currentStack.slice(0, -1),
-        makeNode(question, sel, parent_interaction_id),
+        makeNode(question, sel, parentInteractionId),
       ];
     } else if (source === "active" && currentStack.length >= 1) {
-      const active = currentStack[currentStack.length - 1];
-      parent_interaction_id = active.interactionId;
-      parentLocalId = active.localId;
-      nextStack = [...currentStack, makeNode(question, sel, parent_interaction_id)];
+      nextStack = [...currentStack, makeNode(question, sel, parentInteractionId)];
     } else {
       return;
     }
@@ -232,7 +338,6 @@ export default function Reader() {
     setSelectionSource(null);
     setNavigatedNodeId(null);
 
-    // Add to exploration tree (create tree on first question)
     setExplorationTree((prev) => {
       const tree = prev ?? createTree(content);
       return addTreeNode(tree, newNode, parentLocalId);
@@ -246,7 +351,7 @@ export default function Reader() {
           selected_text: sel || undefined,
           question: question.trim(),
           session_id: sessionId,
-          parent_interaction_id: parent_interaction_id ?? undefined,
+          parent_interaction_id: parentInteractionId ?? undefined,
           prompt_version: promptVersion,
         },
         (event) => {
@@ -285,6 +390,62 @@ export default function Reader() {
     } catch (err) {
       console.error(err);
       updateNode(newNode.localId, (n) => ({ ...n, loading: false, status: "idle" }));
+    }
+  }
+
+  async function handleAsk(question: string) {
+    if (!question.trim()) return;
+    const source = selectionSource;
+    const sel = selectedText;
+    if (!source) return;
+
+    const currentStack = stackRef.current;
+    let parentInteractionId: string | null = null;
+    let parentLocalId: string | null = null;
+
+    if (source === "parent" && currentStack.length >= 2) {
+      const parent = currentStack[currentStack.length - 2];
+      parentInteractionId = parent.interactionId;
+      parentLocalId = parent.localId;
+    } else if (source === "active" && currentStack.length >= 1) {
+      const active = currentStack[currentStack.length - 1];
+      parentInteractionId = active.interactionId;
+      parentLocalId = active.localId;
+    }
+
+    await fireQuestion(question, sel, parentInteractionId, parentLocalId, source);
+  }
+
+  function handleBlockGesture(blockText: string, direction: Direction) {
+    const active = stackRef.current.at(-1);
+    if (!active?.interactionId) return;
+
+    if (direction === "left") {
+      // "Got it" — fire-and-forget signal
+      recordSignal(sessionId, active.interactionId, blockText, "got_it");
+      return;
+    }
+    if (direction === "up") {
+      // "Too hard" — record signal, no LLM call
+      recordSignal(sessionId, active.interactionId, blockText, "review_later");
+      return;
+    }
+    if (direction === "down") {
+      // "Explain more" — auto drill-down
+      fireQuestion(
+        "Explain this in more detail with examples",
+        blockText,
+        active.interactionId,
+        active.localId,
+        "active",
+      );
+      return;
+    }
+    if (direction === "right") {
+      // Custom question — set selection context + trigger voice recording
+      setSelectedText(blockText);
+      setSelectionSource("active");
+      setRecordTrigger((prev) => prev + 1);
     }
   }
 
@@ -340,7 +501,7 @@ export default function Reader() {
     );
   }
 
-  const leftMargin = treePanelOpen ? "ml-72" : debugOpen ? "ml-80" : "ml-0";
+  const leftMargin = treePanelOpen ? "ml-96" : debugOpen ? "ml-80" : "ml-0";
 
   return (
     <div className="relative flex h-screen">
@@ -355,8 +516,8 @@ export default function Reader() {
         </button>
       )}
 
-      {/* Exploration tree panel (left) */}
-      {explorationTree && (
+      {/* Exploration tree panel (left) — shows outline even before questions */}
+      {explorationTree && outlineSections.length > 0 && (
         <ExplorationTreePanel
           tree={explorationTree}
           activeLocalId={activeNode?.localId ?? null}
@@ -365,6 +526,9 @@ export default function Reader() {
           onClose={() => setTreePanelOpen(false)}
           onNavigate={navigateToNode}
           onToggleCollapse={handleToggleCollapse}
+          passageText={content}
+          outlineSections={outlineSections}
+          onSectionClick={handleSectionClick}
         />
       )}
 
@@ -372,7 +536,7 @@ export default function Reader() {
       <DebugPanel open={debugOpen && !treePanelOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} initialTab={debugInitialTab} />
 
       {/* Left toggle buttons */}
-      <div className={`fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 ${treePanelOpen ? "left-72" : "left-0"}`}>
+      <div className={`fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 ${treePanelOpen ? "left-96" : "left-0"}`}>
         {explorationTree && !treePanelOpen && (
           <button
             onClick={() => setTreePanelOpen(true)}
@@ -386,9 +550,9 @@ export default function Reader() {
             </svg>
           </button>
         )}
-        {!debugOpen && !treePanelOpen && (
+        {!debugOpen && (
           <button
-            onClick={() => setDebugOpen(true)}
+            onClick={() => { setDebugOpen(true); setTreePanelOpen(false); }}
             className="rounded-r-lg bg-purple-600 p-2.5 text-white shadow-lg hover:bg-purple-700 transition-colors"
             aria-label="Show learning profile"
             title="Learning profile (debug)"
@@ -400,19 +564,18 @@ export default function Reader() {
         )}
       </div>
 
-      {/* Pinned source passage when the user has drilled at least one level */}
-      {showPinnedPassage && (
-        <PinnedPassageCard content={content} offsetLeft={treePanelOpen || debugOpen} />
-      )}
+      {/* Pinned source passage removed — parent blocks view replaces it */}
 
       {/* Middle surface — passage when no drilling, parent card otherwise */}
       <div
-        className={`flex-1 flex flex-col overflow-y-auto pb-20 transition-all duration-300 ${
+        data-panel="center"
+        tabIndex={0}
+        className={`flex-1 flex flex-col overflow-y-auto pb-20 transition-all duration-300 outline-none ${
           drawerOpen ? "mr-[28rem]" : "mr-0"
         } ${leftMargin}`}
       >
         {parentNode ? (
-          <ParentCard node={parentNode} onPop={popActive} />
+          <ParentCard node={parentNode} childNode={activeNode} onPop={popActive} />
         ) : browserMode && !parentNode ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-8 max-w-md">
@@ -436,7 +599,7 @@ export default function Reader() {
               </div>
             }
           >
-            <PdfViewer file={pdfFile} onSelection={handleSelection} />
+            <PdfViewer file={pdfFile} onSelection={handleSelection} scrollToText={pdfScrollTarget} />
           </Suspense>
         ) : (
           <ReadingPane
@@ -449,7 +612,17 @@ export default function Reader() {
       {/* Active question drawer (right). Re-mounted when the active node
           changes so the typewriter resets cleanly. */}
       {activeNode && (
-        <AnswerDrawer key={activeNode.localId} node={activeNode} onClose={popActive} instant={navigatedNodeId === activeNode.localId} />
+        <AnswerDrawer
+          key={activeNode.localId}
+          node={activeNode}
+          onClose={popActive}
+          onBlockGesture={handleBlockGesture}
+          instant={!activeNode.loading}
+          initialBlockStates={blockStatesRef.current.get(activeNode.localId)}
+          onBlockStatesChange={(states) => {
+            blockStatesRef.current.set(activeNode.localId, states);
+          }}
+        />
       )}
 
       {/* Bottom question bar — adjusts for both panels */}

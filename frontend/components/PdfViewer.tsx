@@ -14,9 +14,11 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 export default function PdfViewer({
   file,
   onSelection,
+  scrollToText,
 }: {
   file: File;
   onSelection: (text: string) => void;
+  scrollToText?: string | null;
 }) {
   const [numPages, setNumPages] = useState<number>(0);
   const [containerWidth, setContainerWidth] = useState<number>(700);
@@ -56,6 +58,72 @@ export default function PdfViewer({
     setFileUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [file]);
+
+  // Scroll to the page containing scrollToText anchor
+  useEffect(() => {
+    if (!scrollToText || !containerRef.current) return;
+    // Strip the timestamp suffix (after |||)
+    const anchor = scrollToText.split("|||")[0];
+    if (!anchor || anchor.length < 10) return;
+
+    // Normalize: collapse whitespace for matching against PDF text layer
+    const normalize = (s: string) => s.replace(/\s+/g, " ").toLowerCase().trim();
+    const normAnchor = normalize(anchor);
+
+    // Try progressively shorter substrings until we find a match
+    const pages = containerRef.current.querySelectorAll(".react-pdf__Page");
+    const pageTexts: { page: Element; text: string }[] = [];
+    for (const page of pages) {
+      const textLayer = page.querySelector(".react-pdf__Page__textContent");
+      if (textLayer) {
+        pageTexts.push({ page, text: normalize(textLayer.textContent || "") });
+      }
+    }
+
+    // Try lengths: 200, 100, 60, 30 chars of the anchor
+    const lengths = [200, 100, 60, 30];
+    for (const len of lengths) {
+      const snippet = normAnchor.slice(0, Math.min(len, normAnchor.length));
+      if (snippet.length < 10) continue;
+      for (const { page, text } of pageTexts) {
+        if (text.includes(snippet)) {
+          // Scroll the container directly (scrollIntoView doesn't work with nested scroll)
+          const scrollParent = containerRef.current!.closest("[data-panel='center']") as HTMLElement | null;
+          if (scrollParent) {
+            scrollParent.scrollTo({ top: (page as HTMLElement).offsetTop - scrollParent.offsetTop, behavior: "smooth" });
+          } else {
+            page.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          const el = page as HTMLElement;
+          el.style.outline = "3px solid rgba(250, 204, 21, 0.6)";
+          el.style.outlineOffset = "4px";
+          setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2000);
+          return;
+        }
+      }
+    }
+
+    // Last resort: word-level matching
+    const words = normAnchor.split(" ").filter(w => w.length > 3).slice(0, 6);
+    if (words.length >= 2) {
+      for (const { page, text } of pageTexts) {
+        const hits = words.filter(w => text.includes(w));
+        if (hits.length >= Math.min(4, words.length)) {
+          const scrollParent = containerRef.current!.closest("[data-panel='center']") as HTMLElement | null;
+          if (scrollParent) {
+            scrollParent.scrollTo({ top: (page as HTMLElement).offsetTop - scrollParent.offsetTop, behavior: "smooth" });
+          } else {
+            page.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          const el = page as HTMLElement;
+          el.style.outline = "3px solid rgba(250, 204, 21, 0.6)";
+          el.style.outlineOffset = "4px";
+          setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2000);
+          return;
+        }
+      }
+    }
+  }, [scrollToText]);
 
   if (!fileUrl) return null;
 
