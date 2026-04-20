@@ -17,7 +17,7 @@ import uuid
 import httpx
 import asyncpg
 from datetime import datetime
-from benchmark.scenarios import ALL_SCENARIOS
+from benchmark.scenarios import ALL_SCENARIOS, ALL_GOAL_SCENARIOS
 
 
 async def reset_db():
@@ -241,15 +241,176 @@ async def run_scenario(scenario: dict, base_url: str):
         }
 
 
+async def run_goal_scenario(scenario: dict, base_url: str):
+    """Run a goal planning scenario: create goal, then execute expand/know/unknown actions."""
+    print(f"\n{'='*60}")
+    print(f"GOAL SCENARIO: {scenario['name']}")
+    print(f"{'='*60}")
+
+    scenario_start = time.time()
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        # Create user
+        username = f"bench_goal_{scenario['name'][:15].lower().replace(' ', '_')}"
+        resp = await client.post("/api/users", json={"username": username})
+        if resp.status_code == 409:
+            resp = await client.get("/api/users")
+            users = resp.json()
+            user_id = next(u["id"] for u in users if u["username"] == username)
+        else:
+            resp.raise_for_status()
+            user_id = resp.json()["id"]
+        headers = auth_headers(user_id)
+        print(f"[user] {username} (id={user_id[:8]}...)")
+
+        await client.put("/api/profile", headers=headers,
+                         json={"self_description": scenario["profile"]})
+
+        # Step 1: Create goal
+        print(f"\n--- Creating goal: {scenario['goal']} ---")
+        start = time.time()
+        resp = await client.post("/api/goals", headers=headers,
+                                 json={"title": scenario["goal"]})
+        resp.raise_for_status()
+        goal_data = resp.json()
+        goal_id = goal_data["id"]
+        dag = goal_data["dag"]
+        elapsed = time.time() - start
+        print(f"  Created in {elapsed:.1f}s — {len(dag['nodes'])} nodes")
+
+        # Print initial DAG
+        prereqs = [n for n in dag["nodes"] if n["type"] != "goal"]
+        for i, n in enumerate(prereqs):
+            print(f"  [{i}] {n['id']}: {n['label']} ({n['status']})")
+
+        transcript_text = goal_data.get("transcript", [{}])[0].get("text", "")
+        print(f"  Planner: {transcript_text[:120]}...")
+
+        actions_log = []
+
+        # Step 2: Execute actions
+        for action in scenario["actions"]:
+            act_type = action["type"]
+            node_idx = action["node_index"]
+
+            # Find the target node — index into non-goal nodes by current order
+            non_goal = [n for n in dag["nodes"] if n["type"] != "goal"]
+            if node_idx >= len(non_goal):
+                print(f"  [skip] node_index {node_idx} out of range ({len(non_goal)} nodes)")
+                continue
+
+            target = non_goal[node_idx]
+            print(f"\n--- Action: {act_type} on [{node_idx}] \"{target['label'][:50]}\" ---")
+
+            start = time.time()
+            if act_type == "expand":
+                resp = await client.post(f"/api/goals/{goal_id}/expand", headers=headers,
+                                         json={"node_id": target["id"]})
+            elif act_type in ("know", "unknown"):
+                resp = await client.post(f"/api/goals/{goal_id}/feedback", headers=headers,
+                                         json={"node_id": target["id"], "action": act_type})
+            else:
+                print(f"  [skip] unknown action type: {act_type}")
+                continue
+
+            resp.raise_for_status()
+            result = resp.json()
+            dag = result["dag"]
+            elapsed = time.time() - start
+
+            new_text = result.get("text", "")
+            print(f"  {elapsed:.1f}s — now {len(dag['nodes'])} nodes")
+            print(f"  Planner: {new_text[:120]}...")
+
+            # Show any new nodes
+            new_nodes = [n for n in dag["nodes"] if n["id"] not in {nn["id"] for nn in (actions_log[-1]["dag"]["nodes"] if actions_log else goal_data["dag"]["nodes"])}]
+            for nn in new_nodes:
+                status_mark = "◆" if nn["status"] == "atomic" else "○"
+                print(f"  {status_mark} NEW: {nn['id']}: {nn['label']} ({nn['status']})")
+
+            actions_log.append({"action": act_type, "target": target["label"], "elapsed": elapsed, "dag": dag, "text": new_text})
+
+        # Final summary
+        total_time = time.time() - scenario_start
+        print(f"\n{'='*60}")
+        print("GOAL PLANNING RESULTS")
+        print(f"{'='*60}")
+
+        all_nodes = dag["nodes"]
+        goal_node = next(n for n in all_nodes if n["type"] == "goal")
+        prereqs = [n for n in all_nodes if n["type"] != "goal"]
+        by_status = {}
+        for n in prereqs:
+            by_status.setdefault(n["status"], []).append(n)
+
+        print(f"\nGoal: {goal_node['label']}")
+        print(f"Total nodes: {len(all_nodes)} ({len(prereqs)} prerequisites + 1 goal)")
+        print(f"Edges: {len(dag['edges'])}")
+        for status in ["pending", "atomic", "known", "unknown", "expanded"]:
+            nodes = by_status.get(status, [])
+            if nodes:
+                print(f"\n  {status.upper()} ({len(nodes)}):")
+                for n in nodes:
+                    print(f"    - {n['label']}")
+
+        # Quality checks
+        print(f"\n--- Quality Check ---")
+        atomic_nodes = by_status.get("atomic", [])
+        pending_nodes = by_status.get("pending", [])
+        print(f"Atomic (actionable leaves): {len(atomic_nodes)}")
+        print(f"Still pending (expandable): {len(pending_nodes)}")
+        if atomic_nodes:
+            print(f"Sample atomic nodes:")
+            for n in atomic_nodes[:5]:
+                # Check if it looks like a real course/practice/concept
+                label = n["label"].lower()
+                is_course = any(w in label for w in ["course", "tutorial", "book", "read", "take", "complete", "watch"])
+                is_practice = any(w in label for w in ["practice", "exercise", "build", "solve", "write", "create", "do", "min/day", "hours", "daily", "weekly"])
+                is_concept = any(w in label for w in ["understand", "learn", "know", "grasp", "study"])
+                actionable = is_course or is_practice or is_concept
+                mark = "✓" if actionable else "?"
+                print(f"  {mark} {n['label']}")
+
+        print(f"\nTotal wall time: {total_time:.0f}s")
+
+        return {
+            "scenario": scenario["name"],
+            "goal": scenario["goal"],
+            "total_nodes": len(all_nodes),
+            "total_edges": len(dag["edges"]),
+            "by_status": {s: len(ns) for s, ns in by_status.items()},
+            "dag": dag,
+            "actions_log": [{"action": a["action"], "target": a["target"], "elapsed": a["elapsed"]} for a in actions_log],
+            "total_wall_time": round(total_time, 0),
+        }
+
+
 async def main():
     parser = argparse.ArgumentParser(description="beWithMe benchmark runner")
     parser.add_argument("--scenario", type=int, default=1, help="Scenario number (1-based)")
+    parser.add_argument("--goal", type=int, default=0, help="Goal scenario number (1-based, 0=skip)")
     parser.add_argument("--reset", action="store_true", help="Reset database before running")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Backend URL")
     args = parser.parse_args()
 
     if args.reset:
         await reset_db()
+
+    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(results_dir, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+    if args.goal > 0:
+        idx = args.goal - 1
+        if idx < 0 or idx >= len(ALL_GOAL_SCENARIOS):
+            print(f"Invalid goal scenario {args.goal}. Available: 1-{len(ALL_GOAL_SCENARIOS)}")
+            return
+        result = await run_goal_scenario(ALL_GOAL_SCENARIOS[idx], args.base_url)
+        filepath = os.path.join(results_dir, f"goal{args.goal}_{ts}.json")
+        with open(filepath, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"\nResults saved to: {filepath}")
+        return
 
     idx = args.scenario - 1
     if idx < 0 or idx >= len(ALL_SCENARIOS):
@@ -258,9 +419,6 @@ async def main():
 
     result = await run_scenario(ALL_SCENARIOS[idx], args.base_url)
 
-    results_dir = os.path.join(os.path.dirname(__file__), "results")
-    os.makedirs(results_dir, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     filepath = os.path.join(results_dir, f"scenario{args.scenario}_{ts}.json")
     with open(filepath, "w") as f:
         json.dump(result, f, indent=2)

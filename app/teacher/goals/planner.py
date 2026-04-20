@@ -112,8 +112,9 @@ async def plan_initial(goal_text: str) -> dict:
     user_msg = (
         f"The user's learning goal is: \"{goal_text}\"\n\n"
         f"Break this down into 4-6 high-level prerequisites. "
-        f"The goal node must have id \"goal\" and label \"{goal_text}\".\n\n"
-        f"Remember: respond with JSON only."
+        f"The goal node must have id \"goal\" and label \"{goal_text}\".\n"
+        f"All prerequisites at this level should have status \"pending\" — they are high-level and will be expanded later.\n\n"
+        f"Respond with JSON only."
     )
 
     raw = await generate(user_msg, system=skill_prompt, max_tokens=2048)
@@ -147,10 +148,14 @@ async def plan_expand(node_id: str, dag: dict, transcript: list) -> dict:
 
     user_msg = (
         f"{context}\n\n"
-        f"The user wants to EXPAND node \"{node_id}\" (\"{node['label']}\").\n"
-        f"Break it into 3-5 sub-prerequisites. Set node \"{node_id}\" status to \"expanded\".\n"
-        f"Use node IDs starting from n{start_id}.\n\n"
-        f"Remember: respond with JSON only."
+        f"The user wants to EXPAND node \"{node_id}\" (\"{node['label']}\").\n\n"
+        f"FIRST: Judge whether this node is already actionable. Is it a real course/book people can find, "
+        f"a time-bounded practice, or a single-session concept? If YES → set its status to \"atomic\" "
+        f"and do NOT add sub-nodes. Explain in \"text\" what the user should actually go do.\n\n"
+        f"ONLY if the node is still too vague to act on → break it into 3-5 sub-prerequisites. "
+        f"Set node \"{node_id}\" status to \"expanded\". Use node IDs starting from n{start_id}. "
+        f"Mark any sub-nodes that are themselves actionable as \"atomic\".\n\n"
+        f"Respond with JSON only."
     )
 
     raw = await generate(user_msg, system=skill_prompt, max_tokens=2048)

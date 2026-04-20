@@ -424,7 +424,7 @@ export interface DAGNode {
   id: string;
   label: string;
   type: "goal" | "prerequisite";
-  status: "pending" | "known" | "unknown" | "expanded";
+  status: "pending" | "known" | "unknown" | "expanded" | "atomic";
 }
 
 export interface DAGEdge {

@@ -105,3 +105,67 @@ The Transformer architecture uses positional encoding to inject information abou
 }
 
 ALL_SCENARIOS = [SCENARIO_1, SCENARIO_2]
+
+# --- Goal Planning Scenarios ---
+# Each scenario has a goal and a list of expand actions to simulate user interaction.
+# "expand" means click Expand on a node. "know"/"unknown" means mark it.
+
+GOAL_SCENARIO_1 = {
+    "name": "Learn web development from scratch",
+    "profile": "I'm a college student with no programming experience. I learn best with hands-on projects.",
+    "goal": "Learn web development from scratch",
+    "actions": [
+        # Expand 2 of the initial prerequisites to test depth
+        {"type": "expand", "node_index": 0},  # expand first prerequisite
+        {"type": "expand", "node_index": 1},  # expand second prerequisite
+        # Mark some as known/unknown
+        {"type": "know", "node_index": 2},    # mark third as known
+    ],
+}
+
+GOAL_SCENARIO_2 = {
+    "name": "Pass AWS Solutions Architect certification",
+    "profile": "I'm a backend developer with 3 years of experience. I use AWS at work but haven't studied for certs.",
+    "goal": "Pass the AWS Solutions Architect Associate certification",
+    "actions": [
+        {"type": "expand", "node_index": 0},
+        {"type": "know", "node_index": 1},
+        {"type": "expand", "node_index": 2},
+    ],
+}
+
+GOAL_SCENARIO_3 = {
+    "name": "Learn acoustic guitar",
+    "profile": "I'm 30 years old, no musical background. I have a guitar at home but never learned properly.",
+    "goal": "Learn to play acoustic guitar well enough to play songs at a campfire",
+    "actions": [
+        {"type": "expand", "node_index": 0},
+        {"type": "expand", "node_index": 1},
+        {"type": "unknown", "node_index": 2},
+    ],
+}
+
+GOAL_SCENARIO_4 = {
+    "name": "Improve emotional intelligence",
+    "profile": "I'm a tech lead who struggles with team conflicts. I want to be better at reading people.",
+    "goal": "Improve my emotional intelligence to become a better team leader",
+    "actions": [
+        {"type": "expand", "node_index": 0},
+        {"type": "expand", "node_index": 1},
+        {"type": "expand", "node_index": 3},
+    ],
+}
+
+GOAL_SCENARIO_5 = {
+    "name": "Deploy ML model to production",
+    "profile": "I'm a data scientist comfortable with Python and sklearn. Never deployed anything beyond Jupyter notebooks.",
+    "goal": "Build and deploy a machine learning model to production",
+    "actions": [
+        {"type": "know", "node_index": 0},     # already know ML fundamentals
+        {"type": "know", "node_index": 1},     # already know data engineering
+        {"type": "expand", "node_index": 2},   # expand the deployment part
+        {"type": "expand", "node_index": 3},   # expand serving/API part
+    ],
+}
+
+ALL_GOAL_SCENARIOS = [GOAL_SCENARIO_1, GOAL_SCENARIO_2, GOAL_SCENARIO_3, GOAL_SCENARIO_4, GOAL_SCENARIO_5]
