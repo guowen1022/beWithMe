@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright
 from app.api import health, users, profile, ask, interactions, documents, preferences, concepts, sessions, browser, goals
-from app.recommender.router import router as recommender_router
-import app.recommender.models  # noqa: F401 — register ORM model for create_all
+from app.teacher.recommender.router import router as recommender_router
+import app.teacher.recommender.models  # noqa: F401 — register ORM model for create_all
 
 BROWSER_PROFILE_DIR = Path("data/browser_profile")
 
