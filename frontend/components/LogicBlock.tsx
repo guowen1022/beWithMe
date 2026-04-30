@@ -4,6 +4,23 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { LogicBlock as LogicBlockType } from "@/lib/markdownBlocks";
+import { speakTextStream } from "@/lib/api";
+
+/** Strip markdown formatting so the TTS reads prose, not syntax. */
+function markdownToSpeakable(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export type Direction = "left" | "right" | "up" | "down";
 
@@ -98,6 +115,129 @@ export default function LogicBlock({
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [radialHover, setRadialHover] = useState<Direction | null>(null);
   const radialHoverRef = useRef<Direction | null>(null);
+
+  // TTS playback state (streamed PCM via Web Audio).
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const nextStartRef = useRef<number>(0);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
+
+  const stopAudio = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    for (const src of activeSourcesRef.current) {
+      try {
+        src.onended = null;
+        src.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    activeSourcesRef.current = [];
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    nextStartRef.current = 0;
+    setTtsState("idle");
+  }, []);
+
+  useEffect(() => {
+    return () => stopAudio();
+  }, [stopAudio]);
+
+  const handleSpeak = useCallback(async () => {
+    if (ttsState === "playing") {
+      stopAudio();
+      return;
+    }
+    if (ttsState === "loading") return;
+    const text = markdownToSpeakable(block.markdown);
+    if (!text) return;
+    setTtsState("loading");
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+    try {
+      const { sampleRate, reader } = await speakTextStream(text, {
+        signal: abort.signal,
+      });
+      if (abort.signal.aborted) return;
+
+      const AudioCtor: typeof AudioContext =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new AudioCtor({ sampleRate });
+      audioCtxRef.current = ctx;
+      nextStartRef.current = ctx.currentTime;
+      activeSourcesRef.current = [];
+
+      let leftover = new Uint8Array(0);
+      let firstChunk = true;
+      let readingDone = false;
+      let totalScheduled = 0;
+      let endedCount = 0;
+      const maybeFinish = () => {
+        if (readingDone && endedCount >= totalScheduled && !abort.signal.aborted) {
+          stopAudio();
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (abort.signal.aborted) return;
+
+        // Re-align on 16-bit sample boundaries across network chunks.
+        const merged = new Uint8Array(leftover.byteLength + value.byteLength);
+        merged.set(leftover, 0);
+        merged.set(value, leftover.byteLength);
+        const usable = merged.byteLength - (merged.byteLength % 2);
+        if (usable < merged.byteLength) {
+          leftover = merged.slice(usable);
+        } else {
+          leftover = new Uint8Array(0);
+        }
+        if (usable === 0) continue;
+
+        const int16 = new Int16Array(merged.buffer, merged.byteOffset, usable / 2);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+          float32[i] = int16[i] / 32768;
+        }
+
+        const buf = ctx.createBuffer(1, float32.length, sampleRate);
+        buf.copyToChannel(float32, 0);
+
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        const startAt = Math.max(ctx.currentTime, nextStartRef.current);
+        src.start(startAt);
+        nextStartRef.current = startAt + buf.duration;
+        activeSourcesRef.current.push(src);
+        totalScheduled++;
+        src.onended = () => {
+          endedCount++;
+          maybeFinish();
+        };
+
+        if (firstChunk) {
+          setTtsState("playing");
+          firstChunk = false;
+        }
+      }
+      readingDone = true;
+      maybeFinish();
+    } catch (err) {
+      if (!abort.signal.aborted) {
+        console.error("TTS stream failed", err);
+      }
+      stopAudio();
+    }
+  }, [block.markdown, stopAudio, ttsState]);
 
   // Scroll into view when focused
   useEffect(() => {
@@ -311,7 +451,39 @@ export default function LogicBlock({
       }
     >
       {radialOverlay}
-      <article className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-li:my-0.5 prose-headings:mt-2 prose-headings:mb-1 prose-code:text-pink-600 dark:prose-code:text-pink-400">
+      <button
+        type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleSpeak();
+        }}
+        title={ttsState === "playing" ? "Stop" : "Read aloud"}
+        aria-label={ttsState === "playing" ? "Stop reading" : "Read block aloud"}
+        className={`absolute top-2 right-2 z-10 rounded-full p-1.5 transition-colors shrink-0 ${
+          ttsState === "playing"
+            ? "bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400"
+            : "text-gray-300 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+        }`}
+      >
+        {ttsState === "loading" ? (
+          <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+        ) : ttsState === "playing" ? (
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="1" />
+          </svg>
+        ) : (
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+            <path d="M15.54 8.46a5 5 0 010 7.07" />
+            <path d="M19.07 4.93a10 10 0 010 14.14" />
+          </svg>
+        )}
+      </button>
+      <article className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-li:my-0.5 prose-headings:mt-2 prose-headings:mb-1 prose-code:text-pink-600 dark:prose-code:text-pink-400 pr-8">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {block.markdown}
         </ReactMarkdown>

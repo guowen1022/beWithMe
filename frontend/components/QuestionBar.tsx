@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { transcribeAudio } from "@/lib/api";
+import { createMicVad, type MicVadHandle } from "@/lib/vad";
 
 export default function QuestionBar({
   selectedText,
@@ -23,84 +25,190 @@ export default function QuestionBar({
 }) {
   const [question, setQuestion] = useState("");
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  const vadRef = useRef<MicVadHandle | null>(null);
+  const pendingRef = useRef<Set<Promise<void>>>(new Set());
+  // Committed phrases (already finalized by VAD end-of-speech).
+  const committedRef = useRef("");
+  // Live interim for the currently-open phrase. Replaced on every rolling
+  // transcribe; cleared when the phrase commits.
+  const interimRef = useRef("");
+  const activePhraseRef = useRef(0);
+  // Serialize interim POSTs — the backend whisper lock serializes anyway,
+  // so there's no benefit to fanning out. One-at-a-time keeps latency tight.
+  const interimInFlightRef = useRef(false);
+  const autoSendRef = useRef(false);
+  const onAskRef = useRef(onAsk);
   const questionRef = useRef(question);
   const listeningRef = useRef(listening);
 
-  // Keep refs in sync
+  const renderQuestion = useCallback(() => {
+    const c = committedRef.current;
+    const i = interimRef.current;
+    if (c && i) return `${c} ${i}`;
+    return c || i;
+  }, []);
+
+  useEffect(() => { onAskRef.current = onAsk; }, [onAsk]);
   useEffect(() => { questionRef.current = question; }, [question]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
 
-  // Check for Web Speech API support
   useEffect(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    setSpeechSupported(!!SpeechRecognition);
+    const ok =
+      typeof window !== "undefined" &&
+      !!navigator.mediaDevices?.getUserMedia &&
+      typeof AudioWorkletNode !== "undefined";
+    setSpeechSupported(ok);
   }, []);
 
-  // Set recording cursor on body while listening
   useEffect(() => {
-    if (listening) {
+    if (listening || transcribing) {
       document.body.style.cursor =
         'url("data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 width=%2732%27 height=%2732%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%23ef4444%27 stroke-width=%272%27><circle cx=%2712%27 cy=%2712%27 r=%2710%27 fill=%27%23fca5a5%27/><circle cx=%2712%27 cy=%2712%27 r=%275%27 fill=%27%23ef4444%27/></svg>") 16 16, pointer';
     } else {
       document.body.style.cursor = "";
     }
     return () => { document.body.style.cursor = ""; };
-  }, [listening]);
+  }, [listening, transcribing]);
 
-  const startListening = useCallback(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+  // Rolling interim during a phrase: show a best-guess transcript as the
+  // user speaks. Dropped if the phrase commits before it lands.
+  const handleInterim = useCallback((wav: Blob, phraseId: number) => {
+    if (interimInFlightRef.current) return;
+    if (phraseId !== activePhraseRef.current) return;
+    interimInFlightRef.current = true;
+    const prompt = committedRef.current.slice(-150);
+    (async () => {
+      try {
+        const { text } = await transcribeAudio(wav, "en", prompt);
+        if (phraseId !== activePhraseRef.current) return;
+        const clean = text.trim();
+        interimRef.current = clean;
+        setQuestion(renderQuestion());
+      } catch (err) {
+        console.warn("interim transcribe failed", err);
+      } finally {
+        interimInFlightRef.current = false;
+      }
+    })();
+  }, [renderQuestion]);
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
+  // Final clean transcribe on VAD end-of-speech; becomes the committed text
+  // for that phrase and supersedes any interim.
+  const handlePhrase = useCallback((wav: Blob, phraseId: number) => {
+    const prompt = committedRef.current.slice(-150);
+    const task = (async () => {
+      try {
+        const { text } = await transcribeAudio(wav, "en", prompt);
+        const clean = text.trim();
+        // Only clear the interim for *this* phrase — a later phrase may
+        // already be producing its own interim by the time we land.
+        if (phraseId === activePhraseRef.current) {
+          interimRef.current = "";
+        }
+        if (clean) {
+          committedRef.current = committedRef.current
+            ? `${committedRef.current} ${clean}`
+            : clean;
+        }
+        setQuestion(renderQuestion());
+      } catch (err) {
+        console.warn("phrase transcribe failed", err);
+      }
+    })();
+    pendingRef.current.add(task);
+    task.finally(() => pendingRef.current.delete(task));
+  }, [renderQuestion]);
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const transcript = Array.from(event.results)
-        .map((r) => r[0].transcript)
-        .join("");
-      setQuestion(transcript);
-    };
-
-    recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
+  const teardownVad = useCallback(() => {
+    const vad = vadRef.current;
+    vadRef.current = null;
+    if (vad) {
+      try { vad.destroy(); } catch { /* noop */ }
+    }
   }, []);
 
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
-  }, []);
+  const startListening = useCallback(async () => {
+    if (!speechSupported || vadRef.current) return;
+    try {
+      committedRef.current = "";
+      interimRef.current = "";
+      activePhraseRef.current = 0;
+      interimInFlightRef.current = false;
+      pendingRef.current.clear();
+      autoSendRef.current = false;
+      setQuestion("");
 
-  const sendQuestion = useCallback(() => {
-    const q = questionRef.current.trim();
-    if (!q || loading) return;
-    if (listeningRef.current) {
-      recognitionRef.current?.stop();
+      const vad = await createMicVad({
+        onSpeechStart: (phraseId) => {
+          activePhraseRef.current = phraseId;
+        },
+        onInterim: handleInterim,
+        onPhrase: handlePhrase,
+        onError: (err) => console.warn("vad error", err),
+      });
+      vadRef.current = vad;
+      vad.start();
+      setListening(true);
+    } catch (err) {
+      console.error("mic/vad start failed", err);
+      teardownVad();
       setListening(false);
     }
-    onAsk(q);
-    setQuestion("");
-  }, [loading, onAsk]);
+  }, [speechSupported, handleInterim, handlePhrase, teardownVad]);
+
+  // Stop VAD and, once any in-flight phrase POSTs drain, auto-send if asked.
+  const finalizeListening = useCallback(async (autoSend: boolean) => {
+    if (!vadRef.current) return;
+    teardownVad();
+    setListening(false);
+
+    const inflight = Array.from(pendingRef.current);
+    if (inflight.length > 0) {
+      setTranscribing(true);
+      try { await Promise.allSettled(inflight); } finally { setTranscribing(false); }
+    }
+
+    // Bump phraseId so any stale interim response gets dropped instead of
+    // overwriting the committed text.
+    activePhraseRef.current += 1;
+    interimRef.current = "";
+    setQuestion(renderQuestion());
+
+    const final = committedRef.current.trim();
+    if (autoSend && final) onAskRef.current(final);
+  }, [teardownVad, renderQuestion]);
 
   const cancelRecording = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
+    teardownVad();
+    pendingRef.current.clear();
+    committedRef.current = "";
+    interimRef.current = "";
+    activePhraseRef.current += 1;
+    interimInFlightRef.current = false;
     setQuestion("");
-  }, []);
+    setListening(false);
+    setTranscribing(false);
+  }, [teardownVad]);
 
-  // Auto-start recording when text is selected
+  const sendQuestion = useCallback(() => {
+    if (loading) return;
+    if (listeningRef.current) {
+      autoSendRef.current = true;
+      void finalizeListening(true);
+      return;
+    }
+    const q = questionRef.current.trim();
+    if (!q) return;
+    onAskRef.current(q);
+    setQuestion("");
+  }, [loading, finalizeListening]);
+
+  // Auto-start recording when text is selected (driven by Reader's recordTrigger).
   useEffect(() => {
-    if (recordTrigger > 0 && speechSupported && !listening && !loading) {
-      setQuestion("");
+    if (recordTrigger > 0 && speechSupported && !listening && !transcribing && !loading) {
       startListening();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,6 +224,8 @@ export default function QuestionBar({
         cancelRecording();
       } else if (e.key === "Backspace") {
         e.preventDefault();
+        committedRef.current = "";
+        interimRef.current = "";
         setQuestion("");
       }
     }
@@ -124,13 +234,10 @@ export default function QuestionBar({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [listening, cancelRecording]);
 
-  // Left click anywhere to send while recording
+  // Left-click anywhere to send while recording
   useEffect(() => {
     if (!listening) return;
-
     let removeListener: (() => void) | null = null;
-
-    // Small delay to avoid the mouseup from text selection triggering send
     const id = setTimeout(() => {
       function handleClick(e: MouseEvent) {
         const target = e.target as HTMLElement;
@@ -142,12 +249,19 @@ export default function QuestionBar({
       window.addEventListener("click", handleClick, true);
       removeListener = () => window.removeEventListener("click", handleClick, true);
     }, 800);
-
     return () => {
       clearTimeout(id);
       removeListener?.();
     };
   }, [listening, sendQuestion]);
+
+  // Stop VAD on unmount
+  useEffect(() => {
+    return () => {
+      teardownVad();
+      pendingRef.current.clear();
+    };
+  }, [teardownVad]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -158,7 +272,7 @@ export default function QuestionBar({
     <div
       className={`fixed bottom-0 border-t border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 backdrop-blur-sm transition-all duration-300 z-20 ${
         drawerOpen ? "right-[28rem]" : "right-0"
-      } ${treePanelOpen ? "left-96" : debugOpen ? "left-80" : "left-0"}`}
+      } ${treePanelOpen ? "left-96" : debugOpen ? "left-[28rem]" : "left-0"}`}
     >
       {/* Selected text chip */}
       {selectedText && (
@@ -177,12 +291,14 @@ export default function QuestionBar({
         </div>
       )}
 
-      {/* Recording indicator */}
-      {listening && (
+      {/* Recording / transcribing indicator */}
+      {(listening || transcribing) && (
         <div className="px-4 pt-2 flex items-center gap-2">
           <span className="inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse" />
           <span className="text-xs text-red-500 font-medium">
-            Recording — click anywhere to send &middot; Esc to cancel &middot; Backspace to clear
+            {listening
+              ? "Recording — pause to transcribe · click anywhere to send · Esc to cancel"
+              : "Finalizing transcript..."}
           </span>
         </div>
       )}
@@ -197,14 +313,17 @@ export default function QuestionBar({
           <button
             type="button"
             data-no-send
-            onClick={listening ? cancelRecording : startListening}
+            onClick={listening ? cancelRecording : transcribing ? undefined : startListening}
+            disabled={transcribing}
             className={`rounded-full p-2.5 transition-colors shrink-0 ${
               listening
                 ? "bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400 animate-pulse"
-                : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                : transcribing
+                  ? "text-gray-300 dark:text-gray-600"
+                  : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
             }`}
             aria-label={listening ? "Cancel recording" : "Voice input"}
-            title={listening ? "Cancel recording" : "Speak your question"}
+            title={listening ? "Cancel recording" : transcribing ? "Transcribing..." : "Speak your question"}
           >
             {listening ? (
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -221,21 +340,28 @@ export default function QuestionBar({
           </button>
         )}
 
-        {/* Text input — shows live transcript while recording */}
+        {/* Text input — populated with transcript after recording finishes */}
         <input
           type="text"
           value={question}
-          onChange={(e) => setQuestion(e.target.value)}
+          onChange={(e) => {
+            setQuestion(e.target.value);
+            committedRef.current = e.target.value;
+            interimRef.current = "";
+          }}
           data-no-send
           placeholder={
             listening
-              ? "Speak now..."
-              : selectedText
-                ? "Ask about the selected text..."
-                : "Select text above, or just ask a question..."
+              ? "Recording..."
+              : transcribing
+                ? "Transcribing..."
+                : selectedText
+                  ? "Ask about the selected text..."
+                  : "Select text above, or just ask a question..."
           }
+          disabled={transcribing}
           className={`flex-1 rounded-full border px-5 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-            listening
+            listening || transcribing
               ? "border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950"
               : "border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800"
           }`}
@@ -244,11 +370,11 @@ export default function QuestionBar({
         {/* Send button */}
         <button
           type="submit"
-          disabled={loading || !question.trim()}
+          disabled={loading || transcribing || (!listening && !question.trim())}
           className="rounded-full bg-blue-600 p-2.5 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors shrink-0"
           aria-label="Send"
         >
-          {loading ? (
+          {loading || transcribing ? (
             <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />

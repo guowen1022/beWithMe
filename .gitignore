@@ -10,5 +10,12 @@ frontend/.next/
 frontend/out/
 .pytest_cache/
 .claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
 .gstack/
+.e2e-logs/
+.venv.bak/
+.DS_Store
 data/browser_profile/
+data/sessions/
+benchmark/results/

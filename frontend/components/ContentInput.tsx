@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { getBrowserBridge, isDesktop } from "@/lib/desktopBridge";
 
 export interface ContentResult {
   type: "text" | "pdf" | "browser";
   text: string;
   file?: File;
+  url?: string;
 }
 
 export default function ContentInput({
@@ -59,6 +61,22 @@ export default function ContentInput({
     setError(null);
     setHandoffActive(false);
     setUploading(true);
+
+    if (isDesktop()) {
+      try {
+        const bridge = getBrowserBridge();
+        await bridge?.navigate(url);
+        // Enter browser mode immediately; Reader fetches the extracted
+        // text (for outline + concept indexing) once the page is shown.
+        onSubmit({ type: "browser", text: "", url });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load URL");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
     try {
       const { uploadUrl, getBrowserStatus } = await import("@/lib/api");
       const result = await uploadUrl(url);

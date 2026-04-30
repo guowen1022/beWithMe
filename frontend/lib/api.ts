@@ -618,3 +618,71 @@ export async function getGoal(goalId: string): Promise<GoalFull> {
   if (!res.ok) throw new Error("Failed to fetch goal");
   return res.json();
 }
+
+// --- Transcription (local Whisper) ---
+
+export async function transcribeAudio(
+  blob: Blob,
+  language: string = "en",
+  initialPrompt: string = "",
+): Promise<{ text: string; duration_seconds: number }> {
+  const fd = new FormData();
+  const filename = blob.type.includes("wav") ? "audio.wav" : "audio.webm";
+  fd.append("file", blob, filename);
+  fd.append("language", language);
+  if (initialPrompt) fd.append("initial_prompt", initialPrompt);
+  const res = await fetch(`${API_BASE}/transcribe`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Transcription failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// --- TTS (local Kokoro) ---
+
+export async function speakText(
+  text: string,
+  opts: { voice?: string; speed?: number; lang?: string } = {},
+): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/speak`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, ...opts }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`TTS failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  return res.blob();
+}
+
+export async function speakTextStream(
+  text: string,
+  opts: {
+    voice?: string;
+    speed?: number;
+    lang?: string;
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ sampleRate: number; reader: ReadableStreamDefaultReader<Uint8Array> }> {
+  const { signal, ...body } = opts;
+  const res = await fetch(`${API_BASE}/speak/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, ...body }),
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`TTS stream failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  if (!res.body) {
+    throw new Error("TTS stream failed: empty response body");
+  }
+  const sampleRate = Number(res.headers.get("X-Sample-Rate")) || 24000;
+  return { sampleRate, reader: res.body.getReader() };
+}

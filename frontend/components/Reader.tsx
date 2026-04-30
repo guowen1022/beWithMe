@@ -11,6 +11,8 @@ import ExplorationTreePanel from "./ExplorationTreePanel";
 import { askStream, endSession, recordSignal, type DebugEvent } from "@/lib/api";
 import type { Direction } from "./LogicBlock";
 import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
+import BrowserSlot from "./BrowserSlot";
+import { getBrowserBridge, isDesktop } from "@/lib/desktopBridge";
 import {
   type ExplorationTree,
   createTree,
@@ -65,6 +67,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   const [sessionId] = useState(() => crypto.randomUUID());
   const [endingSession, setEndingSession] = useState(false);
   const [browserMode, setBrowserMode] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("");
   const [debugInitialTab, setDebugInitialTab] = useState<"prefs" | "sessions" | undefined>(undefined);
 
   // Persist block collapse/review-later state across navigation
@@ -141,6 +144,12 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
         // Focus left: try exploration panel, or center reading area
         const center = document.querySelector("[data-panel='center']") as HTMLElement | null;
         if (center) { center.focus(); return; }
+      }
+      // Dev shortcut: Cmd/Ctrl+Shift+D toggles the debug panel. The visible
+      // toggle button was removed so end users don't stumble into it.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "D" || e.key === "d")) {
+        e.preventDefault();
+        setDebugOpen((v) => !v);
       }
     }
     document.addEventListener("keydown", handleKeyDown);
@@ -281,17 +290,58 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   function handleContentSubmit(result: ContentResult) {
     setContent(result.text);
     setBrowserMode(result.type === "browser");
-    // Create exploration tree and open outline panel immediately
+    setBrowserUrl(result.url ?? "");
+    // Create exploration tree and open outline panel only when we have
+    // content to parse. Browser mode starts with empty text; opening the
+    // panel anyway reserves ml-96 for a panel that never renders.
     setExplorationTree(createTree(result.text));
-    setTreePanelOpen(true);
+    setTreePanelOpen(result.text.length > 0);
     if (result.type === "pdf" && result.file) {
       setPdfFile(result.file);
     }
   }
 
-  // Poll browser selection when in browser mode
+  // Fetch the live URL's extracted text in the background so the outline
+  // panel and any passage-reading flows have real content to work with.
+  // The inline browser keeps rendering immediately; this only populates
+  // `content` once trafilatura on the backend returns.
+  useEffect(() => {
+    if (!browserMode || !browserUrl) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { uploadUrl } = await import("@/lib/api");
+        const result = await uploadUrl(browserUrl);
+        if (cancelled) return;
+        if (result.text && result.text.trim().length > 0) {
+          setContent(result.text);
+          setExplorationTree(createTree(result.text));
+          setTreePanelOpen(true);
+        }
+      } catch (err) {
+        console.warn("uploadUrl for inline browser failed", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [browserMode, browserUrl]);
+
+  // Browser selection: desktop uses an event subscription to the inline
+  // WebContentsView; web falls back to polling the backend (legacy flow).
   useEffect(() => {
     if (!browserMode) return;
+    if (isDesktop()) {
+      const bridge = getBrowserBridge();
+      if (!bridge) return;
+      return bridge.onSelectionChange(({ text }) => {
+        if (text) {
+          setSelectedText(text);
+          setSelectionSource("passage");
+          setRecordTrigger((n) => n + 1);
+        }
+      });
+    }
     const interval = setInterval(async () => {
       try {
         const { getBrowserSelection } = await import("@/lib/api");
@@ -467,6 +517,8 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     setTreePanelOpen(false);
     setNavigatedNodeId(null);
     setLastDebug(null);
+    setBrowserMode(false);
+    setBrowserUrl("");
 
     // Show debug panel on Sessions tab so user sees the result appear
     setDebugInitialTab("sessions");
@@ -474,7 +526,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     setEndingSession(false);
   }
 
-  if (!content) {
+  if (!content && !browserMode) {
     return (
       <div className="relative flex h-screen">
         <DebugPanel open={debugOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} promptVersion={promptVersion} onPromptVersionChange={setPromptVersion} initialTab={debugInitialTab} />
@@ -492,7 +544,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
         )}
         <div
           className={`flex-1 flex flex-col transition-all duration-300 ${
-            debugOpen ? "ml-80" : "ml-0"
+            debugOpen ? "ml-[28rem]" : "ml-0"
           }`}
         >
           <ContentInput onSubmit={handleContentSubmit} onGoalPlan={onGoalPlan} />
@@ -501,7 +553,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     );
   }
 
-  const leftMargin = treePanelOpen ? "ml-96" : debugOpen ? "ml-80" : "ml-0";
+  const leftMargin = treePanelOpen ? "ml-96" : debugOpen ? "ml-[28rem]" : "ml-0";
 
   return (
     <div className="relative flex h-screen">
@@ -535,7 +587,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
       {/* Debug panel (left, behind tree panel) */}
       <DebugPanel open={debugOpen && !treePanelOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} initialTab={debugInitialTab} />
 
-      {/* Left toggle buttons */}
+      {/* Left toggle buttons: exploration tree + debug panel */}
       <div className={`fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 ${treePanelOpen ? "left-96" : "left-0"}`}>
         {explorationTree && !treePanelOpen && (
           <button
@@ -577,20 +629,24 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
         {parentNode ? (
           <ParentCard node={parentNode} childNode={activeNode} onPop={popActive} />
         ) : browserMode && !parentNode ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-8 max-w-md">
-              <h2 className="text-lg font-semibold text-gray-200 mb-2">Reading in Browser</h2>
-              <p className="text-sm text-gray-400 mb-4">
-                Select text in the Chromium window, then ask questions below.
-              </p>
-              {selectedText && (
-                <div className="mt-3 p-3 rounded-lg bg-blue-900/30 border border-blue-700/50 text-left">
-                  <p className="text-xs text-blue-400 mb-1 font-medium">Selected:</p>
-                  <p className="text-sm text-gray-300 line-clamp-4">{selectedText}</p>
-                </div>
-              )}
+          isDesktop() && browserUrl ? (
+            <BrowserSlot url={browserUrl} />
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-8 max-w-md">
+                <h2 className="text-lg font-semibold text-gray-200 mb-2">Reading in Browser</h2>
+                <p className="text-sm text-gray-400 mb-4">
+                  Select text in the Chromium window, then ask questions below.
+                </p>
+                {selectedText && (
+                  <div className="mt-3 p-3 rounded-lg bg-blue-900/30 border border-blue-700/50 text-left">
+                    <p className="text-xs text-blue-400 mb-1 font-medium">Selected:</p>
+                    <p className="text-sm text-gray-300 line-clamp-4">{selectedText}</p>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )
         ) : pdfFile ? (
           <Suspense
             fallback={

@@ -87,12 +87,15 @@ export default function DebugPanel({
     (byState[c.state] ||= []).push(c);
   }
 
+  // Don't render the panel at all when closed — its header (tabs incl. "LLM"
+  // and a close X) was leaking through to the top-left in some cases even
+  // with `-translate-x-full`. Mount-on-open sidesteps any such quirk.
+  if (!open) return null;
+
   return (
     <div
-      className={`fixed top-0 left-0 h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 shadow-xl z-30 transition-all duration-300 ease-in-out ${
-        tab === "graph" || tab === "sessions" ? "w-[60vw]" : tab === "llm" ? "w-[45vw]" : "w-80"
-      } ${
-        open ? "translate-x-0" : "-translate-x-full"
+      className={`fixed top-0 left-0 h-full bg-white border-r border-gray-200 shadow-xl z-30 overflow-hidden ${
+        tab === "graph" || tab === "sessions" ? "w-[60vw]" : tab === "llm" ? "w-[45vw]" : "w-[28rem]"
       }`}
     >
       {/* Header */}

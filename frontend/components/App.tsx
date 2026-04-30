@@ -4,10 +4,7 @@ import { useEffect, useState } from "react";
 import {
   getProfile,
   getCurrentUserId,
-  clearCurrentUserId,
-  listUsers,
   UnknownUserError,
-  type User,
 } from "@/lib/api";
 import UserSelector from "./UserSelector";
 import Onboarding from "./Onboarding";
@@ -18,16 +15,21 @@ export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [hasProfile, setHasProfile] = useState(false);
-  const [username, setUsername] = useState<string | null>(null);
   const [goalMode, setGoalMode] = useState(false);
 
-  function handleSwitchUser() {
-    clearCurrentUserId();
-    setUserId(null);
-    setHasProfile(false);
-    setProfileLoaded(false);
-    setUsername(null);
-  }
+  // NavBar owns the user-switch UI and dispatches this event when the user
+  // clicks "Switch". Reset our local state so we fall back to UserSelector.
+  useEffect(() => {
+    function onUserChanged() {
+      setUserId(null);
+      setHasProfile(false);
+      setProfileLoaded(false);
+      setGoalMode(false);
+    }
+    window.addEventListener("bewithme:user-changed", onUserChanged);
+    return () =>
+      window.removeEventListener("bewithme:user-changed", onUserChanged);
+  }, []);
 
   // Check for persisted user on mount
   useEffect(() => {
@@ -48,27 +50,24 @@ export default function App() {
       })
       .catch((err) => {
         if (err instanceof UnknownUserError) {
-          handleSwitchUser();
+          setUserId(null);
+          setHasProfile(false);
+          setProfileLoaded(false);
+          window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
           return;
         }
         setProfileLoaded(true);
       });
   }, [userId]);
 
-  // Resolve username for the header badge
-  useEffect(() => {
-    if (!userId) return;
-    listUsers()
-      .then((users: User[]) => {
-        const match = users.find((u) => u.id === userId);
-        setUsername(match?.username ?? null);
-      })
-      .catch(() => setUsername(null));
-  }, [userId]);
+  function handleUserSelected(id: string) {
+    setUserId(id);
+    window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
+  }
 
   // Step 1: User selection
   if (!userId) {
-    return <UserSelector onUserSelected={setUserId} />;
+    return <UserSelector onUserSelected={handleUserSelected} />;
   }
 
   // Step 2: Loading profile
@@ -82,50 +81,13 @@ export default function App() {
 
   // Step 3: Onboarding if no profile
   if (!hasProfile) {
-    return (
-      <>
-        <Onboarding onComplete={() => setHasProfile(true)} />
-        <UserBadge username={username} onSwitch={handleSwitchUser} />
-      </>
-    );
+    return <Onboarding onComplete={() => setHasProfile(true)} />;
   }
 
   // Step 4: Goal planner or main reader
   if (goalMode) {
-    return (
-      <>
-        <GoalPlanner onBack={() => setGoalMode(false)} />
-        <UserBadge username={username} onSwitch={handleSwitchUser} />
-      </>
-    );
+    return <GoalPlanner onBack={() => setGoalMode(false)} />;
   }
 
-  return (
-    <>
-      <Reader onGoalPlan={() => setGoalMode(true)} />
-      <UserBadge username={username} onSwitch={handleSwitchUser} />
-    </>
-  );
-}
-
-function UserBadge({
-  username,
-  onSwitch,
-}: {
-  username: string | null;
-  onSwitch: () => void;
-}) {
-  return (
-    <div className="fixed top-2 right-2 z-50 flex items-center gap-2 rounded-full bg-white/90 px-3 py-1.5 text-xs shadow-md backdrop-blur border border-gray-200">
-      <span className="text-gray-600">
-        {username ? <>Signed in as <b className="text-gray-800">{username}</b></> : "Signed in"}
-      </span>
-      <button
-        onClick={onSwitch}
-        className="text-blue-600 hover:text-blue-800 font-medium"
-      >
-        Switch
-      </button>
-    </div>
-  );
+  return <Reader onGoalPlan={() => setGoalMode(true)} />;
 }

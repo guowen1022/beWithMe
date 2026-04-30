@@ -1,7 +1,14 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* App is designed for a single light palette. Dark-mode variants were
+   inconsistent across components, producing light-on-light text when the OS
+   was in dark mode. Pin to class-based dark mode (never activated) so
+   `dark:` Tailwind utilities become no-ops system-wide. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #171717;
 }
@@ -11,13 +18,6 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {

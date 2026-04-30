@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Launch all 6 beWithMe sidecars from a single BASE_PORT.
+#   shell      → BASE_PORT       (default 8000)
+#   ask        → BASE_PORT + 1
+#   knowledge  → BASE_PORT + 2
+#   transcribe → BASE_PORT + 3
+#   speak      → BASE_PORT + 4
+#   browser    → BASE_PORT + 5
+#
+# Usage:
+#   ./scripts/dev-services.sh                    # uses BASE_PORT=8000
+#   BASE_PORT=9000 ./scripts/dev-services.sh     # whole topology slides to 9000-9005
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+BASE_PORT=${BASE_PORT:-8000}
+RELOAD=${RELOAD:-1}
+
+# Export so each child sidecar (and the shell's proxy URL builder) sees it.
+export BASE_PORT
+
+reload_flag=""
+if [[ "$RELOAD" == "1" ]]; then
+  reload_flag="--reload"
+fi
+
+pids=()
+cleanup() {
+  trap - EXIT INT TERM
+  echo
+  echo "[dev-services] shutting down..."
+  for pid in "${pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+start() {
+  local name=$1 offset=$2 module=$3
+  local port=$((BASE_PORT + offset))
+  echo "[dev-services] starting $name on :$port"
+  uvicorn "$module" --host 0.0.0.0 --port "$port" $reload_flag &
+  pids+=($!)
+}
+
+# Order matters loosely: bring up sidecars before the shell so the first
+# proxied request finds something on the other end.
+start knowledge  2 services.knowledge.main:app
+start ask        1 services.ask.main:app
+start transcribe 3 services.transcribe.main:app
+start speak      4 services.speak.main:app
+start browser    5 services.browser.main:app
+start shell      0 services.shell.main:app
+
+wait

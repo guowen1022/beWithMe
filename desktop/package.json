@@ -1,0 +1,39 @@
+{
+  "name": "bewithme-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "beWithMe desktop shell — Electron wrapper with embedded browser",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "start": "electron .",
+    "dev": "BEWITHME_DEV=1 electron .",
+    "dist:mac": "npm run build && electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.bewithme.desktop",
+    "productName": "beWithMe",
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../frontend/.next", "to": "frontend/.next" },
+      { "from": "../frontend/public", "to": "frontend/public" },
+      { "from": "../frontend/package.json", "to": "frontend/package.json" }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": ["dmg"],
+      "identity": null
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.4.5"
+  }
+}

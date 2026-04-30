@@ -8,7 +8,7 @@ beWithMe is a personalized reading assistant that uses episodic memory and a kno
 
 ## Architecture
 
-**Backend**: Python FastAPI (async) at `app/` — all DB operations use async SQLAlchemy with asyncpg.
+**Backend**: Six FastAPI processes — a thin shell at `services/shell/` (port `BASE_PORT`, default 8000) that proxies to five sidecars in `services/`: `ask`, `knowledge`, `transcribe`, `speak`, `browser`. The shell holds no DB session, no models, no Playwright. Domain logic, ORM models, and provider facades live in the shared library at `app/` (imported by every sidecar). All DB operations use async SQLAlchemy with asyncpg.
 **Frontend**: Next.js (App Router) at `frontend/` — proxies `/api/*` to the backend via `next.config.ts` rewrites.
 **Desktop**: Electron shell at `desktop/` — wraps the Next.js frontend and embeds a real Chromium browser pane alongside the reader. Same codebase targets macOS, Windows, and the web.
 **Database**: PostgreSQL with pgvector extension for 768-dim vector similarity search.
@@ -58,6 +58,23 @@ The backend serves two consumers through three domain layers:
    - Extracts concepts → upserts with HLR → creates temporal edges
    - Auto-distills categorical preferences if ≥10 new interactions
 
+### Sidecar topology
+
+Every sidecar binds to `BASE_PORT + offset` (offsets in `services/shell/proxy.py:SERVICE_OFFSETS`):
+
+| service | offset | runs |
+|---|---|---|
+| shell | +0 | pure HTTP proxy (CORS, no DB, no models) |
+| ask | +1 | `/api/ask`, `/api/interactions` (LLM, teacher agent) |
+| knowledge | +2 | health, users, profile, preferences, concepts, sessions, documents, goals, recommender |
+| transcribe | +3 | `/api/transcribe` (Whisper via pywhispercpp) |
+| speak | +4 | `/api/speak`, `/api/speak/stream` (Kokoro TTS) |
+| browser | +5 | `/api/browser/*` (Playwright); also `/api/browser/render` is called by knowledge for `/api/documents/url` |
+
+A deployer sets one env var (`BASE_PORT`) and the whole topology slides together — useful for running multiple environments side-by-side. Per-service overrides like `KNOWLEDGE_SERVICE_URL=http://other-host:9002` still win when set.
+
+The browser sidecar's `/api/browser/resume` calls knowledge's internal `/api/documents/from-extracted` to persist extracted pages; that's the only inter-sidecar call other than what the shell proxies.
+
 ### Other important patterns
 
 - **LLM provider facade**: `app/infra/model/llm.py` is a thin re-export that picks `app/infra/model/minimax/` or `app/infra/model/deepseek/` based on `settings.llm_provider`. Call sites import from the facade and never reach into a provider directly. Each backend is a singleton module-level client.
@@ -78,8 +95,15 @@ Electron wraps the existing web UI in a native Mac window. One file: `desktop/sr
 # Initialize database (creates DB, enables pgvector/uuid-ossp, creates tables)
 python scripts/init_db.py
 
-# Run dev server (port 8000)
-uvicorn app.main:app --reload
+# Run all 6 sidecars (shell on :8000 by default; sidecars on :8001..:8005)
+./scripts/dev-services.sh
+
+# Slide the whole topology to a different base port
+BASE_PORT=9000 ./scripts/dev-services.sh
+
+# Run a single sidecar (it picks its port from BASE_PORT + its offset)
+python -m services.transcribe          # → 8003
+BASE_PORT=9000 python -m services.ask  # → 9001
 
 # Run tests
 pytest

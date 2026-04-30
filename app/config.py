@@ -10,6 +10,12 @@ load_dotenv()
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://weng@localhost/bewithme"
     ollama_url: str = "http://localhost:11434"
+
+    # Sidecar topology. The shell binds to base_port, sidecars to base_port + offset
+    # (see services.shell.proxy.SERVICE_OFFSETS). Per-service URL overrides like
+    # ASK_SERVICE_URL still win when set, for cross-host deployments.
+    base_port: int = 8000
+    service_host: str = "localhost"
     # Active LLM provider — picks which backend in app/infra/model/ serves
     # all generate/stream calls. Override via LLM_PROVIDER env var.
     llm_provider: str = "deepseek"  # "minimax" | "deepseek"
