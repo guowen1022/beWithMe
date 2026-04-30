@@ -10,6 +10,7 @@ beWithMe is a personalized reading assistant that uses episodic memory and a kno
 
 **Backend**: Python FastAPI (async) at `app/` — all DB operations use async SQLAlchemy with asyncpg.
 **Frontend**: Next.js (App Router) at `frontend/` — proxies `/api/*` to the backend via `next.config.ts` rewrites.
+**Desktop**: Electron shell at `desktop/` — wraps the Next.js frontend and embeds a real Chromium browser pane alongside the reader. Same codebase targets macOS, Windows, and the web.
 **Database**: PostgreSQL with pgvector extension for 768-dim vector similarity search.
 **Embeddings**: Ollama running nomic-embed-text locally.
 **LLM**: Anthropic SDK pointed at a configurable base URL (currently MiniMax API).
@@ -59,12 +60,16 @@ The backend serves two consumers through three domain layers:
 
 ### Other important patterns
 
-- **Singleton LLM client**: `app/services/llm.py` uses a module-level client; `anthropic_base_url` in config redirects to a proxy/alternative provider
-- **Vector retrieval**: `app/services/retrieval.py` searches interactions and document chunks by cosine similarity via pgvector. Queries are boosted with the user's preference embedding (70% query, 30% preference)
+- **LLM provider facade**: `app/infra/model/llm.py` is a thin re-export that picks `app/infra/model/minimax/` or `app/infra/model/deepseek/` based on `settings.llm_provider`. Call sites import from the facade and never reach into a provider directly. Each backend is a singleton module-level client.
+- **Vector retrieval**: `app/infra/rag/retrieval.py` searches interactions and document chunks by cosine similarity via pgvector. Queries are boosted with the user's preference embedding (70% query, 30% preference)
 - **Document chunking**: 500-word chunks with 50-word overlap, embedded in background tasks
 - **`app/db_base.py`**: Shared SQLAlchemy `Base` class, extracted to avoid circular imports between modules
 - **Re-export stubs**: `app/models/preferences.py` and `app/models/concept.py` re-export from `silicon_brain/` sub-modules, preserving backward-compatible import paths
 - **Agent-generic brain builder**: The `AgentLearning` dataclass accepts a `source` field — any future agent (helper, calendar, etc.) feeds learnings through the same `process_learning()` pipeline
+
+### Desktop shell (`desktop/`)
+
+Electron wraps the existing web UI in a native Mac window. One file: `desktop/src/main.ts` opens a `BrowserWindow` that loads `http://localhost:3000/` — the same route the web target serves. No desktop-specific UI, no custom chrome, no extra Next.js routes. Window size/position persists to `$userData/window.json`.
 
 ## Commands
 
@@ -89,16 +94,51 @@ npm run build  # Production build
 npm run lint   # ESLint
 ```
 
+### Desktop (Electron)
+```bash
+# Install desktop deps (one-time)
+cd desktop && npm install && cd ..
+
+# Dev: starts backend + next dev + Electron together
+./scripts/dev-desktop.sh
+
+# Mac .dmg
+cd desktop && npm run dist:mac
+```
+
+### Benchmark
+End-to-end integration benchmark in `benchmark/`. Drives the live FastAPI backend with
+realistic reading/goal scenarios and saves timestamped results to `benchmark/results/`.
+Whatever `LLM_PROVIDER` is active in `.env` is what the benchmark exercises — switch
+providers by changing the env var and restarting the backend.
+```bash
+# Backend must be running (uvicorn) on :8000.
+python -m benchmark --scenario 1          # reading + Q&A scenario
+python -m benchmark --goal 1              # goal-planning scenario
+python -m benchmark --scenario 2 --reset  # wipe DB first
+```
+
 ## Environment Variables
 
-Configured via `.env` in project root (loaded by pydantic-settings):
+Configured via `.env` in project root. `app/config.py` calls `load_dotenv()` at import,
+so .env populates `os.environ` before any HTTP client is created — proxy vars
+(`http_proxy`, `https_proxy`, `no_proxy`) end up where httpx / openai SDK / anthropic
+SDK can see them. Provider URL/key/model fields have **no hardcoded defaults**; the
+facade in `app/infra/model/llm.py` validates that the active provider's vars are set
+and raises a clear `RuntimeError` at import otherwise.
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | PostgreSQL async connection string (`postgresql+asyncpg://...`) |
-| `OLLAMA_URL` | Ollama embedding server (default: `http://localhost:11434`) |
-| `ANTHROPIC_API_KEY` | API key for LLM provider |
-| `ANTHROPIC_BASE_URL` | Optional custom endpoint for Anthropic-compatible API |
+| `DATABASE_URL` | PostgreSQL async connection string (`postgresql+asyncpg://...`). |
+| `OLLAMA_URL` | Ollama embedding server (default: `http://localhost:11434`). |
+| `LLM_PROVIDER` | Active LLM backend: `minimax` or `deepseek` (default: `deepseek`). Dispatches to `app/infra/model/<provider>/llm.py`. |
+| `LLM_MODEL` | Model name for the MiniMax-via-Anthropic provider (e.g. `MiniMax-M2.7-highspeed`). Required when `LLM_PROVIDER=minimax`. |
+| `ANTHROPIC_API_KEY` | API key for the MiniMax-via-Anthropic provider. Required when `LLM_PROVIDER=minimax`. |
+| `ANTHROPIC_BASE_URL` | Custom Anthropic-compatible endpoint (e.g. MiniMax). Required when `LLM_PROVIDER=minimax`. |
+| `DEEPSEEK_API_KEY` | API key for the DeepSeek provider. Required when `LLM_PROVIDER=deepseek`. |
+| `DEEPSEEK_BASE_URL` | DeepSeek base URL (e.g. `https://api.deepseek.com`). Required when `LLM_PROVIDER=deepseek`. |
+| `DEEPSEEK_MODEL` | DeepSeek model name (e.g. `deepseek-v4-pro`). Required when `LLM_PROVIDER=deepseek`. |
+| `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com`. |
 
 ## Prerequisites
 

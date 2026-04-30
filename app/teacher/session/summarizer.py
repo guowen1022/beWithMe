@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.services.llm import generate
+from app.infra.model.llm import generate
 from app.teacher.session.models import SessionSummary
 from app.teacher.session.transcriber import DATA_DIR
 

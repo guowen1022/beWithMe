@@ -3,7 +3,7 @@
 import json
 import re
 from pathlib import Path
-from app.services.llm import generate
+from app.infra.model.llm import generate
 
 _SKILL_PROMPT_PATH = Path(__file__).resolve().parent.parent / "skills" / "goal_planning.md"
 

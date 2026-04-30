@@ -164,20 +164,32 @@ async def run_scenario(scenario: dict, base_url: str):
         print("RESULTS")
         print(f"{'='*60}")
 
-        resp = await client.get("/api/concepts", headers=headers)
-        concepts = resp.json()
+        # Tolerate post-test endpoint flakes — a 504 here shouldn't lose 12
+        # successful Q&A answers worth of data.
+        async def _safe_json(path, fallback):
+            try:
+                r = await client.get(path, headers=headers)
+                if r.status_code != 200:
+                    print(f"\n[warn] {path} -> {r.status_code}; using fallback")
+                    return fallback
+                return r.json()
+            except Exception as e:
+                print(f"\n[warn] {path} failed: {type(e).__name__}: {e}; using fallback")
+                return fallback
+
+        concepts = await _safe_json("/api/concepts", [])
         print(f"\nConcepts: {len(concepts)}")
         for c in concepts[:15]:
             print(f"  - {c['name']} ({c['state']}, x{c['encounter_count']})")
         if len(concepts) > 15:
             print(f"  ... and {len(concepts) - 15} more")
 
-        resp = await client.get("/api/graph", headers=headers)
-        graph = resp.json()
+        graph = await _safe_json("/api/graph", {"nodes": [], "edges": []})
         print(f"\nGraph: {len(graph['nodes'])} nodes, {len(graph['edges'])} edges")
 
-        resp = await client.get("/api/preferences", headers=headers)
-        prefs = resp.json()
+        prefs = await _safe_json("/api/preferences", {
+            "explanation_style": "?", "depth_preference": "?", "analogy_affinity": "?"
+        })
         print(f"\nPreferences: style={prefs['explanation_style']}, depth={prefs['depth_preference']}, analogy={prefs['analogy_affinity']}")
 
         # Show session transcripts and summaries

@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, async_session
 from app.silicon_brain.models.document import Document, DocumentChunk
 from app.silicon_brain.schemas import DocumentCreate, DocumentRead
-from app.silicon_brain.services.embedding import embed_batch
+from app.infra.rag.embedding import embed_batch
 from app.api.deps import get_current_user_id
-from app.services.web_fetch import fetch_readable, WebFetchError
+from app.infra.tools.web_fetch import fetch_readable, WebFetchError
 
 
 class UrlIngestRequest(BaseModel):

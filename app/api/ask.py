@@ -8,7 +8,7 @@ from app.database import get_db, async_session
 from app.silicon_brain.models.interaction import Interaction
 from app.teacher.schemas import AskRequest, AskResponse
 from app.teacher import assemble_context, parse_title
-from app.services.llm import generate_cached, stream_cached
+from app.infra.model.llm import generate_cached, stream_cached
 from app.silicon_brain.brain_builder.background import post_interaction_update
 from app.api.deps import get_current_user_id
 

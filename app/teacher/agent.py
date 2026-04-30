@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.silicon_brain.models.interaction import Interaction
 from app.silicon_brain.models.profile import Profile
 from app.teacher.schemas import AskRequest
-from app.silicon_brain.services.embedding import embed_text
-from app.silicon_brain.services.retrieval import search_document_chunks
+from app.infra.rag.embedding import embed_text
+from app.infra.rag.retrieval import search_document_chunks
 from app.silicon_brain.user_profile import get_user_profile, boost_query_embedding
 from app.silicon_brain.knowledge import get_graph_context, get_concepts
 from app.teacher.prompt import PromptParts, build_answer_prompt, build_history_messages
