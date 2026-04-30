@@ -18,7 +18,11 @@ from fastapi import FastAPI
 from infra.topology import service_port
 from persona.teacher.silicon_brain_client import SiliconBrainClient
 
-# Register teacher's models so SQLAlchemy create_all sees them.
+# Register every model on infra.db.Base so FK constraints resolve.
+# Teacher's tables FK to silicon_brain.users.id, so BOTH packages must be
+# imported even though this sidecar only writes teacher's tables — SQLAlchemy
+# walks the FK graph at flush() time and needs every referenced table visible.
+import silicon_brain.models  # noqa: F401
 import persona.teacher.models  # noqa: F401
 
 from services.persona.routers import (

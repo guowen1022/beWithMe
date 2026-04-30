@@ -44,10 +44,18 @@ elif _PROVIDER == "minimax":
         stream_cached,
         generate_json,
     )
+elif _PROVIDER == "fake":
+    # E2E test provider — deterministic canned tokens. No API key needed.
+    from infra.model.fake.llm import (  # noqa: F401
+        generate,
+        generate_cached,
+        stream_cached,
+        generate_json,
+    )
 else:
     raise ValueError(
         f"Unknown LLM_PROVIDER: {settings.llm_provider!r} "
-        "(expected 'minimax' or 'deepseek')"
+        "(expected 'minimax', 'deepseek', or 'fake')"
     )
 
 __all__ = ["generate", "generate_cached", "stream_cached", "generate_json"]

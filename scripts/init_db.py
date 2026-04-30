@@ -1,148 +1,42 @@
-"""Create the bewithme database and run the schema."""
+"""Create the bewithme database and apply the schema.
+
+Schema is sourced from the SQLAlchemy models — every model declared on
+`infra.db.Base` becomes a table here. To add a new table, just write the
+model class; this script picks it up automatically on the next run.
+
+Run anytime — `create_all` is idempotent (won't recreate existing tables).
+The legacy `MIGRATE` block at the bottom handles ALTERs for dev DBs that
+predate today's schema (e.g., adding `user_id` columns to old tables).
+"""
 import asyncio
+import sys
+from pathlib import Path
+
+# Make the project root importable when invoked as `python scripts/init_db.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import asyncpg
 
 
-SCHEMA = """
+# Connection target — `postgres` (admin DB) for CREATE DATABASE,
+# then `bewithme` for the schema.
+ADMIN_URL = "postgresql://weng@localhost/postgres"
+DB_NAME = "bewithme"
+APP_URL = f"postgresql://weng@localhost/{DB_NAME}"
+
+
+# Extensions must exist before SQLAlchemy create_all can create vector columns.
+EXTENSIONS = """
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    username TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS profile (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    self_description TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS interactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID NOT NULL,
-    parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL,
-    title VARCHAR(200),
-    passage_text TEXT,
-    question TEXT NOT NULL,
-    answer TEXT NOT NULL,
-    source_document TEXT,
-    embedding vector(768),
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_interactions_session ON interactions(session_id);
-CREATE INDEX IF NOT EXISTS idx_interactions_created ON interactions(created_at DESC);
--- idx_interactions_parent is created in MIGRATE, after the column is added
--- on existing databases.
-
-CREATE TABLE IF NOT EXISTS documents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    title TEXT NOT NULL,
-    filename TEXT,
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS document_chunks (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    embedding vector(768),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc ON document_chunks(document_id);
-
-CREATE TABLE IF NOT EXISTS learning_preferences (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    explanation_style TEXT NOT NULL DEFAULT 'balanced',
-    depth_preference TEXT NOT NULL DEFAULT 'moderate',
-    analogy_affinity TEXT NOT NULL DEFAULT 'moderate',
-    math_comfort TEXT NOT NULL DEFAULT 'moderate',
-    pacing TEXT NOT NULL DEFAULT 'moderate',
-    meta_notes TEXT NOT NULL DEFAULT '',
-    interaction_count INTEGER NOT NULL DEFAULT 0,
-    last_distilled_at TIMESTAMPTZ,
-    preference_embedding vector(768),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS concept_nodes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name TEXT UNIQUE NOT NULL,
-    state TEXT NOT NULL DEFAULT 'new',
-    encounter_count INTEGER NOT NULL DEFAULT 1,
-    half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0,
-    last_recalled_at TIMESTAMPTZ,
-    first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_concept_nodes_name ON concept_nodes(name);
-CREATE INDEX IF NOT EXISTS idx_concept_nodes_last_seen ON concept_nodes(last_seen DESC);
-
-CREATE TABLE IF NOT EXISTS session_summaries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    session_id UUID NOT NULL,
-    file_path TEXT NOT NULL,
-    labels TEXT[],
-    embedding vector(768),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_id, session_id)
-);
-CREATE INDEX IF NOT EXISTS idx_session_summaries_user ON session_summaries(user_id);
-CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id);
-
-CREATE TABLE IF NOT EXISTS learning_goals (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    dag JSONB NOT NULL DEFAULT '{"nodes":[],"edges":[]}',
-    transcript JSONB NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL DEFAULT 'planning',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_learning_goals_user ON learning_goals(user_id);
-
-CREATE TABLE IF NOT EXISTS concept_edges (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    source_id UUID NOT NULL REFERENCES concept_nodes(id) ON DELETE CASCADE,
-    target_id UUID NOT NULL REFERENCES concept_nodes(id) ON DELETE CASCADE,
-    edge_type TEXT NOT NULL DEFAULT 'temporal',
-    weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    context TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_reinforced TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS recommendations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    category TEXT NOT NULL,
-    title TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    reasoning TEXT NOT NULL,
-    url TEXT,
-    concept_names JSONB DEFAULT '[]',
-    priority DOUBLE PRECISION NOT NULL DEFAULT 0.5,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS idx_recommendations_user_status ON recommendations(user_id, status);
 """
 
+
+# Legacy ALTERs for dev DBs that predate the current schema. Each is
+# idempotent (IF NOT EXISTS / DO $$ BEGIN ... IF NOT EXISTS). Safe to re-run.
 MIGRATE = """
 -- Add labels array to existing session_summaries tables
-ALTER TABLE session_summaries ADD COLUMN IF NOT EXISTS labels TEXT[];
--- Migrate old domain column to labels if it exists
+ALTER TABLE IF EXISTS session_summaries ADD COLUMN IF NOT EXISTS labels TEXT[];
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='session_summaries' AND column_name='domain') THEN
         UPDATE session_summaries SET labels = ARRAY[domain] WHERE domain IS NOT NULL AND labels IS NULL;
@@ -150,32 +44,24 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Add HLR columns to existing concept_nodes tables
-ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
-ALTER TABLE concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
+-- HLR columns on existing concept_nodes
+ALTER TABLE IF EXISTS concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
+ALTER TABLE IF EXISTS concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
 
--- Add preference embedding to existing learning_preferences tables
-ALTER TABLE learning_preferences ADD COLUMN IF NOT EXISTS preference_embedding vector(768);
-
--- Recursive question: parent link + title for each interaction
-ALTER TABLE interactions ADD COLUMN IF NOT EXISTS parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL;
-ALTER TABLE interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);
+-- Recursive question on existing interactions
+ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL;
+ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);
 CREATE INDEX IF NOT EXISTS idx_interactions_parent ON interactions(parent_interaction_id);
 
--- Multi-tenancy migration: ensure users table exists and has default user
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    username TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- Default user (used by some legacy data and tests)
 INSERT INTO users (id, username) VALUES ('00000000-0000-0000-0000-000000000000', 'default')
     ON CONFLICT (username) DO NOTHING;
 
--- Add user_id columns with default for backfill, then make NOT NULL
+-- Backfill user_id columns on legacy tables that pre-date multi-tenancy.
 DO $$
 BEGIN
-    -- profile
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profile' AND column_name='user_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='profile')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profile' AND column_name='user_id') THEN
         ALTER TABLE profile ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
         UPDATE profile SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
         ALTER TABLE profile ALTER COLUMN user_id SET NOT NULL;
@@ -184,8 +70,8 @@ BEGIN
         ALTER TABLE profile ADD CONSTRAINT profile_user_id_key UNIQUE (user_id);
     END IF;
 
-    -- interactions
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='interactions' AND column_name='user_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='interactions')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='interactions' AND column_name='user_id') THEN
         ALTER TABLE interactions ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
         UPDATE interactions SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
         ALTER TABLE interactions ALTER COLUMN user_id SET NOT NULL;
@@ -193,8 +79,8 @@ BEGIN
         CREATE INDEX IF NOT EXISTS idx_interactions_user ON interactions(user_id);
     END IF;
 
-    -- documents
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='documents' AND column_name='user_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='documents')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='documents' AND column_name='user_id') THEN
         ALTER TABLE documents ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
         UPDATE documents SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
         ALTER TABLE documents ALTER COLUMN user_id SET NOT NULL;
@@ -202,31 +88,20 @@ BEGIN
         CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
     END IF;
 
-    -- learning_preferences
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='learning_preferences' AND column_name='user_id') THEN
-        ALTER TABLE learning_preferences ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
-        UPDATE learning_preferences SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
-        ALTER TABLE learning_preferences ALTER COLUMN user_id SET NOT NULL;
-        ALTER TABLE learning_preferences ALTER COLUMN user_id DROP DEFAULT;
-        CREATE INDEX IF NOT EXISTS idx_learning_preferences_user ON learning_preferences(user_id);
-        ALTER TABLE learning_preferences ADD CONSTRAINT learning_preferences_user_id_key UNIQUE (user_id);
-    END IF;
-
-    -- concept_nodes
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='concept_nodes' AND column_name='user_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='concept_nodes')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='concept_nodes' AND column_name='user_id') THEN
         ALTER TABLE concept_nodes ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
         UPDATE concept_nodes SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
         ALTER TABLE concept_nodes ALTER COLUMN user_id SET NOT NULL;
         ALTER TABLE concept_nodes ALTER COLUMN user_id DROP DEFAULT;
         CREATE INDEX IF NOT EXISTS idx_concept_nodes_user ON concept_nodes(user_id);
-        -- Replace the old unique constraint on name with composite (user_id, name)
         ALTER TABLE concept_nodes DROP CONSTRAINT IF EXISTS concept_nodes_name_key;
         DROP INDEX IF EXISTS concept_nodes_name_key;
         ALTER TABLE concept_nodes ADD CONSTRAINT concept_nodes_user_id_name_key UNIQUE (user_id, name);
     END IF;
 
-    -- concept_edges
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='concept_edges' AND column_name='user_id') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='concept_edges')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='concept_edges' AND column_name='user_id') THEN
         ALTER TABLE concept_edges ADD COLUMN user_id UUID DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES users(id) ON DELETE CASCADE;
         UPDATE concept_edges SET user_id = '00000000-0000-0000-0000-000000000000' WHERE user_id IS NULL;
         ALTER TABLE concept_edges ALTER COLUMN user_id SET NOT NULL;
@@ -237,31 +112,57 @@ END $$;
 """
 
 
-async def main():
-    # Connect to default 'postgres' DB to create our database
+async def _create_database_if_missing() -> None:
+    conn = await asyncpg.connect(ADMIN_URL)
     try:
-        conn = await asyncpg.connect("postgresql://weng@localhost/postgres")
-        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = 'bewithme'")
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", DB_NAME)
         if not exists:
-            await conn.execute("CREATE DATABASE bewithme")
-            print("Created database 'bewithme'")
+            await conn.execute(f'CREATE DATABASE "{DB_NAME}"')
+            print(f"Created database '{DB_NAME}'")
         else:
-            print("Database 'bewithme' already exists")
+            print(f"Database '{DB_NAME}' already exists")
+    finally:
         await conn.close()
-    except Exception as e:
-        print(f"Error creating database: {e}")
-        return
 
-    # Connect to bewithme and run schema
-    conn = await asyncpg.connect("postgresql://weng@localhost/bewithme")
-    await conn.execute(SCHEMA)
-    print("Schema created successfully")
 
-    # Run migrations for existing databases
-    await conn.execute(MIGRATE)
-    print("Migrations applied")
+async def _enable_extensions_and_migrate() -> None:
+    conn = await asyncpg.connect(APP_URL)
+    try:
+        await conn.execute(EXTENSIONS)
+        # MIGRATE runs after create_all (below) so legacy ALTERs apply against
+        # tables that exist. But we run extensions here first so create_all
+        # can use the vector type.
+    finally:
+        await conn.close()
 
-    await conn.close()
+
+async def _run_migrate() -> None:
+    """Idempotent legacy ALTERs for older dev DBs."""
+    conn = await asyncpg.connect(APP_URL)
+    try:
+        await conn.execute(MIGRATE)
+    finally:
+        await conn.close()
+
+
+async def _create_all_models() -> None:
+    """Apply the schema from SQLAlchemy models — every Base subclass becomes a table."""
+    # Importing these registers every model's class on infra.db.Base.metadata.
+    import silicon_brain.models  # noqa: F401  — User, Profile, Document, DocumentChunk, UserPreferences
+    import persona.teacher.models  # noqa: F401  — Interaction, LearningGoal, Recommendation, LearningSession, TeacherPreferenceModel, ConceptNode, ConceptEdge
+    from infra.db import Base, engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print("Schema applied (SQLAlchemy create_all)")
+
+
+async def main() -> None:
+    await _create_database_if_missing()
+    await _enable_extensions_and_migrate()
+    await _create_all_models()
+    await _run_migrate()
+    print("init_db: done")
 
 
 if __name__ == "__main__":

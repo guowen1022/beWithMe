@@ -82,6 +82,9 @@ def services() -> Iterator[dict]:
     env.pop("BROWSER_HEADED", None)
     # Make sure each subprocess can find the project root on sys.path.
     env["PYTHONPATH"] = f"{REPO_ROOT}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    # Use the deterministic fake LLM so e2e exercises the real DB path
+    # without burning real API quota or hitting network.
+    env["LLM_PROVIDER"] = "fake"
 
     procs: list[tuple[str, int, subprocess.Popen]] = []
 
