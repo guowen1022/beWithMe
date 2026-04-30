@@ -20,3 +20,4 @@ frontend/out/
 data/browser_profile/
 data/sessions/
 benchmark/results/
+.*.swp
