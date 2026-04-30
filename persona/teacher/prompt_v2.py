@@ -19,8 +19,8 @@ from infra.hlr import compute_mastery, mastery_to_state
 
 if TYPE_CHECKING:
     from silicon_brain.models.document import DocumentChunk
-    from silicon_brain.user_profile.state import UserProfileState
-    from silicon_brain.knowledge.models import ConceptNode
+    from persona.teacher.preferences.state import UserProfileState
+    from persona.teacher.knowledge.models import ConceptNode
 
 _SKILLS_DIR = Path(__file__).parent / "skills"
 

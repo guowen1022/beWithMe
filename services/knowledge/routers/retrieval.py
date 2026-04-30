@@ -1,7 +1,11 @@
-"""Vector-search HTTP APIs persona consumes."""
+"""Vector search over silicon_brain user data (Documents).
+
+Past-session-summary search has moved to teacher's internal code (the
+`session_summaries` table belongs to teacher now). Only document-chunk
+search remains here, since DocumentChunks are user uploads.
+"""
 from __future__ import annotations
 
-from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -10,9 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
-from infra.contracts import DocumentChunkDTO, SummaryDTO
+from infra.contracts import DocumentChunkDTO
 from infra.db import get_db
-from silicon_brain.retrieval import search_document_chunks
 
 
 router = APIRouter()
@@ -30,47 +33,20 @@ async def retrieve_document_chunks(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(parse_user_id),
 ):
-    chunks = await search_document_chunks(db, body.document_id, body.query_embedding, top_k=body.top_k)
-    return [DocumentChunkDTO.model_validate(c) for c in chunks]
-
-
-class _PastSummariesRequest(BaseModel):
-    query_embedding: list[float]
-    top_k: int = 3
-
-
-@router.post("/retrieval/past-summaries", response_model=list[SummaryDTO])
-async def retrieve_past_summaries(
-    body: _PastSummariesRequest,
-    db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(parse_user_id),
-):
-    """Mirror of persona/teacher/session/summarizer.search_past_summaries.
-
-    Vector search over `session_summaries` then read the on-disk summary file.
-    """
     stmt = text("""
-        SELECT session_id, file_path, embedding <=> :embedding AS distance
-        FROM session_summaries
-        WHERE user_id = :user_id AND embedding IS NOT NULL
+        SELECT id, document_id, chunk_index, text
+        FROM document_chunks
+        WHERE document_id = :doc_id AND embedding IS NOT NULL
         ORDER BY embedding <=> :embedding
         LIMIT :limit
     """)
     result = await db.execute(stmt, {
-        "user_id": str(user_id),
+        "doc_id": str(body.document_id),
         "embedding": str(body.query_embedding),
         "limit": body.top_k,
     })
     rows = result.fetchall()
-
-    out: list[SummaryDTO] = []
-    for session_id, file_path, distance in rows:
-        path = Path(file_path)
-        content = path.read_text(encoding="utf-8") if path.exists() else ""
-        out.append(SummaryDTO(
-            session_id=session_id,
-            file_path=file_path,
-            similarity=1.0 - float(distance),
-            content=content,
-        ))
-    return out
+    return [
+        DocumentChunkDTO(id=r[0], document_id=r[1], chunk_index=r[2], text=r[3])
+        for r in rows
+    ]

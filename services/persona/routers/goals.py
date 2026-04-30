@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db
 from infra.auth import parse_user_id as get_current_user_id
-from silicon_brain.models.goal import LearningGoal
+from persona.teacher.models.learning_goal import LearningGoal
 from persona.teacher.goals.planner import plan_initial, plan_expand, plan_feedback
 
 router = APIRouter()

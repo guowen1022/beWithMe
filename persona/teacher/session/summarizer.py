@@ -1,16 +1,13 @@
-"""Session summarizer — async process that turns transcripts into summaries.
+"""Session summarizer — turns transcripts into summaries; persists to LearningSession.
 
 Three clean layers:
-  1. summarize_transcript(text)        → pure LLM call (text → text)
-  2. summarize_file(t_path, s_path)    → file op (read transcript, write summary)
-  3. index_summary(user_id, session_id, s_path, client)
-                                       → embed + upsert SessionSummary via the client
+  1. summarize_transcript(text)              — pure LLM call (text → text)
+  2. summarize_file(t_path, s_path)          — file op (read transcript, write summary)
+  3. index_summary(db, user_id, session_id, s_path)
+                                              — embed + upsert LearningSession (own DB)
 
-An orchestrator `process_unsummarized()` scans the user's session directory
-for transcripts missing a summary and delegates to the layers above.
-
-Persona-side: persona never touches silicon_brain ORM. The vector retrieval
-also goes through the client (`/api/retrieval/past-summaries`).
+`process_unsummarized()` scans the user's session directory for transcripts
+missing a summary and runs the three layers.
 """
 from __future__ import annotations
 
@@ -20,18 +17,20 @@ from pathlib import Path
 from typing import List, Optional
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.config import settings
-from infra.contracts import SessionSummaryUpsertDTO, SummaryDTO
+from infra.db import async_session
 from infra.model.llm import generate
+
+from persona.teacher.models.learning_session import LearningSession
 from persona.teacher.session.transcriber import DATA_DIR
-from persona.teacher.silicon_brain_client import SiliconBrainClient
 
 
-# Path to the skill prompt — the sole source of instructions for the LLM
 _SKILL_PROMPT_PATH = Path(__file__).resolve().parent.parent / "skills" / "summarize_session.md"
 
-# Local Ollama embedding client (infra-side; persona doesn't talk to silicon_brain for this).
+# Local Ollama embedding client.
 _embed_client: Optional[httpx.AsyncClient] = None
 
 
@@ -44,20 +43,20 @@ def _get_embed_client() -> httpx.AsyncClient:
 
 async def _embed_text(text_input: str) -> List[float]:
     client = _get_embed_client()
-    resp = await client.post("/api/embed", json={"model": settings.embedding_model, "input": text_input})
+    resp = await client.post(
+        "/api/embed", json={"model": settings.embedding_model, "input": text_input}
+    )
     resp.raise_for_status()
     return resp.json()["embeddings"][0]
 
 
 def load_skill_prompt() -> str:
-    """Read the summarization skill prompt from disk."""
     return _SKILL_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 # -------- Layer 1: pure LLM call --------
 
 async def summarize_transcript(transcript_text: str) -> str:
-    """Pure transformation: transcript text → summary markdown."""
     skill_prompt = load_skill_prompt()
     return await generate(transcript_text, system=skill_prompt, max_tokens=4096)
 
@@ -65,7 +64,6 @@ async def summarize_transcript(transcript_text: str) -> str:
 # -------- Layer 2: file operation --------
 
 async def summarize_file(transcript_path: Path, summary_path: Path) -> str:
-    """Read transcript.md, summarize it, write summary.md. Return summary text."""
     transcript_text = transcript_path.read_text(encoding="utf-8")
     summary_text = await summarize_transcript(transcript_text)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,15 +71,15 @@ async def summarize_file(transcript_path: Path, summary_path: Path) -> str:
     return summary_text
 
 
-# -------- Layer 3: index operation --------
+# -------- Layer 3: index (write to LearningSession, own DB) --------
 
 async def index_summary(
+    db: AsyncSession,
     user_id: uuid.UUID,
     session_id: uuid.UUID,
     summary_path: Path,
-    client: SiliconBrainClient,
-) -> SummaryDTO:
-    """Embed the summary file, extract labels, upsert via the silicon_brain client."""
+) -> LearningSession:
+    """Embed the summary file, extract labels, upsert LearningSession (own DB)."""
     summary_text = summary_path.read_text(encoding="utf-8")
     embedding = await _embed_text(summary_text)
 
@@ -90,21 +88,41 @@ async def index_summary(
     if labels_match:
         labels = [l.strip() for l in labels_match.group(1).split(",") if l.strip()]
 
-    return await client.upsert_session_summary(
-        user_id,
-        SessionSummaryUpsertDTO(
+    # Upsert by (user_id, session_id) UNIQUE.
+    result = await db.execute(
+        select(LearningSession).where(
+            LearningSession.user_id == user_id,
+            LearningSession.session_id == session_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = LearningSession(
+            user_id=user_id,
             session_id=session_id,
             file_path=str(summary_path),
             labels=labels,
             embedding=embedding,
-        ),
-    )
+        )
+        db.add(row)
+    else:
+        row.file_path = str(summary_path)
+        row.labels = labels
+        row.embedding = embedding
+
+    await db.commit()
+    await db.refresh(row)
+    return row
 
 
 # -------- Orchestrator --------
 
-async def process_unsummarized(user_id: uuid.UUID, client: SiliconBrainClient) -> list[str]:
-    """Find transcripts without a summary and process each one. Idempotent."""
+async def process_unsummarized(user_id: uuid.UUID) -> list[str]:
+    """Find transcripts without a summary and process each. Idempotent.
+
+    Opens its own DB session — typically called from a background task after
+    the originating request has completed.
+    """
     user_dir = DATA_DIR / str(user_id)
     if not user_dir.exists():
         return []
@@ -114,7 +132,6 @@ async def process_unsummarized(user_id: uuid.UUID, client: SiliconBrainClient) -
     for session_dir in user_dir.iterdir():
         if not session_dir.is_dir():
             continue
-
         t_path = session_dir / "transcript.md"
         s_path = session_dir / "summary.md"
 
@@ -128,23 +145,11 @@ async def process_unsummarized(user_id: uuid.UUID, client: SiliconBrainClient) -
 
         try:
             await summarize_file(t_path, s_path)
-            await index_summary(user_id, session_id, s_path, client)
+            async with async_session() as db:
+                await index_summary(db, user_id, session_id, s_path)
             summarized.append(str(session_id))
             print(f"[summarizer] Summarized session {session_id} → {s_path}", flush=True)
         except Exception as e:
             print(f"[summarizer] Failed to summarize session {session_id}: {e}", flush=True)
 
     return summarized
-
-
-# -------- Retrieval --------
-
-async def search_past_summaries(
-    user_id: uuid.UUID,
-    query_embedding: List[float],
-    client: SiliconBrainClient,
-    *,
-    top_k: int = 3,
-) -> list[SummaryDTO]:
-    """Search past session summaries via the silicon_brain client."""
-    return await client.search_past_summaries(user_id, query_embedding, top_k=top_k)

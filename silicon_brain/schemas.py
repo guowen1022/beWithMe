@@ -1,4 +1,4 @@
-"""Silicon brain schemas — data shapes for user profile, interactions, documents."""
+"""silicon_brain schemas — neutral user-data shapes (Profile, Document)."""
 
 from typing import Optional
 from uuid import UUID
@@ -13,18 +13,6 @@ class ProfileRead(BaseModel):
 
 class ProfileUpdate(BaseModel):
     self_description: str
-
-
-class InteractionRead(BaseModel):
-    id: UUID
-    session_id: UUID
-    passage_text: Optional[str]
-    question: str
-    answer: str
-    source_document: Optional[str]
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class DocumentCreate(BaseModel):

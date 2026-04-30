@@ -3,7 +3,7 @@
 import uuid
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.knowledge import parse_concepts, upsert_concepts, link_concepts
+from persona.teacher.knowledge import parse_concepts, upsert_concepts, link_concepts
 
 
 async def build_concepts(

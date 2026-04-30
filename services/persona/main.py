@@ -18,8 +18,12 @@ from fastapi import FastAPI
 from infra.topology import service_port
 from persona.teacher.silicon_brain_client import SiliconBrainClient
 
+# Register teacher's models so SQLAlchemy create_all sees them.
+import persona.teacher.models  # noqa: F401
+
 from services.persona.routers import (
     ask as ask_router,
+    concepts as concepts_router,
     goals as goals_router,
     interactions as interactions_router,
     recommender as recommender_router,
@@ -42,6 +46,7 @@ app.include_router(interactions_router.router, prefix="/api")
 app.include_router(recommender_router.router, prefix="/api")
 app.include_router(goals_router.router, prefix="/api")
 app.include_router(sessions_router.router, prefix="/api")
+app.include_router(concepts_router.router, prefix="/api")
 
 
 def main() -> None:

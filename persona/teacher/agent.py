@@ -1,14 +1,13 @@
-"""Teacher agent context assembly — reads the silicon brain over HTTP and builds the LLM prompt.
+"""Teacher agent context assembly.
 
-The teacher's core loop:
-  1. Read learner state via the silicon_brain HTTP client (no DB session).
-  2. Build a personalized prompt.
-  3. Return a TeacherContext ready for the LLM.
+Reads from two sources:
+  * silicon_brain (over HTTP via SiliconBrainClient) — neutral user data:
+    Profile/self_description, UserPreferences (user-stated), DocumentChunks.
+  * teacher's own DB tables (direct ORM via infra.db) — Interaction history,
+    ConceptNodes, LearningSessions, TeacherPreferenceModel.
 
-Persona never touches silicon_brain ORM directly. Every read goes through
-`SiliconBrainClient`. Type hints from silicon_brain are TYPE_CHECKING-guarded
-in `prompt.py` / `prompt_v2.py`; at runtime the prompt builders accept
-duck-typed DTOs from `infra.contracts`.
+The split mirrors the architectural rule: persona never reaches into
+silicon_brain ORM. Anything teacher-authored is teacher-direct-DB.
 """
 from __future__ import annotations
 
@@ -16,8 +15,14 @@ import uuid
 from dataclasses import dataclass
 from typing import List
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from infra.rag.embedding import embed_text
 
+from persona.teacher.knowledge import get_concepts, get_graph_context
+from persona.teacher.models.interaction import Interaction
+from persona.teacher.preferences import boost_query_embedding, get_user_profile
 from persona.teacher.prompt import PromptParts, build_answer_prompt, build_history_messages
 from persona.teacher.prompt_v2 import build_answer_prompt as build_answer_prompt_v2
 from persona.teacher.schemas import AskRequest
@@ -41,19 +46,34 @@ class TeacherContext:
 async def assemble_context(
     body: AskRequest,
     user_id: uuid.UUID,
+    db: AsyncSession,
     client: SiliconBrainClient,
 ) -> TeacherContext:
-    """Read the silicon brain (over HTTP) and assemble the teacher's context."""
-    # 1. Brain state — composite read in one call: profile + preferences + concepts + graph_context.
-    brain = await client.get_brain_state(
-        user_id, session_id=body.session_id, concept_limit=30
-    )
-    self_description = brain.self_description
-    user_profile = brain.profile
-    concept_nodes = brain.concept_nodes
-    graph_ctx = brain.graph_context
+    """Read silicon_brain (HTTP) + teacher's own DB and assemble context."""
+    # 1a. Self-description — silicon_brain user data.
+    try:
+        profile = await client.get_profile(user_id)
+        self_description = profile.self_description if profile else ""
+    except Exception as e:
+        print(f"[teacher] get_profile error: {e}", flush=True)
+        self_description = ""
 
-    # 2. Embed the query (infra-side, no silicon_brain involvement).
+    # 1b. Teacher's preference state (categorical + embedding) — own DB.
+    user_profile = await get_user_profile(db, user_id, session_id=body.session_id)
+
+    # 1c. Concept mastery snapshot — own DB.
+    concept_nodes = await get_concepts(db, user_id, limit=30)
+
+    # 1d. Graph context — own DB.
+    graph_ctx = ""
+    if concept_nodes:
+        try:
+            concept_names = [c.name for c in concept_nodes[:10]]
+            graph_ctx = await get_graph_context(db, user_id, concept_names)
+        except Exception as e:
+            print(f"[teacher] graph walk error: {e}", flush=True)
+
+    # 2. Embed the query (infra; no DB involvement).
     embed_context = body.selected_text or body.passage_text or ""
     query_text = (embed_context + " " + body.question) if embed_context else body.question
     try:
@@ -61,14 +81,14 @@ async def assemble_context(
     except Exception:
         query_embedding = None
 
-    # 3. Boost the query with the user's preference embedding (if any).
+    # 3. Boost the query with the teacher's preference embedding (own DB).
     if query_embedding:
         try:
-            query_embedding = await client.boost_embedding(user_id, query_embedding)
+            query_embedding = await boost_query_embedding(db, user_id, query_embedding)
         except Exception as e:
             print(f"[teacher] boost embedding error: {e}", flush=True)
 
-    # 4. Retrieve relevant document chunks (vector search via knowledge sidecar).
+    # 4. Retrieve relevant document chunks — silicon_brain side, via HTTP.
     doc_chunks: list = []
     if body.document_id and query_embedding:
         try:
@@ -78,22 +98,22 @@ async def assemble_context(
         except Exception as e:
             print(f"[teacher] doc-chunk search error: {e}", flush=True)
 
-    # 5. Past session summaries (vector search over session_summaries).
+    # 5. Past learning sessions — teacher's own DB (LearningSession table).
     if query_embedding:
         try:
-            past_summaries = await client.search_past_summaries(user_id, query_embedding, top_k=2)
+            past_summaries = await _search_past_summaries(db, user_id, query_embedding, top_k=2)
             if past_summaries:
                 summary_lines = ["RELEVANT PAST LEARNING SESSIONS:"]
                 for s in past_summaries:
-                    if s.content:
-                        summary_lines.append(f"---\n{s.content}\n---")
+                    if s.get("content"):
+                        summary_lines.append(f"---\n{s['content']}\n---")
                 past_ctx = "\n".join(summary_lines)
                 graph_ctx = f"{graph_ctx}\n\n{past_ctx}" if graph_ctx else past_ctx
         except Exception as e:
             print(f"[teacher] past summary search error: {e}", flush=True)
 
-    # 6. Session history → multi-turn messages.
-    prior_interactions = await client.get_session_history(user_id, body.session_id)
+    # 6. Session history — own DB.
+    prior_interactions = await _fetch_session_history(db, user_id, body.session_id)
     prior_messages = build_history_messages(prior_interactions)
 
     # 7. Build the prompt.
@@ -110,3 +130,53 @@ async def assemble_context(
     )
 
     return TeacherContext(parts=parts, prior_messages=prior_messages)
+
+
+async def _fetch_session_history(
+    db: AsyncSession, user_id: uuid.UUID, session_id: uuid.UUID
+) -> list[Interaction]:
+    """Chronological session history — teacher's own Interaction table."""
+    stmt = (
+        select(Interaction)
+        .where(Interaction.user_id == user_id, Interaction.session_id == session_id)
+        .order_by(Interaction.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def _search_past_summaries(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    query_embedding: list[float],
+    top_k: int = 3,
+) -> list[dict]:
+    """Vector search over LearningSession (was SessionSummary)."""
+    from pathlib import Path
+    from sqlalchemy import text
+
+    stmt = text("""
+        SELECT session_id, file_path, embedding <=> :embedding AS distance
+        FROM session_summaries
+        WHERE user_id = :user_id AND embedding IS NOT NULL
+        ORDER BY embedding <=> :embedding
+        LIMIT :limit
+    """)
+    result = await db.execute(stmt, {
+        "user_id": str(user_id),
+        "embedding": str(query_embedding),
+        "limit": top_k,
+    })
+    rows = result.fetchall()
+
+    out = []
+    for session_id, file_path, distance in rows:
+        path = Path(file_path)
+        content = path.read_text(encoding="utf-8") if path.exists() else ""
+        out.append({
+            "session_id": str(session_id),
+            "file_path": file_path,
+            "similarity": 1.0 - float(distance),
+            "content": content,
+        })
+    return out

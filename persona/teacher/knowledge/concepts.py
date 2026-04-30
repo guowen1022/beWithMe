@@ -5,7 +5,7 @@ from typing import List
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.knowledge.models import ConceptNode
+from persona.teacher.knowledge.models import ConceptNode
 from infra.hlr import INITIAL_HALF_LIFE, compute_mastery, update_half_life, mastery_to_state
 
 

@@ -1,14 +1,20 @@
-"""Session transcriber — saves a timestamped transcript of a learning session to disk."""
+"""Session transcriber — writes a timestamped transcript to disk.
+
+Reads Interaction directly from teacher's own DB (Interaction is teacher's data).
+"""
 from __future__ import annotations
 
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from persona.teacher.models.interaction import Interaction
 
 if TYPE_CHECKING:
-    from infra.contracts import InteractionDTO
+    pass
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "sessions"
 
@@ -20,7 +26,7 @@ def _format_timestamp(dt) -> str:
     return dt.strftime("[%Y-%m-%d %H:%M]")
 
 
-def build_transcript(interactions: "list[InteractionDTO]", passage_text: str = "") -> str:
+def build_transcript(interactions: list[Interaction], passage_text: str = "") -> str:
     """Format session interactions into a timestamped transcript.
 
     Each exchange is formatted as:
@@ -42,10 +48,8 @@ def build_transcript(interactions: "list[InteractionDTO]", passage_text: str = "
     for interaction in interactions:
         ts = _format_timestamp(interaction.created_at)
 
-        # Show selected text if the user highlighted something
         if interaction.question:
             lines.append(f"{ts} **User**: {interaction.question}")
-
         if interaction.answer:
             lines.append(f"{ts} **Teacher**: {interaction.answer}")
 
@@ -55,24 +59,28 @@ def build_transcript(interactions: "list[InteractionDTO]", passage_text: str = "
 
 
 def transcript_path(user_id: uuid.UUID, session_id: uuid.UUID) -> Path:
-    """Return the file path for a session transcript."""
     return DATA_DIR / str(user_id) / str(session_id) / "transcript.md"
 
 
 def summary_path(user_id: uuid.UUID, session_id: uuid.UUID) -> Path:
-    """Return the file path for a session summary."""
     return DATA_DIR / str(user_id) / str(session_id) / "summary.md"
 
 
 async def save_transcript(
+    db: AsyncSession,
     user_id: uuid.UUID,
     session_id: uuid.UUID,
-    client: SiliconBrainClient,
 ) -> Path:
-    """Fetch all interactions for a session via the silicon_brain client and write
-    the transcript to disk. Returns the path to the written file.
+    """Fetch all interactions for a session and write the transcript to disk.
+    Returns the path to the written file.
     """
-    interactions = await client.get_session_history(user_id, session_id)
+    stmt = (
+        select(Interaction)
+        .where(Interaction.user_id == user_id, Interaction.session_id == session_id)
+        .order_by(Interaction.created_at.asc())
+    )
+    result = await db.execute(stmt)
+    interactions = list(result.scalars().all())
     if not interactions:
         raise ValueError(f"No interactions found for session {session_id}")
 
@@ -88,5 +96,4 @@ async def save_transcript(
         f"({len(interactions)} interactions) to {path}",
         flush=True,
     )
-
     return path

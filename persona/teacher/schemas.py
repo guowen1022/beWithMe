@@ -29,3 +29,16 @@ class AskResponse(BaseModel):
     session_id: UUID
     title: Optional[str] = None
     related_interaction_ids: List[UUID] = []
+
+
+class InteractionRead(BaseModel):
+    """Persona-side interaction read shape (used by GET /api/interactions)."""
+    id: UUID
+    session_id: Optional[UUID] = None
+    passage_text: Optional[str] = None
+    question: str
+    answer: str
+    source_document: Optional[str] = None
+    created_at: Optional[object] = None  # datetime; loose type to keep imports light
+
+    model_config = {"from_attributes": True}

@@ -5,7 +5,7 @@ from datetime import datetime
 from itertools import combinations
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.knowledge.models import ConceptNode, ConceptEdge
+from persona.teacher.knowledge.models import ConceptNode, ConceptEdge
 from infra.hlr import DECAY_HALF_LIFE_DAYS
 
 

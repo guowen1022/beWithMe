@@ -17,10 +17,10 @@ from datetime import datetime
 from infra.hlr import compute_mastery, mastery_to_state
 
 if TYPE_CHECKING:
-    from silicon_brain.models.interaction import Interaction
+    from persona.teacher.models.interaction import Interaction
     from silicon_brain.models.document import DocumentChunk
-    from silicon_brain.user_profile.state import UserProfileState
-    from silicon_brain.knowledge.models import ConceptNode
+    from persona.teacher.preferences.state import UserProfileState
+    from persona.teacher.knowledge.models import ConceptNode
 
 
 _TITLE_RE = re.compile(r"^\s*TITLE:\s*(.+?)\s*(?:\n+|$)", re.IGNORECASE)

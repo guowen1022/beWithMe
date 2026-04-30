@@ -3,12 +3,12 @@
 import uuid
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.user_profile import (
+from persona.teacher.preferences import (
     should_auto_distill,
     distill_preferences,
     get_or_create_preferences,
 )
-from silicon_brain.user_profile.ema import ema_update, zero_embedding
+from persona.teacher.preferences.ema import ema_update, zero_embedding
 
 
 async def update_preference_embedding(

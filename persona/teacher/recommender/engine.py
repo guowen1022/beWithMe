@@ -1,8 +1,7 @@
 """Recommendation engine — LLM + web search sources.
 
-Stateless: takes a user_id + SiliconBrainClient + (optional) BrowserContext.
-Reads brain state via the client. Persists results via the client. No DB
-session, no silicon_brain ORM imports.
+Reads teacher's brain state directly from teacher's own DB. Persists
+Recommendation rows directly to teacher's DB. silicon_brain not involved.
 """
 from __future__ import annotations
 
@@ -12,12 +11,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from playwright.async_api import BrowserContext
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from infra.contracts import BrainStateDTO, RecommendationCreateDTO, RecommendationDTO
 from infra.hlr import compute_mastery, mastery_to_state
 from infra.model import llm
 from infra.tools.web_fetch import fetch_readable, WebFetchError
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+
+from persona.teacher.knowledge import get_concepts, get_graph_context
+from persona.teacher.models.recommendation import Recommendation
+from persona.teacher.preferences import get_user_profile
 
 
 RECOMMEND_SYSTEM_PROMPT = """\
@@ -55,22 +58,26 @@ Prioritize:
 Respond with ONLY the JSON array, no other text."""
 
 
-def _build_learner_snapshot(brain: BrainStateDTO, concept_masteries: list[dict]) -> str:
+def _build_learner_snapshot(
+    self_description: str,
+    profile,  # UserProfileState
+    concept_masteries: list[dict],
+    graph_context: str,
+) -> str:
     """Build a text snapshot of the learner for the LLM prompt."""
     parts: list[str] = []
 
-    if brain.self_description:
-        parts.append(f"## Learner Background\n{brain.self_description}")
+    if self_description:
+        parts.append(f"## Learner Background\n{self_description}")
 
-    if brain.profile:
-        p = brain.profile
+    if profile is not None:
         parts.append(
             "## Learning Preferences\n"
-            f"- Explanation style: {p.explanation_style}\n"
-            f"- Depth: {p.depth_preference}\n"
-            f"- Analogy affinity: {p.analogy_affinity}\n"
-            f"- Math comfort: {p.math_comfort}\n"
-            f"- Pacing: {p.pacing}"
+            f"- Explanation style: {profile.explanation_style}\n"
+            f"- Depth: {profile.depth_preference}\n"
+            f"- Analogy affinity: {profile.analogy_affinity}\n"
+            f"- Math comfort: {profile.math_comfort}\n"
+            f"- Pacing: {profile.pacing}"
         )
 
     if concept_masteries:
@@ -82,8 +89,8 @@ def _build_learner_snapshot(brain: BrainStateDTO, concept_masteries: list[dict])
             )
         parts.append(f"## Concept Mastery ({len(concept_masteries)} concepts)\n" + "\n".join(lines))
 
-    if brain.graph_context:
-        parts.append(f"## Knowledge Graph Context\n{brain.graph_context}")
+    if graph_context:
+        parts.append(f"## Knowledge Graph Context\n{graph_context}")
 
     return "\n\n".join(parts)
 
@@ -96,20 +103,56 @@ def _strip_code_fence(raw: str) -> str:
     return raw
 
 
-async def generate_llm_recommendations(
+async def _replace_active(
+    db: AsyncSession,
     user_id: uuid.UUID,
-    client: SiliconBrainClient,
-) -> list[RecommendationDTO]:
+    source: str,
+    new_rows: list[Recommendation],
+) -> list[Recommendation]:
+    """Transactionally delete active recs of `source`, insert new batch."""
+    await db.execute(
+        delete(Recommendation).where(
+            Recommendation.user_id == user_id,
+            Recommendation.source == source,
+            Recommendation.status == "active",
+        )
+    )
+    for r in new_rows:
+        db.add(r)
+    await db.commit()
+    for r in new_rows:
+        await db.refresh(r)
+    return new_rows
+
+
+async def generate_llm_recommendations(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    self_description: str,
+) -> list[Recommendation]:
     """Generate recommendations by having the LLM reason about the user's learning state.
 
-    Replaces active LLM recommendations transactionally via the client.
+    Replaces active LLM recommendations transactionally.
+
+    `self_description` is read by the caller from silicon_brain via the client
+    and passed in (we don't import silicon_brain here).
     """
-    brain = await client.get_brain_state(user_id, concept_limit=50)
+    profile = await get_user_profile(db, user_id)
+    concept_nodes = await get_concepts(db, user_id, limit=50)
+
+    graph_context = ""
+    if concept_nodes:
+        try:
+            graph_context = await get_graph_context(
+                db, user_id, [c.name for c in concept_nodes[:10]]
+            )
+        except Exception as e:
+            print(f"[recommender] graph walk error: {e}", flush=True)
 
     # Compute current mastery for each concept (HLR is stateless infra math).
     now = datetime.now(timezone.utc)
     concept_masteries: list[dict] = []
-    for node in brain.concept_nodes:
+    for node in concept_nodes:
         ref_time = node.last_recalled_at or node.last_seen
         if ref_time is None:
             hours_since = 0.0
@@ -127,7 +170,7 @@ async def generate_llm_recommendations(
             "half_life": node.half_life_hours or 0.0,
         })
 
-    snapshot = _build_learner_snapshot(brain, concept_masteries)
+    snapshot = _build_learner_snapshot(self_description, profile, concept_masteries, graph_context)
     prompt = f"Here is the learner's current state:\n\n{snapshot}\n\nGenerate recommendations."
 
     raw = await llm.generate(prompt, system=RECOMMEND_SYSTEM_PROMPT, max_tokens=2048)
@@ -138,8 +181,9 @@ async def generate_llm_recommendations(
         return []
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    recs = [
-        RecommendationCreateDTO(
+    rows = [
+        Recommendation(
+            user_id=user_id,
             source="llm",
             category=item.get("category", "explore"),
             title=item.get("title", ""),
@@ -147,25 +191,24 @@ async def generate_llm_recommendations(
             reasoning=item.get("reasoning", ""),
             concept_names=item.get("concept_names", []),
             priority=float(item.get("priority", 0.5)),
+            status="active",
             expires_at=expires_at,
         )
         for item in items
     ]
-
-    return await client.replace_active_recommendations(user_id, "llm", recs)
+    return await _replace_active(db, user_id, "llm", rows)
 
 
 async def generate_web_recommendations(
+    db: AsyncSession,
     user_id: uuid.UUID,
     browser_context: BrowserContext,
-    client: SiliconBrainClient,
-    llm_recommendations: Optional[list[RecommendationDTO]] = None,
-) -> list[RecommendationDTO]:
+    llm_recommendations: Optional[list[Recommendation]] = None,
+) -> list[Recommendation]:
     """Search the web for content relevant to the user's learning gaps.
 
-    Replaces active web recommendations transactionally via the client.
+    Replaces active web recommendations transactionally.
     """
-    # Build search queries from upstream LLM recommendations.
     search_queries: list[str] = []
     if llm_recommendations:
         for rec in llm_recommendations:
@@ -186,7 +229,7 @@ async def generate_web_recommendations(
         return []
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=3)
-    new_recs: list[RecommendationCreateDTO] = []
+    new_rows: list[Recommendation] = []
 
     for query in search_queries[:3]:
         search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
@@ -213,7 +256,8 @@ async def generate_web_recommendations(
         if not evaluation.get("useful", False):
             continue
 
-        new_recs.append(RecommendationCreateDTO(
+        new_rows.append(Recommendation(
+            user_id=user_id,
             source="web",
             category="article",
             title=evaluation.get("title", title),
@@ -221,8 +265,9 @@ async def generate_web_recommendations(
             reasoning=f"Found via search for: {query}",
             concept_names=query.split()[:3],
             priority=float(evaluation.get("priority", 0.4)),
+            status="active",
             expires_at=expires_at,
             url=search_url,
         ))
 
-    return await client.replace_active_recommendations(user_id, "web", new_recs)
+    return await _replace_active(db, user_id, "web", new_rows)

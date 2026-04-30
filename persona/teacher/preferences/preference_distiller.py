@@ -1,13 +1,19 @@
-"""LLM-based distillation of learning preferences from interaction history."""
+"""LLM-based distillation of the teacher's preference model from interaction history.
 
+Writes to `TeacherPreferenceModel` (teacher's interpretation), NOT to
+`UserPreferences` (user's own statements). Those are different sources of
+truth. The user's view is set via `PUT /api/preferences`; this distiller
+runs in the background to update teacher's view.
+"""
 import json
 import re
 import uuid
 from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.models.interaction import Interaction
-from silicon_brain.user_profile.models import LearningPreferences
+
+from persona.teacher.models.interaction import Interaction
+from persona.teacher.models.teacher_preference_model import TeacherPreferenceModel
 from infra.model.llm import generate
 
 DISTILL_PROMPT = """Analyze these recent reading interactions and produce a learning preferences profile.
@@ -27,21 +33,26 @@ Based on how the user asks questions, what they focus on, what confuses them, an
 Return ONLY valid JSON, no other text."""
 
 
-async def get_or_create_preferences(db: AsyncSession, user_id: uuid.UUID) -> LearningPreferences:
+async def get_or_create_preferences(
+    db: AsyncSession, user_id: uuid.UUID
+) -> TeacherPreferenceModel:
+    """Get-or-create teacher's preference model for a user."""
     result = await db.execute(
-        select(LearningPreferences).where(LearningPreferences.user_id == user_id)
+        select(TeacherPreferenceModel).where(TeacherPreferenceModel.user_id == user_id)
     )
     prefs = result.scalar_one_or_none()
     if not prefs:
-        prefs = LearningPreferences(user_id=user_id)
+        prefs = TeacherPreferenceModel(user_id=user_id)
         db.add(prefs)
         await db.commit()
         await db.refresh(prefs)
     return prefs
 
 
-async def distill_preferences(db: AsyncSession, user_id: uuid.UUID) -> LearningPreferences:
-    """Distill learning preferences from recent interactions."""
+async def distill_preferences(
+    db: AsyncSession, user_id: uuid.UUID
+) -> TeacherPreferenceModel:
+    """Distill teacher's view of preferences from recent interactions."""
     result = await db.execute(
         select(Interaction)
         .where(Interaction.user_id == user_id)
@@ -103,12 +114,16 @@ async def distill_preferences(db: AsyncSession, user_id: uuid.UUID) -> LearningP
 
     await db.commit()
     await db.refresh(prefs)
-    print(f"[distiller] Distilled: style={prefs.explanation_style}, depth={prefs.depth_preference}, meta={prefs.meta_notes[:80]}")
+    print(
+        f"[distiller] Distilled (teacher view): "
+        f"style={prefs.explanation_style}, depth={prefs.depth_preference}, "
+        f"meta={prefs.meta_notes[:80]}"
+    )
     return prefs
 
 
 async def should_auto_distill(db: AsyncSession, user_id: uuid.UUID) -> bool:
-    """Check if enough new interactions have accumulated to trigger auto-distillation."""
+    """Whether enough new interactions have accumulated to trigger an auto-distill."""
     prefs = await get_or_create_preferences(db, user_id)
     last = prefs.last_distilled_at
 

@@ -8,6 +8,6 @@ and integrates them into the user's silicon brain:
   - Auto-distills categorical preferences
 """
 
-from silicon_brain.brain_builder.ingester import AgentLearning, process_learning
+from persona.teacher.brain_builder.ingester import AgentLearning, process_learning
 
 __all__ = ["AgentLearning", "process_learning"]

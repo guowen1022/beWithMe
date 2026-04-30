@@ -10,7 +10,12 @@ from infra.db import Base
 from infra.config import settings
 
 
-class SessionSummary(Base):
+class LearningSession(Base):
+    """Teacher's notes about one learning session with the user.
+
+    Renamed from SessionSummary. The DB table name stays `session_summaries`
+    for migration continuity.
+    """
     __tablename__ = "session_summaries"
     __table_args__ = (
         UniqueConstraint("user_id", "session_id", name="uq_session_summaries_user_session"),

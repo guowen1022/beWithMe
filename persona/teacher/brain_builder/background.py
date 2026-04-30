@@ -3,8 +3,8 @@
 import uuid
 from sqlalchemy import update
 from infra.db import async_session
-from silicon_brain.models.interaction import Interaction
-from silicon_brain.brain_builder import AgentLearning, process_learning
+from persona.teacher.models.interaction import Interaction
+from persona.teacher.brain_builder import AgentLearning, process_learning
 
 
 async def post_interaction_update(interaction_id: uuid.UUID, user_id: uuid.UUID):

@@ -1,29 +1,40 @@
-"""User profile state: preferences, session signals, and preference embedding."""
+"""Teacher's preference view of the user — assembled from TeacherPreferenceModel.
+
+The Pydantic shape here is teacher's *view* of preferences: distilled
+categorical labels, the EMA-blended preference embedding, and session
+signals. The user's own stated preferences (UserPreferences in
+silicon_brain) are a separate source of truth and are not exposed here.
+"""
 
 import uuid
 from typing import Optional, List
-from datetime import datetime
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.user_profile.ema import boost_query
-from silicon_brain.user_profile.preference_distiller import get_or_create_preferences
-from silicon_brain.models.interaction import Interaction
+from persona.teacher.preferences.ema import boost_query
+from persona.teacher.preferences.preference_distiller import get_or_create_preferences
+from persona.teacher.models.interaction import Interaction
 
 
 class UserProfileState(BaseModel):
-    """Static user preferences — what the user_profile module owns."""
-    # Durable preferences (categorical labels)
+    """Teacher's preference view of the user.
+
+    Naming kept as-is during migration to minimize churn. Mental model:
+    this is `TeacherPreferenceState` — what the teacher infers about how
+    the user learns, NOT the user's own statement.
+    """
     explanation_style: str = "balanced"
     depth_preference: str = "moderate"
     analogy_affinity: str = "moderate"
     math_comfort: str = "moderate"
     pacing: str = "moderate"
     meta_notes: str = ""
-    # Preference embedding (dense user fingerprint)
     preference_embedding: Optional[List[float]] = None
-    # Session signals
     session_interest_summary: Optional[str] = None
+
+
+# Alias for callers that prefer the clearer name.
+TeacherPreferenceState = UserProfileState
 
 
 async def get_user_profile(

@@ -5,12 +5,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
-from silicon_brain.models.interaction import Interaction
+from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title
 from persona.teacher.silicon_brain_client import SiliconBrainClient
 from infra.model.llm import generate_cached, stream_cached
-from silicon_brain.brain_builder.background import post_interaction_update
+from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
 
 router = APIRouter()
@@ -31,11 +31,12 @@ def _get_client(request: Request) -> SiliconBrainClient:
 async def ask_stream(
     body: AskRequest,
     request: Request,
+    db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     """SSE endpoint with streaming — detects proxy search events."""
     client = _get_client(request)
-    ctx = await assemble_context(body, user_id, client)
+    ctx = await assemble_context(body, user_id, db, client)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -178,7 +179,7 @@ async def ask(
     user_id: UUID = Depends(get_current_user_id),
 ):
     client = _get_client(request)
-    ctx = await assemble_context(body, user_id, client)
+    ctx = await assemble_context(body, user_id, db, client)
     answer, _ = await generate_cached(
         ctx.parts.static_system,
         ctx.parts.static_user_passage,

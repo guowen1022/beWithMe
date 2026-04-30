@@ -1,9 +1,9 @@
-"""Recommendation HTTP routes.
+"""Recommendation HTTP routes — served by the persona sidecar.
 
-This router is currently mounted by services/knowledge during the migration.
-Per the user, routers don't belong in persona — this file moves to
-`services/persona/routers/recommender.py` in the persona-sidecar step. For now
-it lives here but uses the silicon_brain HTTP client (no DB session, no ORM).
+Recommendations are teacher's data; this router queries teacher's own DB
+directly (no SiliconBrainClient roundtrip). The narrow client is only used
+to fetch the user's `self_description` (silicon_brain Profile) when the LLM
+generation needs it.
 """
 from __future__ import annotations
 
@@ -11,9 +11,14 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
 from infra.contracts import RecommendationDTO
+from infra.db import get_db
+
+from persona.teacher.models.recommendation import Recommendation
 from persona.teacher.recommender.engine import (
     generate_llm_recommendations,
     generate_web_recommendations,
@@ -25,9 +30,6 @@ router = APIRouter(tags=["recommendations"])
 
 
 def _get_client(request: Request) -> SiliconBrainClient:
-    """Per-request client lookup. Knowledge sidecar's lifespan creates one and
-    stashes it on app.state.brain_client. If absent (sidecar not yet wired),
-    fall back to a fresh per-call client."""
     client = getattr(request.app.state, "brain_client", None)
     if client is None:
         client = SiliconBrainClient()
@@ -37,45 +39,65 @@ def _get_client(request: Request) -> SiliconBrainClient:
 
 @router.get("/recommendations", response_model=list[RecommendationDTO])
 async def list_recommendations(
-    request: Request,
     source: Optional[str] = None,
     category: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
     user_id: uuid.UUID = Depends(parse_user_id),
 ):
-    client = _get_client(request)
-    return await client.list_recommendations(user_id, source=source, category=category)
+    stmt = (
+        select(Recommendation)
+        .where(Recommendation.user_id == user_id, Recommendation.status == "active")
+        .order_by(Recommendation.priority.desc())
+    )
+    if source:
+        stmt = stmt.where(Recommendation.source == source)
+    if category:
+        stmt = stmt.where(Recommendation.category == category)
+
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return [RecommendationDTO.model_validate(r) for r in rows]
 
 
 @router.post("/recommendations/generate", response_model=list[RecommendationDTO])
 async def generate_recommendations(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     user_id: uuid.UUID = Depends(parse_user_id),
 ):
     """Trigger recommendation regeneration (LLM + web)."""
     client = _get_client(request)
 
-    llm_recs = await generate_llm_recommendations(user_id, client)
+    # Fetch user's self_description from silicon_brain (neutral data).
+    self_description = ""
+    try:
+        profile = await client.get_profile(user_id)
+        self_description = profile.self_description if profile else ""
+    except Exception as e:
+        print(f"[recommender] could not fetch profile: {e}", flush=True)
 
-    web_recs: list[RecommendationDTO] = []
+    llm_recs = await generate_llm_recommendations(db, user_id, self_description)
+
+    web_recs = []
     try:
         browser_context = request.app.state.browser_context
-        web_recs = await generate_web_recommendations(user_id, browser_context, client, llm_recs)
+        web_recs = await generate_web_recommendations(db, user_id, browser_context, llm_recs)
     except AttributeError:
-        # No Playwright in this process (e.g. knowledge sidecar) — skip web.
+        # No Playwright in this process — skip web.
         pass
     except Exception as e:
         print(f"[recommender] Web recommendation generation failed: {e}", flush=True)
 
     all_recs = list(llm_recs) + list(web_recs)
     all_recs.sort(key=lambda r: r.priority, reverse=True)
-    return all_recs
+    return [RecommendationDTO.model_validate(r) for r in all_recs]
 
 
 @router.patch("/recommendations/{recommendation_id}", response_model=RecommendationDTO)
 async def update_recommendation(
     recommendation_id: uuid.UUID,
     body: dict,
-    request: Request,
+    db: AsyncSession = Depends(get_db),
     user_id: uuid.UUID = Depends(parse_user_id),
 ):
     """Update recommendation status (dismiss or accept)."""
@@ -83,5 +105,17 @@ async def update_recommendation(
     if status not in ("dismissed", "accepted"):
         raise HTTPException(status_code=400, detail="Status must be 'dismissed' or 'accepted'")
 
-    client = _get_client(request)
-    return await client.update_recommendation_status(user_id, recommendation_id, status)
+    result = await db.execute(
+        select(Recommendation).where(
+            Recommendation.id == recommendation_id,
+            Recommendation.user_id == user_id,
+        )
+    )
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    rec.status = status
+    await db.commit()
+    await db.refresh(rec)
+    return RecommendationDTO.model_validate(rec)

@@ -267,12 +267,12 @@ The current codebase implements the foundation but not the full vision. Don't be
 | infra | auth, topology, contracts, model, rag, tools/web_fetch | ✅ | clean leaf, dep-graph rules enforced |
 | infra | persistence machinery (Base, engine, session, get_db) at `infra/db.py` | ✅ | shared root; every domain inherits from `infra.db.Base` |
 | infra | DATABASE_URL in `infra/config.py` | ✅ | one Postgres URL, shared across domains |
-| silicon_brain | user-scoped models, knowledge graph, brain_builder, retrieval | ✅ | every table has `user_id`; non-user data goes elsewhere |
-| silicon_brain | exposed via knowledge sidecar HTTP face | ✅ | persona reads/writes via the typed client |
-| Persona | teacher | ✅ | runtime decoupled from silicon_brain over HTTP |
+| silicon_brain | shrunk to neutral user data (User, Profile, Document, DocumentChunk, UserPreferences) | ✅ | every table has `user_id`; teacher-authored data lives in persona/teacher/ |
+| silicon_brain | exposed via knowledge sidecar HTTP face | ✅ | persona reads it via the narrow `SiliconBrainClient` (3 methods) |
+| Persona | teacher | ✅ | runtime decoupled from silicon_brain; reads its own data via direct DB |
+| Persona | per-persona own-tables (teacher owns Interaction, ConceptNode, LearningGoal, Recommendation, LearningSession, TeacherPreferenceModel) | ✅ | declared on `infra.db.Base`; queried directly without HTTP |
 | Persona | helper | ❌ | placeholder dir TBD |
 | Persona | engineer | ❌ | needed for frontend-dynamic |
-| Persona | per-persona own-tables capability | ✅ (capability) / ❌ (usage) | architecture supports it (Base in infra); no persona has private models yet |
 | Persona | tool registry per persona | ❌ | persona-side tool dispatch not yet implemented |
 | Tools | tools/ top-level package | ❌ | tools currently live as static FastAPI routers in `services/persona/routers/` |
 | Tools | typed Tool protocol | ❌ | DTOs exist (`infra/contracts/`) but no `Tool` interface |

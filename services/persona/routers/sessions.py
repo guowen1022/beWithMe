@@ -10,8 +10,7 @@ from infra.db import get_db
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.session.transcriber import save_transcript
 from persona.teacher.session.summarizer import process_unsummarized
-from persona.teacher.silicon_brain_client import SiliconBrainClient
-from silicon_brain.models.session_summary import SessionSummary
+from persona.teacher.models.learning_session import LearningSession as SessionSummary
 
 router = APIRouter()
 
@@ -19,27 +18,19 @@ router = APIRouter()
 _background_tasks: set = set()
 
 
-def _get_client(request: Request) -> SiliconBrainClient:
-    client = getattr(request.app.state, "brain_client", None)
-    if client is None:
-        client = SiliconBrainClient()
-        request.app.state.brain_client = client
-    return client
-
-
 @router.post("/sessions/{session_id}/end")
 async def end_session(
     session_id: UUID,
-    request: Request,
+    db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     """End a learning session: save transcript, then summarize in background."""
-    client = _get_client(request)
-    path = await save_transcript(user_id, session_id, client)
+    path = await save_transcript(db, user_id, session_id)
 
     async def _summarize():
         try:
-            await process_unsummarized(user_id, client)
+            # Background task — opens its own DB session.
+            await process_unsummarized(user_id)
         except Exception as e:
             print(f"[sessions] background summarize error: {e}", flush=True)
 

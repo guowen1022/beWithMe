@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.knowledge.models import ConceptNode, ConceptEdge
+from persona.teacher.knowledge.models import ConceptNode, ConceptEdge
 from infra.hlr import compute_mastery, mastery_to_state
 
 

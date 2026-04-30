@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db
-from silicon_brain.models.interaction import Interaction
-from silicon_brain.schemas import InteractionRead
-from silicon_brain.brain_builder.background import post_interaction_update
+from persona.teacher.models.interaction import Interaction
+from persona.teacher.schemas import InteractionRead
+from persona.teacher.brain_builder.background import post_interaction_update
 from persona.teacher.schemas import SignalRequest
 from infra.auth import parse_user_id as get_current_user_id
 

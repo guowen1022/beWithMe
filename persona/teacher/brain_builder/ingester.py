@@ -10,8 +10,8 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.rag.embedding import embed_text
-from silicon_brain.brain_builder.concept_builder import build_concepts
-from silicon_brain.brain_builder.preference_builder import update_preference_embedding, maybe_distill
+from persona.teacher.brain_builder.concept_builder import build_concepts
+from persona.teacher.brain_builder.preference_builder import update_preference_embedding, maybe_distill
 
 
 @dataclass

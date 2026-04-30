@@ -60,6 +60,8 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "recommendations": "persona",
     "goals":           "persona",
     "sessions":        "persona",
+    "concepts":        "persona",   # teacher's mastery model (ConceptNode)
+    "graph":           "persona",   # teacher's concept graph data
     # Stateless infra
     "transcribe": "transcribe",
     "speak":      "speak",
