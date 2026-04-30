@@ -631,8 +631,14 @@ export async function transcribeAudio(
   fd.append("file", blob, filename);
   fd.append("language", language);
   if (initialPrompt) fd.append("initial_prompt", initialPrompt);
+  // Don't use authHeaders() — that sets Content-Type: application/json, which
+  // would override fetch's auto-generated multipart boundary on FormData.
+  const userId = getCurrentUserId();
+  const headers: Record<string, string> = {};
+  if (userId) headers["X-User-Id"] = userId;
   const res = await fetch(`${API_BASE}/transcribe`, {
     method: "POST",
+    headers,
     body: fd,
   });
   if (!res.ok) {
@@ -650,7 +656,7 @@ export async function speakText(
 ): Promise<Blob> {
   const res = await fetch(`${API_BASE}/speak`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ text, ...opts }),
   });
   if (!res.ok) {
@@ -672,7 +678,7 @@ export async function speakTextStream(
   const { signal, ...body } = opts;
   const res = await fetch(`${API_BASE}/speak/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({ text, ...body }),
     signal,
   });

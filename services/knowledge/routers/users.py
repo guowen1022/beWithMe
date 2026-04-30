@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db
-from app.silicon_brain.models.user import User
+from silicon_brain.db import get_db
+from silicon_brain.models.user import User
 
 router = APIRouter()
 

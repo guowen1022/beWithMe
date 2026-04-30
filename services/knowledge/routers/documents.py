@@ -11,12 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from app.database import get_db, async_session
-from app.silicon_brain.models.document import Document, DocumentChunk
-from app.silicon_brain.schemas import DocumentCreate, DocumentRead
-from app.infra.rag.embedding import embed_batch
-from app.auth import parse_user_id as get_current_user_id
-from services.shell.proxy import upstream_url
+from silicon_brain.db import get_db, async_session
+from silicon_brain.models.document import Document, DocumentChunk
+from silicon_brain.schemas import DocumentCreate, DocumentRead
+from infra.rag.embedding import embed_batch
+from infra.auth import parse_user_id as get_current_user_id
+from infra.topology import upstream_url
 
 
 class UrlIngestRequest(BaseModel):

@@ -29,8 +29,8 @@ from fastapi.responses import JSONResponse
 from playwright.async_api import async_playwright
 from pydantic import BaseModel, HttpUrl
 
-from app.infra.tools.web_fetch import fetch_readable, WebFetchError
-from services.shell.proxy import service_port, upstream_url
+from infra.tools.web_fetch import fetch_readable, WebFetchError
+from infra.topology import service_port, upstream_url
 
 
 BROWSER_PROFILE_DIR = Path("data/browser_profile")

@@ -82,7 +82,7 @@ export default function QuestionBar({
     const prompt = committedRef.current.slice(-150);
     (async () => {
       try {
-        const { text } = await transcribeAudio(wav, "en", prompt);
+        const { text } = await transcribeAudio(wav, "auto", prompt);
         if (phraseId !== activePhraseRef.current) return;
         const clean = text.trim();
         interimRef.current = clean;
@@ -101,7 +101,7 @@ export default function QuestionBar({
     const prompt = committedRef.current.slice(-150);
     const task = (async () => {
       try {
-        const { text } = await transcribeAudio(wav, "en", prompt);
+        const { text } = await transcribeAudio(wav, "auto", prompt);
         const clean = text.trim();
         // Only clear the interim for *this* phrase — a later phrase may
         // already be producing its own interim by the time we land.

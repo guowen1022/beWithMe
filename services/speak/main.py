@@ -15,12 +15,37 @@ import re
 import wave
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 
-from app.config import settings
-from services.shell.proxy import service_port
+from infra.topology import service_port
+
+
+# Kokoro config is local to this sidecar — no other module needs these paths.
+load_dotenv()
+
+
+class SpeakSettings(BaseSettings):
+    # Local TTS (kokoro-onnx). Models live under beWithMe's own app-support dir.
+    kokoro_model_path: str = (
+        "/Users/weng/Library/Application Support/beWithMe/models/kokoro/kokoro-v1.0.onnx"
+    )
+    kokoro_voices_path: str = (
+        "/Users/weng/Library/Application Support/beWithMe/models/kokoro/voices-v1.0.bin"
+    )
+    kokoro_voice: str = "af_heart"
+    kokoro_speed: float = 1.0
+    kokoro_lang: str = "en-us"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+settings = SpeakSettings()
 
 
 router = APIRouter()

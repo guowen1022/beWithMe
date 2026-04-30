@@ -16,10 +16,30 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
+from pydantic_settings import BaseSettings
 
-from app.config import settings
-from services.shell.proxy import service_port
+from infra.topology import service_port
+
+
+# Whisper config is local to this sidecar — no other module needs these paths.
+load_dotenv()
+
+
+class TranscribeSettings(BaseSettings):
+    # Local Whisper (pywhispercpp). Reuses Superwhisper's model by default.
+    whisper_model_path: str = (
+        "/Users/weng/Library/Application Support/Superwhisper/ggml-small.bin"
+    )
+    whisper_threads: int = 4
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+settings = TranscribeSettings()
 
 
 router = APIRouter()

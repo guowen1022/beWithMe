@@ -8,7 +8,19 @@ beWithMe is a personalized reading assistant that uses episodic memory and a kno
 
 ## Architecture
 
-**Backend**: Six FastAPI processes — a thin shell at `services/shell/` (port `BASE_PORT`, default 8000) that proxies to five sidecars in `services/`: `ask`, `knowledge`, `transcribe`, `speak`, `browser`. The shell holds no DB session, no models, no Playwright. Domain logic, ORM models, and provider facades live in the shared library at `app/` (imported by every sidecar). All DB operations use async SQLAlchemy with asyncpg.
+**Backend**: Six FastAPI processes — a thin shell at `services/shell/` (port `BASE_PORT`, default 8000) that proxies to five sidecars in `services/`: `persona`, `knowledge`, `transcribe`, `speak`, `browser`. The shell holds no DB session, no models, no Playwright.
+
+**Control flow**: The frontend talks to the **persona sidecar** (the teacher), which decides which other services to call. Persona reads/writes silicon_brain state over HTTP via a typed client (`persona/teacher/silicon_brain_client.py`); it never imports silicon_brain ORM at runtime. Services feed persona; the relationship is never reversed.
+
+The codebase is split into directional top-level packages. There is no `app/` — every layer has its own home:
+
+- **`config.yaml`** (root) — only the truly cross-cutting deployment knobs: `base_port`, `service_host`. Loaded by `infra/topology.py`.
+- **`infra/`** — stateless foundation. `auth.py` (header-only `parse_user_id`), `topology.py` (port + URL helpers), `config.py` (Ollama / LLM env), `contracts/` (DTOs shared on the wire between persona and silicon_brain), `hlr.py` (half-life regression math), `model/` (LLM provider facade), `rag/embedding.py`, `tools/web_fetch.py`. Imported by everyone, depends on no one.
+- **`silicon_brain/`** — domain library: ORM models, persistence (`db.py` owns `Base`, `engine`, `async_session`, FastAPI `get_db`), `config.py` (`DATABASE_URL`), knowledge graph, brain_builder, retrieval. Depends on `infra` only. Reached by persona ONLY through the knowledge sidecar's HTTP API.
+- **`persona/`** — top-level container for personas. Today only `persona/teacher/` exists (agent.py, prompt.py, prompt_v2.py, recommender/, session/, goals/, skills/, schemas.py, silicon_brain_client.py). At runtime the teacher imports only `infra` and the typed `SiliconBrainClient`; type hints into silicon_brain shapes are TYPE_CHECKING-guarded so they don't create runtime coupling. Future siblings (`persona/helper/`, etc.) live alongside.
+- **`services/`** — six sidecars (shell, persona, knowledge, transcribe, speak, browser). HTTP routers live here, never inside `persona/`. Sidecar-local config (Whisper paths in `services/transcribe`, Kokoro paths in `services/speak`) lives with the sidecar. Depend on everything above.
+
+All DB operations use async SQLAlchemy with asyncpg.
 **Frontend**: Next.js (App Router) at `frontend/` — proxies `/api/*` to the backend via `next.config.ts` rewrites.
 **Desktop**: Electron shell at `desktop/` — wraps the Next.js frontend and embeds a real Chromium browser pane alongside the reader. Same codebase targets macOS, Windows, and the web.
 **Database**: PostgreSQL with pgvector extension for 768-dim vector similarity search.
@@ -19,7 +31,7 @@ beWithMe is a personalized reading assistant that uses episodic memory and a kno
 
 The backend serves two consumers through three domain layers:
 
-**`app/silicon_brain/`** — The user's auto-profile (READ interface). Any agent can read this to understand the learner.
+**`silicon_brain/`** (top-level, standalone) — The user's auto-profile (READ interface). Any agent can read this to understand the learner.
 - `state.py` — `BrainState` facade: assembles full learner snapshot (profile + concepts + graph) for any agent
 - `user_profile/` — Static preferences, preference embedding, session signals
   - `models.py` — `LearningPreferences` table: categorical labels + 768-dim `preference_embedding` vector
@@ -34,25 +46,28 @@ The backend serves two consumers through three domain layers:
   - `graph.py` — NetworkX graph walks for prompt context
   - `visualize.py` — Graph data export for frontend
 
-**`app/brain_builder/`** — Builds and maintains the silicon brain (WRITE interface). Any agent feeds learnings through here.
+**`silicon_brain/brain_builder/`** — Builds and maintains the silicon brain (WRITE interface). Any agent feeds learnings through here.
 - `ingester.py` — `AgentLearning` dataclass + `process_learning()`: generic entry point for any agent
 - `concept_builder.py` — Concept extraction, HLR upsert, edge creation
 - `preference_builder.py` — EMA preference updates, auto-distillation
 
-**`app/teacher/`** — The teacher agent. Reads the silicon brain, generates personalized answers, feeds learnings back.
-- `agent.py` — `assemble_context()`: reads brain state, builds `TeacherContext` for the LLM
+**`persona/teacher/`** (top-level, was `app/teacher/`) — The teacher persona. Reads the silicon brain over HTTP via `silicon_brain_client.py`, generates personalized answers, feeds learnings back through the same client. Zero runtime `from silicon_brain` imports — only TYPE_CHECKING hints in `prompt.py` / `prompt_v2.py`. Future personas (helper, calendar, etc.) sit alongside as `persona/<name>/`.
+- `agent.py` — `assemble_context(body, user_id, client)`: reads brain state via the client, builds `TeacherContext` for the LLM
 - `prompt.py` — `build_answer_prompt()`: constructs the three-part cached prompt (system, passage, dynamic)
+- `silicon_brain_client.py` — typed `httpx.AsyncClient` wrapper around the knowledge sidecar's APIs (brain-state, retrieval, recommendations, session-summaries, interactions, brain-builder)
 
 ### Key data flow
 
-1. User submits a question via `POST /api/ask/stream` (SSE)
-2. Teacher agent assembles context (`teacher/agent.py`):
-   - Reads brain state: profile, preferences, concepts, graph context
-   - Retrieves relevant document chunks via pgvector
-   - Builds session history as multi-turn messages
-3. Teacher builds a three-part prompt (`teacher/prompt.py`): static_system (cached), passage (cached), dynamic (per-question)
-4. LLM generates a streaming response (with `CONCEPTS:` line at the end)
-5. Background task feeds the brain builder (`brain_builder/ingester.py`):
+1. User submits a question via `POST /api/ask/stream` (SSE) — shell verifies auth, forwards to persona sidecar.
+2. Persona's ask router (`services/persona/routers/ask.py`) calls `persona.teacher.agent.assemble_context(body, user_id, client)`.
+3. Teacher reads brain state via `SiliconBrainClient` over HTTP to the knowledge sidecar:
+   - `GET /api/brain-state` — composite read: profile, preferences, concepts, graph context
+   - `POST /api/retrieval/document-chunks` — vector-search relevant chunks via pgvector
+   - `POST /api/retrieval/past-summaries` — vector-search prior session summaries
+   - `GET /api/sessions/{id}/interactions` — chronological history → multi-turn messages
+4. Teacher builds a three-part prompt (`persona/teacher/prompt.py`): static_system (cached), passage (cached), dynamic (per-question).
+5. Persona's ask router calls `infra.model.llm.stream_cached` directly (LLM is foundation, not a service) and streams the response.
+6. After the answer completes, persona writes the interaction (`POST /api/interactions`) and fires the brain builder (`POST /api/brain-builder/post-interaction`); knowledge sidecar runs `silicon_brain.brain_builder.background.post_interaction_update` as a background task:
    - Embeds the interaction via Ollama
    - EMA-updates the preference embedding
    - Extracts concepts → upserts with HLR → creates temporal edges
@@ -60,28 +75,29 @@ The backend serves two consumers through three domain layers:
 
 ### Sidecar topology
 
-Every sidecar binds to `BASE_PORT + offset` (offsets in `services/shell/proxy.py:SERVICE_OFFSETS`):
+Every sidecar binds to `BASE_PORT + offset` (offsets in `infra/topology.py:SERVICE_OFFSETS`):
 
 | service | offset | runs |
 |---|---|---|
-| shell | +0 | pure HTTP proxy (CORS, no DB, no models) |
-| ask | +1 | `/api/ask`, `/api/interactions` (LLM, teacher agent) |
-| knowledge | +2 | health, users, profile, preferences, concepts, sessions, documents, goals, recommender |
+| shell | +0 | pure HTTP proxy (CORS, auth gate, no DB, no models) |
+| persona | +1 | `/api/ask`, `/api/interactions`, `/api/recommendations`, `/api/goals`, `/api/sessions/{id}/end` and `/api/sessions/summaries/graph`. The teacher's HTTP face. Owns the long-lived `SiliconBrainClient`. |
+| knowledge | +2 | silicon_brain HTTP face — health, users, profile, preferences, concepts, documents, plus persona-facing read/write APIs (`/api/brain-state`, `/api/retrieval/*`, `/api/recommendations/*` (write), `/api/sessions/{id}/interactions`, `/api/sessions/summaries`, `/api/interactions` (write), `/api/brain-builder/post-interaction`) |
 | transcribe | +3 | `/api/transcribe` (Whisper via pywhispercpp) |
 | speak | +4 | `/api/speak`, `/api/speak/stream` (Kokoro TTS) |
-| browser | +5 | `/api/browser/*` (Playwright); also `/api/browser/render` is called by knowledge for `/api/documents/url` |
+| browser | +5 | `/api/browser/*` (Playwright); `/api/browser/render` is called by knowledge for `/api/documents/url` |
 
 A deployer sets one env var (`BASE_PORT`) and the whole topology slides together — useful for running multiple environments side-by-side. Per-service overrides like `KNOWLEDGE_SERVICE_URL=http://other-host:9002` still win when set.
 
-The browser sidecar's `/api/browser/resume` calls knowledge's internal `/api/documents/from-extracted` to persist extracted pages; that's the only inter-sidecar call other than what the shell proxies.
+Inter-sidecar calls (besides what the shell proxies for the user):
+- **persona → knowledge**: every brain read/write the teacher makes during a request.
+- **browser → knowledge**: `/api/browser/resume` calls `/api/documents/from-extracted` to persist extracted pages.
 
 ### Other important patterns
 
-- **LLM provider facade**: `app/infra/model/llm.py` is a thin re-export that picks `app/infra/model/minimax/` or `app/infra/model/deepseek/` based on `settings.llm_provider`. Call sites import from the facade and never reach into a provider directly. Each backend is a singleton module-level client.
-- **Vector retrieval**: `app/infra/rag/retrieval.py` searches interactions and document chunks by cosine similarity via pgvector. Queries are boosted with the user's preference embedding (70% query, 30% preference)
+- **LLM provider facade**: `infra/model/llm.py` is a thin re-export that picks `infra/model/minimax/` or `infra/model/deepseek/` based on `settings.llm_provider`. Call sites import from the facade and never reach into a provider directly. Each backend is a singleton module-level client.
+- **Vector retrieval**: `silicon_brain/retrieval.py` searches interactions and document chunks by cosine similarity via pgvector. Queries are boosted with the user's preference embedding (70% query, 30% preference)
 - **Document chunking**: 500-word chunks with 50-word overlap, embedded in background tasks
-- **`app/db_base.py`**: Shared SQLAlchemy `Base` class, extracted to avoid circular imports between modules
-- **Re-export stubs**: `app/models/preferences.py` and `app/models/concept.py` re-export from `silicon_brain/` sub-modules, preserving backward-compatible import paths
+- **Persistence root**: `silicon_brain/db.py` owns `Base`, `engine`, `async_session`, and the FastAPI-shaped `get_db` async generator. No persistence module lives outside silicon_brain.
 - **Agent-generic brain builder**: The `AgentLearning` dataclass accepts a `source` field — any future agent (helper, calendar, etc.) feeds learnings through the same `process_learning()` pipeline
 
 ### Desktop shell (`desktop/`)
@@ -144,18 +160,25 @@ python -m benchmark --scenario 2 --reset  # wipe DB first
 
 ## Environment Variables
 
-Configured via `.env` in project root. `app/config.py` calls `load_dotenv()` at import,
+Configured via `.env` in project root. Each module's `config.py` calls `load_dotenv()` at import,
 so .env populates `os.environ` before any HTTP client is created — proxy vars
 (`http_proxy`, `https_proxy`, `no_proxy`) end up where httpx / openai SDK / anthropic
 SDK can see them. Provider URL/key/model fields have **no hardcoded defaults**; the
-facade in `app/infra/model/llm.py` validates that the active provider's vars are set
+facade in `infra/model/llm.py` validates that the active provider's vars are set
 and raises a clear `RuntimeError` at import otherwise.
+
+Config homes:
+- `config.yaml` (root) — `base_port`, `service_host`
+- `silicon_brain/config.py` — `DATABASE_URL`
+- `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`
+- `services/transcribe/main.py` — `WHISPER_MODEL_PATH`, `WHISPER_THREADS`
+- `services/speak/main.py` — `KOKORO_*`
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL async connection string (`postgresql+asyncpg://...`). |
 | `OLLAMA_URL` | Ollama embedding server (default: `http://localhost:11434`). |
-| `LLM_PROVIDER` | Active LLM backend: `minimax` or `deepseek` (default: `deepseek`). Dispatches to `app/infra/model/<provider>/llm.py`. |
+| `LLM_PROVIDER` | Active LLM backend: `minimax` or `deepseek` (default: `deepseek`). Dispatches to `infra/model/<provider>/llm.py`. |
 | `LLM_MODEL` | Model name for the MiniMax-via-Anthropic provider (e.g. `MiniMax-M2.7-highspeed`). Required when `LLM_PROVIDER=minimax`. |
 | `ANTHROPIC_API_KEY` | API key for the MiniMax-via-Anthropic provider. Required when `LLM_PROVIDER=minimax`. |
 | `ANTHROPIC_BASE_URL` | Custom Anthropic-compatible endpoint (e.g. MiniMax). Required when `LLM_PROVIDER=minimax`. |

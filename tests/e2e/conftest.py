@@ -23,10 +23,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
-# Each (service, offset) pair must match services.shell.proxy.SERVICE_OFFSETS.
+# Each (service, offset) pair must match infra.topology.SERVICE_OFFSETS.
 SIDECARS = [
     ("knowledge", 2),
-    ("ask", 1),
+    ("persona", 1),
     ("transcribe", 3),
     ("speak", 4),
     ("browser", 5),

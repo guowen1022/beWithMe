@@ -2,7 +2,7 @@
 
 A thin reverse proxy. Holds no DB session, no models, no Playwright. Forwards
 every `/api/<prefix>/...` request to the corresponding sidecar based on
-`services.shell.proxy.PREFIX_TO_SERVICE` and streams the response back.
+`infra.topology.PREFIX_TO_SERVICE` and streams the response back.
 
 Run standalone (port computed from BASE_PORT env, default 8000):
     python -m services.shell
@@ -22,7 +22,7 @@ from services.shell.auth import (
     parse_user_header,
     verify_against_knowledge,
 )
-from services.shell.proxy import route_for_path, service_port, upstream_url
+from infra.topology import route_for_path, service_port, upstream_url
 
 
 # Hop-by-hop headers that must not be forwarded (RFC 7230 §6.1) plus a few

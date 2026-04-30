@@ -1,0 +1,11 @@
+# beWithMe — root topology config.
+#
+# Cross-cutting deployment knobs that the shell + every sidecar need to agree on.
+# Per-domain config (DATABASE_URL, OLLAMA_URL, LLM_PROVIDER, model paths, …)
+# lives with the module that owns it, not here.
+#
+# Override at runtime via env vars: BASE_PORT, SERVICE_HOST,
+# <NAME>_SERVICE_URL (e.g. KNOWLEDGE_SERVICE_URL=http://other-host:9002).
+
+base_port: 8000
+service_host: localhost

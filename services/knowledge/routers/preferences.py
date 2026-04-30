@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import get_db
-from app.silicon_brain.user_profile import distill_preferences, get_or_create_preferences
-from app.auth import parse_user_id as get_current_user_id
+from silicon_brain.db import get_db
+from silicon_brain.user_profile import distill_preferences, get_or_create_preferences
+from infra.auth import parse_user_id as get_current_user_id
 
 router = APIRouter()
 

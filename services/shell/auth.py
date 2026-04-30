@@ -20,7 +20,7 @@ from uuid import UUID
 
 import httpx
 
-from services.shell.proxy import upstream_url
+from infra.topology import upstream_url
 
 
 # (method, path) tuples that bypass auth — covers the bootstrapping surface
