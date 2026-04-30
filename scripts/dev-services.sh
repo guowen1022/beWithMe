@@ -37,7 +37,12 @@ fi
 
 reload_flag=""
 if [[ "$RELOAD" == "1" ]]; then
-  reload_flag="--reload"
+  # Scope --reload to the Python source dirs ONLY. Default uvicorn behavior
+  # watches the whole CWD, which means every sidecar polls .venv/,
+  # frontend/node_modules/, data/sessions/, etc. — six watchers chewing 75%+
+  # CPU each. Restricting to the dirs that actually contain runtime code
+  # drops idle CPU near zero.
+  reload_flag="--reload --reload-dir services --reload-dir persona --reload-dir silicon_brain --reload-dir infra"
 fi
 
 pids=()

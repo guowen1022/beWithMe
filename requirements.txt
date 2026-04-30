@@ -1,5 +1,6 @@
 fastapi>=0.100.0,<0.116.0
 uvicorn>=0.23.0
+watchfiles>=0.20  # used by uvicorn --reload; without it, StatReload polls every file's mtime and burns CPU
 httpx>=0.24.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
