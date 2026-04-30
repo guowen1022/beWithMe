@@ -2,7 +2,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from infra.config import settings
 
 router = APIRouter()

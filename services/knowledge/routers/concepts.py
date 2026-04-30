@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.knowledge import ConceptNode, compute_mastery, mastery_to_state, get_graph_data
 from infra.auth import parse_user_id as get_current_user_id
 

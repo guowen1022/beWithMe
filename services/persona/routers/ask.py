@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db, async_session
+from infra.db import get_db, async_session
 from silicon_brain.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title

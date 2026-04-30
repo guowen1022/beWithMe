@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from silicon_brain.db import get_db, async_session
+from infra.db import get_db, async_session
 from silicon_brain.models.document import Document, DocumentChunk
 from silicon_brain.schemas import DocumentCreate, DocumentRead
 from infra.rag.embedding import embed_batch

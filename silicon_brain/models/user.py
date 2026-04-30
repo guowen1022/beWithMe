@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Text, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 
 
 class User(Base):

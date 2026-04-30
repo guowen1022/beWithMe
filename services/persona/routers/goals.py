@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from infra.auth import parse_user_id as get_current_user_id
 from silicon_brain.models.goal import LearningGoal
 from persona.teacher.goals.planner import plan_initial, plan_expand, plan_feedback

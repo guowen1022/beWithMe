@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
 from infra.contracts import InteractionCreateDTO, InteractionDTO
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.models.interaction import Interaction
 
 

@@ -2,7 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.models.profile import Profile
 from silicon_brain.schemas import ProfileRead, ProfileUpdate
 from infra.auth import parse_user_id as get_current_user_id

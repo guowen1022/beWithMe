@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.models.user import User
 
 

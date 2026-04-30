@@ -5,7 +5,7 @@ from sqlalchemy import Text, DateTime, Integer, ForeignKey, LargeBinary
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from silicon_brain.db import Base
+from infra.db import Base
 from infra.config import settings
 
 

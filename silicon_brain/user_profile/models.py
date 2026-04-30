@@ -7,7 +7,7 @@ from sqlalchemy import Text, DateTime, Integer, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 
 
 class LearningPreferences(Base):

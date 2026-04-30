@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy import String
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 from infra.config import settings
 
 

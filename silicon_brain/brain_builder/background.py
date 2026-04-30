@@ -2,7 +2,7 @@
 
 import uuid
 from sqlalchemy import update
-from silicon_brain.db import async_session
+from infra.db import async_session
 from silicon_brain.models.interaction import Interaction
 from silicon_brain.brain_builder import AgentLearning, process_learning
 

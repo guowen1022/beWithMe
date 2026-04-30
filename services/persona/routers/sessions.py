@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.session.transcriber import save_transcript
 from persona.teacher.session.summarizer import process_unsummarized

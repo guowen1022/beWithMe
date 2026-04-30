@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.models.interaction import Interaction
 from silicon_brain.schemas import InteractionRead
 from silicon_brain.brain_builder.background import post_interaction_update

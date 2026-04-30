@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
 from infra.contracts import RecommendationCreateDTO, RecommendationDTO
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.models.recommendation import Recommendation
 
 

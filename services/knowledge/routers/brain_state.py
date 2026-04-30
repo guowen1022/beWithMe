@@ -16,7 +16,7 @@ from infra.contracts import (
     InteractionDTO,
     UserProfileDTO,
 )
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.knowledge import get_concepts, get_graph_context
 from silicon_brain.models.interaction import Interaction
 from silicon_brain.state import get_brain_state

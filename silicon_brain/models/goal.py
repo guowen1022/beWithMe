@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy import Text, String, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 
 
 class LearningGoal(Base):

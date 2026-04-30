@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
 from infra.contracts import DocumentChunkDTO, SummaryDTO
-from silicon_brain.db import get_db
+from infra.db import get_db
 from silicon_brain.retrieval import search_document_chunks
 
 

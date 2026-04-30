@@ -1,8 +1,12 @@
 """Stateless infra config — read from .env, used by infra.* and consumers.
 
-Owns the foundation deps everyone needs: Ollama (embedding host) and the LLM
-provider. No DB knowledge, no domain. Each top-level package has its own
-Settings; they coexist over a single .env via extra="ignore".
+Owns the foundation knobs everyone shares:
+  * the persistence URL (every domain inherits Base from infra.db)
+  * Ollama (embedding host)
+  * the LLM provider
+
+Domain-specific config lives with the domain. Sidecar-local config (Whisper /
+Kokoro paths) lives with that sidecar.
 """
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
@@ -12,6 +16,11 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
+    # Persistence — the single Postgres URL the whole project uses.
+    # Each domain (silicon_brain, persona/<name>, services/<name>) declares
+    # its own ORM models on infra.db.Base; they all live in this one DB.
+    database_url: str = "postgresql+asyncpg://weng@localhost/bewithme"
+
     # Embedding (Ollama-hosted)
     ollama_url: str = "http://localhost:11434"
     embedding_model: str = "nomic-embed-text"

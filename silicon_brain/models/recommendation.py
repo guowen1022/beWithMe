@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy import Text, DateTime, Float, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 
 
 class Recommendation(Base):

@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import Text, DateTime, Integer, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from silicon_brain.db import Base
+from infra.db import Base
 
 
 class ConceptNode(Base):
