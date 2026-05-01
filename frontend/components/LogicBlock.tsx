@@ -3,6 +3,8 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { LogicBlock as LogicBlockType } from "@/lib/markdownBlocks";
 import { speakTextStream } from "@/lib/api";
 
@@ -10,6 +12,8 @@ import { speakTextStream } from "@/lib/api";
 function markdownToSpeakable(md: string): string {
   return md
     .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\$\$[\s\S]*?\$\$/g, " formula ")
+    .replace(/\$([^$\n]+)\$/g, " formula ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
@@ -484,7 +488,10 @@ export default function LogicBlock({
         )}
       </button>
       <article className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-li:my-0.5 prose-headings:mt-2 prose-headings:mb-1 prose-code:text-pink-600 dark:prose-code:text-pink-400 pr-8">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+        >
           {block.markdown}
         </ReactMarkdown>
       </article>

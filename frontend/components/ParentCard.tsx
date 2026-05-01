@@ -3,6 +3,8 @@
 import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { QuestionNode } from "./Reader";
 import { parseMarkdownBlocks } from "@/lib/markdownBlocks";
 
@@ -70,7 +72,10 @@ export default function ParentCard({
               <div key={block.id}>
                 <div className="rounded-lg border-2 border-blue-500/50 dark:border-blue-400/40 bg-white dark:bg-gray-900 px-4 py-3 shadow-sm">
                   <article className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-li:my-0.5 prose-headings:mt-2 prose-headings:mb-1">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm, remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                    >
                       {block.markdown}
                     </ReactMarkdown>
                   </article>

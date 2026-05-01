@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
 @plugin "@tailwindcss/typography";
 
 /* App is designed for a single light palette. Dark-mode variants were
@@ -24,4 +25,26 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* KaTeX inline math needs breathing room — prose-p:my-1 in LogicBlock leaves
+   no vertical slack, so radicals and tall superscripts overflow into the
+   next line. Force any paragraph or heading containing inline math to use a
+   roomier line-height. */
+.prose p:has(.katex),
+.prose li:has(.katex),
+.prose h1:has(.katex),
+.prose h2:has(.katex),
+.prose h3:has(.katex),
+.prose h4:has(.katex),
+.prose strong:has(.katex) {
+  line-height: 1.9;
+}
+
+/* Display math: give it real vertical margins so $$...$$ blocks don't
+   collide with surrounding text. */
+.prose .katex-display {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
