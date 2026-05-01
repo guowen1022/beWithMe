@@ -1,10 +1,12 @@
 import asyncio
 import json
+import re
 from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
+from infra.contracts.ui import BlockSpec
 from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title
@@ -12,8 +14,15 @@ from persona.teacher.silicon_brain_client import SiliconBrainClient
 from infra.model.llm import generate_cached, stream_cached
 from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
+from persona.teacher.router import route as teacher_route
+from tools.request_ui_block import request_ui_block
 
 router = APIRouter()
+
+# Explicit override: '/block <description>' routes straight to the
+# request_ui_block tool, skipping the LLM router. Useful for testing and
+# for users who know exactly what they want.
+_BLOCK_TRIGGER = re.compile(r"^\s*/block(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
@@ -27,6 +36,74 @@ def _get_client(request: Request) -> SiliconBrainClient:
     return client
 
 
+async def _block_trigger_stream(description: str, user_id: UUID):
+    """Synthetic SSE flow for any block-build delegation.
+
+    Emits status → token (engineer LLM stream) → token (summary) → answer.
+    The engineer's raw output (plan lines + FILES block) streams through
+    as `token` events so the canvas debug panel can show the model's
+    thinking live. No Interaction is stored — this is a tool invocation,
+    not a Q&A turn. The teacher's tree picks up nothing here; the visible
+    effect is the block(s) appearing on the canvas.
+    """
+    def fmt(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    # Bridge the engineer's async-callback stream through an asyncio.Queue
+    # so we can interleave its deltas into our SSE generator.
+    delta_queue: asyncio.Queue = asyncio.Queue()
+
+    async def push_delta(text: str) -> None:
+        await delta_queue.put(text)
+
+    yield fmt({"type": "status", "status": "thinking", "detail": "delegating to frontend_engineer"})
+    try:
+        async def run_engineer():
+            try:
+                return await request_ui_block(
+                    BlockSpec(description=description),
+                    user_id,
+                    on_delta=push_delta,
+                )
+            finally:
+                await delta_queue.put(None)
+
+        engineer_task = asyncio.create_task(run_engineer())
+        while True:
+            chunk = await delta_queue.get()
+            if chunk is None:
+                break
+            yield fmt({"type": "token", "text": chunk})
+        blocks = await engineer_task
+        ids = [b.id for b in blocks]
+        if len(ids) == 1:
+            title = f"Block: {ids[0]}"
+            message = f"Mounted block '{ids[0]}' on canvas."
+        else:
+            title = f"Blocks: {', '.join(ids)}"
+            message = f"Mounted {len(ids)} blocks: {', '.join(ids)}."
+        yield fmt({"type": "title", "title": title})
+        yield fmt({"type": "token", "text": message})
+        yield fmt({
+            "type": "answer",
+            "answer": message,
+            "title": title,
+            "related_interaction_ids": [],
+        })
+    except Exception as e:
+        err = f"failed to build block: {e}"
+        print(f"[ask/block-trigger] {err}", flush=True)
+        yield fmt({"type": "token", "text": err})
+        yield fmt({
+            "type": "answer",
+            "answer": err,
+            "title": "Block: error",
+            "related_interaction_ids": [],
+        })
+
+
+
+
 @router.post("/ask/stream")
 async def ask_stream(
     body: AskRequest,
@@ -35,6 +112,35 @@ async def ask_stream(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """SSE endpoint with streaming — detects proxy search events."""
+    question = body.question or ""
+
+    # Explicit '/block <description>' override — skips the LLM router.
+    trigger = _BLOCK_TRIGGER.match(question)
+    if trigger:
+        description = (trigger.group(1) or "").strip()
+        return StreamingResponse(
+            _block_trigger_stream(description, user_id),
+            media_type="text/event-stream",
+        )
+
+    # Test-mode addressee bypass: send the message straight to the engineer
+    # without consulting the teacher's intent router. Useful for E2E
+    # debugging when you want to isolate the engineer LLM.
+    if body.addressee == "frontend_engineer":
+        return StreamingResponse(
+            _block_trigger_stream(question.strip(), user_id),
+            media_type="text/event-stream",
+        )
+
+    # Layer 1: teacher's intent router. Cheap classifier that decides
+    # ui_block vs answer. Falls back to 'answer' on any failure.
+    decision = await teacher_route(question)
+    if decision.intent == "ui_block":
+        return StreamingResponse(
+            _block_trigger_stream(decision.description or question.strip(), user_id),
+            media_type="text/event-stream",
+        )
+
     client = _get_client(request)
     ctx = await assemble_context(body, user_id, db, client)
 

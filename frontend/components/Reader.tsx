@@ -12,6 +12,7 @@ import { askStream, endSession, recordSignal, type DebugEvent } from "@/lib/api"
 import type { Direction } from "./LogicBlock";
 import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
 import BrowserSlot from "./BrowserSlot";
+import DynamicSurface from "./DynamicSurface";
 import { getBrowserBridge, isDesktop } from "@/lib/desktopBridge";
 import {
   type ExplorationTree,
@@ -445,6 +446,13 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
 
   async function handleAsk(question: string) {
     if (!question.trim()) return;
+    // Slash-commands (e.g. /block hello) bypass the selection gate — they're
+    // tool calls, not Q&A turns about a specific passage. Route them as a
+    // top-level "passage"-source ask so the synthetic SSE answer renders.
+    if (question.trim().startsWith("/")) {
+      await fireQuestion(question, null, null, null, "passage");
+      return;
+    }
     const source = selectionSource;
     const sel = selectedText;
     if (!source) return;
@@ -557,6 +565,10 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
 
   return (
     <div className="relative flex h-screen">
+      {/* Dynamic UI surface — mounts blocks pushed by frontend_engineer
+          via SSE. Self-hides when no blocks are present. */}
+      <DynamicSurface />
+
       {/* End Session button (top-right) */}
       {explorationTree && (
         <button
