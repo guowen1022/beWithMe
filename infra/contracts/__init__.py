@@ -150,6 +150,16 @@ class SessionSummaryUpsertDTO(BaseModel):
     embedding: Optional[List[float]] = None
 
 
+from infra.contracts.ui import (  # noqa: E402
+    GridPos,
+    BlockSpec,
+    BlockSource,
+    UIUpdate,
+    BlockMessage,
+    BlockError,
+)
+
+
 __all__ = [
     "ProfileDTO",
     "UserProfileDTO",
@@ -162,4 +172,11 @@ __all__ = [
     "RecommendationCreateDTO",
     "InteractionCreateDTO",
     "SessionSummaryUpsertDTO",
+    # ui contracts
+    "GridPos",
+    "BlockSpec",
+    "BlockSource",
+    "UIUpdate",
+    "BlockMessage",
+    "BlockError",
 ]

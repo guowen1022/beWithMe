@@ -99,6 +99,10 @@ export interface AskRequest {
   session_id?: string;
   parent_interaction_id?: string;
   prompt_version?: "v1" | "v2";
+  /** Routing override. Default "teacher" runs the LLM intent router.
+   *  "frontend_engineer" bypasses the router and goes straight to the
+   *  engineer agent — used by the canvas test-mode toggle. */
+  addressee?: "teacher" | "frontend_engineer";
 }
 
 export interface AskResponse {
@@ -216,6 +220,70 @@ export async function askStream(
       }
     }
   }
+}
+
+// --- Dynamic UI back-channel ---
+
+export type DynamicEvent =
+  | { type: "open" }
+  | { type: "ui-update"; action: "mount" | "replace" | "unmount"; block: { id: string; source: string; design_doc?: string | null } }
+  | { type: "block-data"; block_id: string; topic: string; value: unknown }
+  | { type: "block-error"; block_id: string; error: string };
+
+export async function subscribeToDynamicStream(
+  onEvent: (event: DynamicEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_STREAM}/dynamic/stream`, {
+    method: "GET",
+    headers: authHeaders(),
+    signal,
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to open dynamic stream (${res.status})`);
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        onEvent(JSON.parse(line.slice(6)) as DynamicEvent);
+      } catch {
+        // skip malformed
+      }
+    }
+  }
+}
+
+export async function fetchCanvas(): Promise<{ id: string; source: string; design_doc?: string | null }[]> {
+  const res = await fetch(`${API_BASE}/dynamic/canvas`, {
+    method: "GET",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`fetchCanvas failed (${res.status})`);
+  return res.json();
+}
+
+export async function pushBlockData(
+  blockId: string,
+  topic: string,
+  value: unknown,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/dynamic/push/${encodeURIComponent(blockId)}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ topic, value }),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`pushBlockData failed (${res.status})`);
 }
 
 export async function ask(req: AskRequest): Promise<AskResponse> {

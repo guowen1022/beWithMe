@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 dist/
 .env
+.venv
 .venv/
 venv/
 node_modules/
@@ -19,5 +20,6 @@ frontend/out/
 .DS_Store
 data/browser_profile/
 data/sessions/
+data/canvases/
 benchmark/results/
 .*.swp

@@ -62,6 +62,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "sessions":        "persona",
     "concepts":        "persona",   # teacher's mastery model (ConceptNode)
     "graph":           "persona",   # teacher's concept graph data
+    "dynamic":         "persona",   # dynamic UI back-channel (SSE stream + push/error)
     # Stateless infra
     "transcribe": "transcribe",
     "speak":      "speak",
