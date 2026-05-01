@@ -4,6 +4,32 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
+import { useRegisterBlock } from "@/lib/blockRegistry";
+
+function RegisteredPdfPage({
+  pageNumber,
+  width,
+  devicePixelRatio,
+}: {
+  pageNumber: number;
+  width: number;
+  devicePixelRatio: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useRegisterBlock({ id: `pdf:page-${pageNumber}`, kind: "pdf-page", ref });
+  return (
+    <div ref={ref}>
+      <Page
+        pageNumber={pageNumber}
+        width={width}
+        devicePixelRatio={devicePixelRatio}
+        className="mb-4 shadow-sm"
+        renderAnnotationLayer
+        renderTextLayer
+      />
+    </div>
+  );
+}
 
 // Configure pdf.js worker — must be in same module as <Document/> per react-pdf docs.
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -23,6 +49,17 @@ export default function PdfViewer({
   const [numPages, setNumPages] = useState<number>(0);
   const [containerWidth, setContainerWidth] = useState<number>(700);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Render canvas at device pixel ratio so text isn't blurry on retina.
+  // Cap at 2 — going higher costs memory/CPU without visible gain.
+  const dpr =
+    typeof window === "undefined"
+      ? 1
+      : Math.min(window.devicePixelRatio || 1, 2);
+
+  // Page width in CSS pixels. Cap at 760 — a typical readable column.
+  // Larger pages just stretch the whitespace without making text more legible.
+  const pageWidth = Math.min(containerWidth - 32, 760);
 
   // Track container width for responsive page sizing.
   useEffect(() => {
@@ -148,13 +185,11 @@ export default function PdfViewer({
         }
       >
         {Array.from({ length: numPages }, (_, i) => (
-          <Page
+          <RegisteredPdfPage
             key={i + 1}
             pageNumber={i + 1}
-            width={Math.min(containerWidth - 32, 900)}
-            className="mb-4 shadow-sm"
-            renderAnnotationLayer
-            renderTextLayer
+            width={pageWidth}
+            devicePixelRatio={dpr}
           />
         ))}
       </Document>

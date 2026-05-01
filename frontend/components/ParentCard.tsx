@@ -1,12 +1,38 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import type { QuestionNode } from "./Reader";
 import { parseMarkdownBlocks } from "@/lib/markdownBlocks";
+import { useRegisterBlock } from "@/lib/blockRegistry";
+
+function RegisteredParentBlock({
+  registryId,
+  active,
+  children,
+}: {
+  registryId: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useRegisterBlock({ id: registryId, kind: "parent", ref });
+  return (
+    <div
+      ref={ref}
+      className={
+        active
+          ? "rounded-lg border-2 border-blue-500/50 dark:border-blue-400/40 bg-white dark:bg-gray-900 px-4 py-3 shadow-sm"
+          : "rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-sm text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 transition-colors"
+      }
+    >
+      {children}
+    </div>
+  );
+}
 
 /**
  * The parent of the active question, shown in the center.
@@ -66,11 +92,13 @@ export default function ParentCard({
         {blocks.map((block) => {
           const isActive = block.id === activeBlockId;
 
+          const registryId = `parent:${node.localId}:${block.id}`;
+
           if (isActive) {
             // Expanded block + child question underneath
             return (
               <div key={block.id}>
-                <div className="rounded-lg border-2 border-blue-500/50 dark:border-blue-400/40 bg-white dark:bg-gray-900 px-4 py-3 shadow-sm">
+                <RegisteredParentBlock registryId={registryId} active>
                   <article className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-li:my-0.5 prose-headings:mt-2 prose-headings:mb-1">
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm, remarkMath]}
@@ -79,7 +107,7 @@ export default function ParentCard({
                       {block.markdown}
                     </ReactMarkdown>
                   </article>
-                </div>
+                </RegisteredParentBlock>
                 {/* Child question badge */}
                 {childNode && (
                   <div className="ml-4 mt-1.5 mb-1 flex items-start gap-2">
@@ -98,12 +126,9 @@ export default function ParentCard({
 
           // Collapsed block — summary with border
           return (
-            <div
-              key={block.id}
-              className="rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-2.5 text-sm text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 transition-colors"
-            >
+            <RegisteredParentBlock key={block.id} registryId={registryId} active={false}>
               {block.summary}
-            </div>
+            </RegisteredParentBlock>
           );
         })}
       </div>

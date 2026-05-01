@@ -430,6 +430,8 @@ export default function AnswerDrawer({
                 interactionMode={interactionModeBlock === block.id}
                 onGesture={handleGesture}
                 onToggleCollapse={handleToggleCollapse}
+                registryId={`answer:${node.localId}:${block.id}`}
+                registryKind="answer"
               />
             ))}
           </div>

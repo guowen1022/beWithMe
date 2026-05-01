@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import type { LogicBlock as LogicBlockType } from "@/lib/markdownBlocks";
 import { speakTextStream } from "@/lib/api";
+import { useRegisterBlock, type BlockKind } from "@/lib/blockRegistry";
 
 /** Strip markdown formatting so the TTS reads prose, not syntax. */
 function markdownToSpeakable(md: string): string {
@@ -101,6 +102,8 @@ export default function LogicBlock({
   interactionMode,
   onGesture,
   onToggleCollapse,
+  registryId,
+  registryKind = "answer",
 }: {
   block: LogicBlockType;
   focused: boolean;
@@ -110,8 +113,17 @@ export default function LogicBlock({
   interactionMode: boolean;
   onGesture: (blockId: string, direction: Direction) => void;
   onToggleCollapse: (blockId: string) => void;
+  /** Globally-unique id used by the block registry (e.g. "answer:abc:block-2"). */
+  registryId?: string;
+  registryKind?: BlockKind;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  useRegisterBlock({
+    id: registryId ?? `local:${block.id}`,
+    kind: registryKind,
+    ref,
+    enabled: !!registryId,
+  });
   const dragPhase = useRef<DragPhase>("idle");
   const startPos = useRef({ x: 0, y: 0 });
   const blockCenter = useRef({ x: 0, y: 0 });

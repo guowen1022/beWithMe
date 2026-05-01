@@ -14,6 +14,7 @@ import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
 import BrowserSlot from "./BrowserSlot";
 import DynamicSurface from "./DynamicSurface";
 import { getBrowserBridge, isDesktop } from "@/lib/desktopBridge";
+import { BlockRegistryProvider } from "@/lib/blockRegistry";
 import {
   type ExplorationTree,
   createTree,
@@ -564,6 +565,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   const leftMargin = treePanelOpen ? "ml-96" : debugOpen ? "ml-[28rem]" : "ml-0";
 
   return (
+    <BlockRegistryProvider>
     <div className="relative flex h-screen">
       {/* Dynamic UI surface — mounts blocks pushed by frontend_engineer
           via SSE. Self-hides when no blocks are present. */}
@@ -708,5 +710,6 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
         recordTrigger={recordTrigger}
       />
     </div>
+    </BlockRegistryProvider>
   );
 }
