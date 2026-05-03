@@ -11,10 +11,11 @@ from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title
 from persona.teacher.silicon_brain_client import SiliconBrainClient
-from infra.model.llm import generate_cached, stream_cached
+from infra.model.llm import generate_cached
 from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
-from persona.teacher.router import route as teacher_route
+from persona.teacher.tools import build_tools as build_teacher_tools
+from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from tools.request_ui_block import request_ui_block
 
 router = APIRouter()
@@ -114,7 +115,9 @@ async def ask_stream(
     """SSE endpoint with streaming — detects proxy search events."""
     question = body.question or ""
 
-    # Explicit '/block <description>' override — skips the LLM router.
+    # Debug shortcut: '/block <description>' bypasses the teacher entirely
+    # and goes straight to the engineer. Kept for smoke testing the
+    # frontend_engineer in isolation.
     trigger = _BLOCK_TRIGGER.match(question)
     if trigger:
         description = (trigger.group(1) or "").strip()
@@ -123,26 +126,9 @@ async def ask_stream(
             media_type="text/event-stream",
         )
 
-    # Test-mode addressee bypass: send the message straight to the engineer
-    # without consulting the teacher's intent router. Useful for E2E
-    # debugging when you want to isolate the engineer LLM.
-    if body.addressee == "frontend_engineer":
-        return StreamingResponse(
-            _block_trigger_stream(question.strip(), user_id),
-            media_type="text/event-stream",
-        )
-
-    # Layer 1: teacher's intent router. Cheap classifier that decides
-    # ui_block vs answer. Falls back to 'answer' on any failure.
-    decision = await teacher_route(question)
-    if decision.intent == "ui_block":
-        return StreamingResponse(
-            _block_trigger_stream(decision.description or question.strip(), user_id),
-            media_type="text/event-stream",
-        )
-
     client = _get_client(request)
     ctx = await assemble_context(body, user_id, db, client)
+    teacher_tools = build_teacher_tools(user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -155,11 +141,12 @@ async def ask_stream(
             title_resolved = False
             head_buffer = ""
 
-            async for evt in stream_cached(
-                ctx.parts.static_system,
-                ctx.parts.static_user_passage,
-                ctx.parts.dynamic_user,
+            async for evt in run_teacher_tool_loop(
+                static_system=ctx.parts.static_system,
+                static_user_passage=ctx.parts.static_user_passage,
+                dynamic_user=ctx.parts.dynamic_user,
                 prior_messages=ctx.prior_messages,
+                tools=teacher_tools,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]

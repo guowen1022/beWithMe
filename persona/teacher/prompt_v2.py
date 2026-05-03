@@ -90,6 +90,31 @@ def build_answer_prompt(
 
     system_parts.append("")
 
+    # Tool use guidance — runs before output format because tool calls
+    # may happen in mid-turn before the final answer is produced.
+    system_parts.append(
+        "TOOLS (you may call these mid-turn — the system will run them and feed results back before you finish):\n"
+        "- list_media: see what canvases (devices) and voice outputs the user has, plus which blocks are mounted on each.\n"
+        "- request_new_block: ask the engineer to write a new UI block (or update an existing one) on the user's canvas. "
+        "Use when the answer is best shown visually (a chart, an interactive control, a fresh annotation).\n"
+        "- push_block_content: publish a value into a topic on a block already mounted on the canvas. "
+        "Use to update a live block (counter, list, displayed text) without rebuilding it.\n"
+        "- block_action: invoke a standard handle on an existing block — 'highlight' (flash a glow), "
+        "'focus' (move keyboard focus), or 'scroll_to'. Use to direct the user's eye to a block you're discussing.\n"
+        "- point_arrow: draw an arrow on the canvas from one block to another, with an optional short label. "
+        "Use to visually connect two ideas (question → answer, cause → effect). Pass both ids empty to clear.\n"
+        "- speak: synthesize speech on the user's connected speakers. Use only when audio is genuinely better than text "
+        "(short cues, alerts, hands-busy moments) and the user has not opted out of voice.\n"
+        "\n"
+        "When deciding whether to use a tool:\n"
+        "- If the user is asking for an explanation or discussion, just answer with text. Don't call tools reflexively.\n"
+        "- If the user asks for something visual, interactive, or to be 'shown' on the canvas, lean on request_new_block.\n"
+        "- If the user is referring to a block that already exists, prefer push_block_content or block_action over creating a new one.\n"
+        "- After tool calls land, finish with a normal answer (it must follow the OUTPUT FORMAT below).\n"
+    )
+
+    system_parts.append("")
+
     # Output format + atomic block structure
     system_parts.append(
         "OUTPUT FORMAT (STRICT — parsed by the app):\n"

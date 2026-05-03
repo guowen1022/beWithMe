@@ -1,7 +1,9 @@
-from typing import Optional, Tuple, AsyncIterator, Dict, Any
+from typing import Optional, Tuple, AsyncIterator, Dict, Any, List
+import json
 import re
 import anthropic
 from infra.config import settings
+from infra.model.tools import ToolSpec
 
 _client: Optional[anthropic.AsyncAnthropic] = None
 
@@ -175,6 +177,100 @@ async def stream_cached(
             "text": full_text,
             "usage": _usage_dict(final.usage),
         }
+
+
+async def stream_with_tools(
+    static_system: str,
+    static_user_passage: str,
+    dynamic_user: str,
+    prior_messages: Optional[list] = None,
+    tools: Optional[List[ToolSpec]] = None,
+    max_tokens: int = 4096,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Streaming chat with Anthropic-style tool calling.
+
+    Tool-use blocks arrive as `content_block_start` (with the tool name
+    + id), then a sequence of `content_block_delta` events with type
+    `input_json_delta` carrying string fragments of the JSON arguments.
+    We accumulate per-block-index, then emit one `tool_call` event when
+    the whole block closes.
+
+    Yield shape matches the contract in `infra.model.tools`.
+    """
+    client = _get_client()
+    kwargs = _build_request(
+        static_system, static_user_passage, dynamic_user, prior_messages, max_tokens
+    )
+    if tools:
+        kwargs["tools"] = [t.to_anthropic() for t in tools]
+
+    full_text_parts: list[str] = []
+    # index → {"id": str, "name": str, "arguments_raw": str}
+    tool_buckets: Dict[int, Dict[str, Any]] = {}
+    pending_tool_yields: list[Dict[str, Any]] = []
+
+    async with client.messages.stream(**kwargs) as stream:
+        async for event in stream:
+            etype = getattr(event, "type", None)
+
+            if etype == "content_block_start":
+                idx = getattr(event, "index", 0) or 0
+                block = getattr(event, "content_block", None)
+                if block is not None and getattr(block, "type", None) == "tool_use":
+                    tool_buckets[idx] = {
+                        "id": getattr(block, "id", "") or f"call_{idx}",
+                        "name": getattr(block, "name", "") or "",
+                        "arguments_raw": "",
+                    }
+
+            elif etype == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                if delta is None:
+                    continue
+                dt = getattr(delta, "type", None)
+                if dt == "text_delta":
+                    chunk = getattr(delta, "text", "") or ""
+                    if chunk:
+                        full_text_parts.append(chunk)
+                        yield {"kind": "delta", "text": chunk}
+                elif dt == "input_json_delta":
+                    idx = getattr(event, "index", 0) or 0
+                    if idx in tool_buckets:
+                        partial = getattr(delta, "partial_json", "") or ""
+                        tool_buckets[idx]["arguments_raw"] += partial
+
+            elif etype == "content_block_stop":
+                idx = getattr(event, "index", 0) or 0
+                if idx in tool_buckets:
+                    b = tool_buckets[idx]
+                    try:
+                        args = json.loads(b["arguments_raw"]) if b["arguments_raw"] else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw_arguments": b["arguments_raw"]}
+                    pending_tool_yields.append({
+                        "kind": "tool_call",
+                        "id": b["id"],
+                        "name": b["name"],
+                        "arguments": args,
+                    })
+
+        final = await stream.get_final_message()
+
+    for evt in pending_tool_yields:
+        yield evt
+
+    full_text = "".join(full_text_parts)
+    if not full_text:
+        full_text = _strip_think_tags(_extract_text(final))
+
+    raw_stop = getattr(final, "stop_reason", None) or "end_turn"
+    stop = "tool_use" if raw_stop == "tool_use" else raw_stop
+    yield {
+        "kind": "done",
+        "text": full_text,
+        "usage": _usage_dict(final.usage),
+        "stop_reason": stop,
+    }
 
 
 async def generate_json(prompt: str, max_tokens: int = 512) -> str:

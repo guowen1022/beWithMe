@@ -157,6 +157,8 @@ from infra.contracts.ui import (  # noqa: E402
     UIUpdate,
     BlockMessage,
     BlockError,
+    BlockAction,
+    VoicePlay,
 )
 
 
@@ -179,4 +181,6 @@ __all__ = [
     "UIUpdate",
     "BlockMessage",
     "BlockError",
+    "BlockAction",
+    "VoicePlay",
 ]

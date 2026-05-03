@@ -54,19 +54,32 @@ _SKILLS_DIR = _AGENT_DIR / "skills"
 _REPO_ROOT = _AGENT_DIR.resolve().parents[1]
 _TEMPLATES_DIR = _REPO_ROOT / "frontend" / "templates" / "blocks"
 
-# Skills loaded as a fixed set, in this order, into the system prompt.
-_SKILL_FILES = [
-    "block_development.md",
-    "positioning.md",
-    "cross_block.md",
-    "template_search.md",
-]
+# Skills are discovered from `skills/*.md` and routed per-turn (lazy loading).
+# Frontmatter declares: name, when, keywords, always (bool), needs_templates (bool).
+# See ARCHITECTURE.md and tools.md for the full protocol.
 
 _BASE_PROMPT = """\
 You are the **frontend_engineer** — an LLM agent that writes browser-side
 "blocks" for a user-facing canvas. You receive the user's full workspace
 state (README, TOPICS, existing blocks) plus a command from the teacher
 persona, and your job is to update that workspace to match what was asked.
+
+**Before emitting any code, do these in order. The order is non-negotiable:**
+
+  1. **READ** — the workspace dump below has the user's README, TOPICS,
+     CAUTIOUS, and every existing block. Read it. If a block already on
+     the canvas covers the request, say so in your plan and stop.
+  2. **COLLECT** — the template reference below has every template under
+     `frontend/templates/blocks/*`. Match the user's command against each
+     template's `keywords:` line. The template already obeys the project's
+     layout, fonts, color, and behavior contracts; copying a template
+     chunk is always cheaper and safer than handwriting code.
+  3. **WRITE** — emit the smallest possible FILES diff. Only files you
+     create or modify. Never re-emit unchanged content. Handwrite fresh
+     JS only when steps 1 and 2 yield nothing usable.
+
+Every byte of LLM-generated JS is a chance to break a template-faithful
+block; every retry is a cost the user pays. Less code = fewer retries.
 
 You MUST emit your response in this exact shape, with NOTHING else
 between sections:
@@ -122,17 +135,106 @@ def _load_text(p: Path) -> str:
         return ""
 
 
-def _load_skills() -> str:
-    parts: list[str] = []
-    for name in _SKILL_FILES:
-        body = _load_text(_SKILLS_DIR / name)
-        if body.strip():
-            parts.append(body.strip())
-    return "\n\n---\n\n".join(parts)
+# ---------- skill registry + router (lazy loading) ----------
+
+
+_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+@dataclass
+class Skill:
+    name: str
+    file: Path
+    when: str = ""
+    keywords: list[str] = field(default_factory=list)
+    always: bool = False
+    needs_templates: bool = False
+
+
+def _parse_skill_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Return (metadata, body-without-frontmatter). Empty dict if absent."""
+    m = _SKILL_FRONTMATTER_RE.match(text)
+    if not m:
+        return {}, text.strip()
+    meta: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        if ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        meta[k.strip()] = v.strip()
+    body = text[m.end():].strip()
+    return meta, body
+
+
+def _load_skill_registry() -> list[Skill]:
+    """Discover every `skills/*.md` and parse its frontmatter."""
+    registry: list[Skill] = []
+    if not _SKILLS_DIR.is_dir():
+        return registry
+    for path in sorted(_SKILLS_DIR.glob("*.md")):
+        text = _load_text(path)
+        if not text.strip():
+            continue
+        meta, _body = _parse_skill_frontmatter(text)
+        registry.append(Skill(
+            name=meta.get("name", path.stem),
+            file=path,
+            when=meta.get("when", ""),
+            keywords=[k.strip().lower() for k in meta.get("keywords", "").split(",") if k.strip()],
+            always=meta.get("always", "").lower() == "true",
+            needs_templates=meta.get("needs_templates", "").lower() == "true",
+        ))
+    return registry
+
+
+def _route_skills(registry: list[Skill], command: str) -> list[Skill]:
+    """Pick the skills that should be loaded for this command.
+
+    Always-loaded skills are returned unconditionally. Operation skills are
+    scored by keyword overlap with the command; the highest-scoring tier
+    wins. If no operation skill matches, all are loaded as a safe fallback
+    so the LLM can still classify and act.
+    """
+    cmd = command.lower()
+    chosen = [s for s in registry if s.always]
+
+    operation = [s for s in registry if not s.always]
+    scored: list[tuple[int, Skill]] = []
+    for s in operation:
+        if not s.keywords:
+            continue
+        score = sum(1 for kw in s.keywords if kw and kw in cmd)
+        if score > 0:
+            scored.append((score, s))
+
+    if scored:
+        scored.sort(key=lambda t: (-t[0], t[1].name))
+        top = scored[0][0]
+        for score, s in scored:
+            if score == top:
+                chosen.append(s)
+            else:
+                break
+    else:
+        # Ambiguous command — fall back to loading every operation skill
+        # so the LLM can pick the right one rather than guessing wrong.
+        chosen.extend(operation)
+
+    return chosen
+
+
+def _build_skill_index(registry: list[Skill]) -> str:
+    lines = ["# Available skills (lazy-loaded — see body below for the ones picked this turn)"]
+    for s in registry:
+        marker = "always" if s.always else "lazy"
+        when = s.when or "(no description)"
+        lines.append(f"- **{s.name}** [{marker}] — {when}")
+    return "\n".join(lines)
 
 
 def _load_template_reference() -> str:
-    """Dump every template's .md + .js as reference patterns the LLM can copy."""
+    """Dump every template's .md + .js. Only emitted when a routed skill
+    sets `needs_templates: true` (today: just `new_block`)."""
     if not _TEMPLATES_DIR.is_dir():
         return ""
     parts: list[str] = ["# Template reference (frontend/templates/blocks/)"]
@@ -153,9 +255,52 @@ def _load_template_reference() -> str:
 
 
 def _system_prompt() -> str:
-    skills = _load_skills()
-    template_ref = _load_template_reference()
-    return "\n\n---\n\n".join(p for p in (_BASE_PROMPT.strip(), skills, template_ref) if p.strip())
+    """Constant across turns — base prompt + skill index + always-loaded skill bodies.
+
+    Cacheable as a single static prefix regardless of the user's command.
+    """
+    registry = _load_skill_registry()
+    index = _build_skill_index(registry)
+    always_bodies: list[str] = []
+    for s in registry:
+        if not s.always:
+            continue
+        _meta, body = _parse_skill_frontmatter(_load_text(s.file))
+        if body:
+            always_bodies.append(body)
+    parts = [_BASE_PROMPT.strip(), index]
+    parts.extend(always_bodies)
+    return "\n\n---\n\n".join(p for p in parts if p.strip())
+
+
+def _routed_passage(command: str) -> str:
+    """Per-turn routed skill bodies + (optional) template reference.
+
+    Appended to the workspace dump in the user-passage slot. Empty string
+    if the always-loaded skills already cover everything.
+    """
+    registry = _load_skill_registry()
+    chosen = [s for s in _route_skills(registry, command) if not s.always]
+    if not chosen:
+        return ""
+
+    bodies: list[str] = []
+    for s in chosen:
+        _meta, body = _parse_skill_frontmatter(_load_text(s.file))
+        if body:
+            bodies.append(body)
+    skills_section = "\n\n---\n\n".join(bodies)
+
+    needs_templates = any(s.needs_templates for s in chosen)
+    template_ref = _load_template_reference() if needs_templates else ""
+
+    parts: list[str] = []
+    if skills_section:
+        header = "# Skills loaded for this turn — " + ", ".join(s.name for s in chosen)
+        parts.append(header + "\n\n" + skills_section)
+    if template_ref:
+        parts.append(template_ref)
+    return "\n\n---\n\n".join(parts)
 
 
 def _workspace_dump(snap: ws.WorkspaceSnapshot) -> str:
@@ -310,6 +455,9 @@ async def respond(
 
     static_system = _system_prompt()
     static_user_passage = _workspace_dump(before)
+    routed = _routed_passage(command)
+    if routed:
+        static_user_passage = static_user_passage + "\n\n---\n\n" + routed
     dynamic_user = f"User command:\n\n{command.strip()}\n\nRespond now."
 
     if on_delta is None:

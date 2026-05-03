@@ -48,6 +48,11 @@ END $$;
 ALTER TABLE IF EXISTS concept_nodes ADD COLUMN IF NOT EXISTS half_life_hours DOUBLE PRECISION NOT NULL DEFAULT 24.0;
 ALTER TABLE IF EXISTS concept_nodes ADD COLUMN IF NOT EXISTS last_recalled_at TIMESTAMPTZ;
 
+-- Voice prefs on existing user_preferences (P3).
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_id TEXT NOT NULL DEFAULT 'af_heart';
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_speed DOUBLE PRECISION NOT NULL DEFAULT 1.0;
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_lang TEXT NOT NULL DEFAULT 'en-us';
+
 -- Recursive question on existing interactions
 ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL;
 ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);

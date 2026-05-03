@@ -5,11 +5,14 @@ and never reach into `minimax/` or `deepseek/` directly. The active backend
 is chosen by `settings.llm_provider` at process start, controlled via the
 `LLM_PROVIDER` env var.
 
-All providers expose the same four functions:
+All providers expose the same five functions:
   - generate(prompt, system="", max_tokens=4096) -> str
   - generate_cached(static_system, static_user_passage, dynamic_user,
                     prior_messages=None, max_tokens=4096) -> (text, usage)
   - stream_cached(...) -> AsyncIterator[{"kind": "delta"|"done", ...}]
+  - stream_with_tools(static_system, static_user_passage, dynamic_user,
+                      prior_messages=None, tools=None, max_tokens=4096)
+                      -> AsyncIterator[{"kind": "delta"|"tool_call"|"done", ...}]
   - generate_json(prompt, max_tokens=512) -> str
 """
 from infra.config import settings
@@ -32,6 +35,7 @@ if _PROVIDER == "deepseek":
         generate,
         generate_cached,
         stream_cached,
+        stream_with_tools,
         generate_json,
     )
 elif _PROVIDER == "minimax":
@@ -42,6 +46,7 @@ elif _PROVIDER == "minimax":
         generate,
         generate_cached,
         stream_cached,
+        stream_with_tools,
         generate_json,
     )
 elif _PROVIDER == "fake":
@@ -50,6 +55,7 @@ elif _PROVIDER == "fake":
         generate,
         generate_cached,
         stream_cached,
+        stream_with_tools,
         generate_json,
     )
 else:
@@ -58,4 +64,10 @@ else:
         "(expected 'minimax', 'deepseek', or 'fake')"
     )
 
-__all__ = ["generate", "generate_cached", "stream_cached", "generate_json"]
+__all__ = [
+    "generate",
+    "generate_cached",
+    "stream_cached",
+    "stream_with_tools",
+    "generate_json",
+]

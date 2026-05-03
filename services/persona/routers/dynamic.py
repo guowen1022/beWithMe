@@ -1,18 +1,23 @@
 """Dynamic UI back-channel — SSE multiplexer + push/error endpoints.
 
 Three endpoints:
-  GET  /api/dynamic/stream             — SSE channel keyed by X-User-Id.
+  GET  /api/dynamic/stream             — SSE channel keyed by (user_id, device_id).
                                           Carries UIUpdate, BlockMessage,
-                                          BlockError events for that user.
+                                          BlockError events for that user/device.
   POST /api/dynamic/push/{block_id}    — body {topic, value}; fans out a
                                           BlockMessage to the user's stream.
   POST /api/dynamic/error/{block_id}   — frontend reports browser-side eval
                                           failures here; fans out a BlockError.
 
-The registry is in-memory (one asyncio.Queue per active user-stream) and
-shared with `tools/request_ui_block.py` via `enqueue_for_user`. No DB
-persistence in v1 — if the user reloads, mounted blocks vanish until the
-teacher re-issues `/block <description>`.
+The registry is in-memory (one asyncio.Queue per active SSE connection)
+and shared with `tools/request_ui_block.py` via `enqueue_for_user`. Devices
+are registered with `infra.devices.registry` on connect so `list_media()`
+can report what's online.
+
+`_subscribers` is now nested: `{user_id: {device_id: {Queue}}}`. Two browser
+tabs from the same device share a `device_id` and each gets its own queue
+under the same slot. `enqueue_for_user` fans out across all devices for
+backward compatibility; `enqueue_for_device` targets one.
 """
 from __future__ import annotations
 
@@ -20,24 +25,26 @@ import asyncio
 import json
 from collections import defaultdict
 from typing import Any, Set
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from infra.auth import parse_user_id as get_current_user_id
+from infra.contracts.devices import DeviceCapabilities
 from infra.contracts.ui import BlockError, BlockMessage, BlockSource, UIUpdate
+from infra.devices import registry as device_registry
 
 from agents.frontend_engineer import llm_engineer
 
 router = APIRouter()
 
 
-# user_id (str) → set of queues. One queue per open SSE connection.
-# A single user with two windows open gets two queues; both receive every
-# event. We fan-out to all active queues for a user_id.
-_subscribers: dict[str, Set[asyncio.Queue]] = defaultdict(set)
+# user_id (str) → device_id (str) → set of queues. One queue per open SSE
+# connection. Two tabs on the same device = two queues under the same
+# device slot.
+_subscribers: dict[str, dict[str, Set[asyncio.Queue]]] = defaultdict(lambda: defaultdict(set))
 
 
 def _serialize(event: BaseModel) -> str:
@@ -45,30 +52,84 @@ def _serialize(event: BaseModel) -> str:
 
 
 async def enqueue_for_user(user_id: UUID, event: BaseModel) -> int:
-    """Fan an event out to every queue for this user. Returns the count."""
+    """Fan an event out to every queue for this user across all devices."""
     key = str(user_id)
-    queues = list(_subscribers.get(key, ()))
     payload = _serialize(event)
-    for q in queues:
+    delivered = 0
+    by_device = _subscribers.get(key, {})
+    for queues in list(by_device.values()):
+        for q in list(queues):
+            await q.put(payload)
+            delivered += 1
+    return delivered
+
+
+async def enqueue_for_device(user_id: UUID, device_id: UUID, event: BaseModel) -> int:
+    """Fan an event out to every queue for one device of this user."""
+    payload = _serialize(event)
+    delivered = 0
+    queues = _subscribers.get(str(user_id), {}).get(str(device_id), set())
+    for q in list(queues):
         await q.put(payload)
-    return len(queues)
+        delivered += 1
+    return delivered
+
+
+def _parse_capabilities(raw: str | None) -> DeviceCapabilities:
+    if not raw:
+        return DeviceCapabilities()
+    try:
+        return DeviceCapabilities.model_validate(json.loads(raw))
+    except Exception:
+        return DeviceCapabilities()
+
+
+def _parse_device_class(raw: str | None) -> str:
+    val = (raw or "").strip().lower()
+    if val in {"phone", "tablet", "desktop"}:
+        return val
+    return "desktop"
 
 
 @router.get("/dynamic/stream")
 async def dynamic_stream(
     request: Request,
     user_id: UUID = Depends(get_current_user_id),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+    x_device_class: str | None = Header(default=None, alias="X-Device-Class"),
+    x_device_capabilities: str | None = Header(
+        default=None, alias="X-Device-Capabilities"
+    ),
 ):
-    """SSE channel for one user. Stays open until the client disconnects."""
+    """SSE channel for one user+device. Stays open until the client disconnects."""
+    # Tolerate clients that haven't adopted device headers yet — synthesize a
+    # one-shot device_id so they still get a working stream. Multi-device
+    # features won't apply to them, but they don't break.
+    try:
+        device_id = UUID(x_device_id) if x_device_id else uuid4()
+    except ValueError:
+        device_id = uuid4()
+    device_class = _parse_device_class(x_device_class)
+    capabilities = _parse_capabilities(x_device_capabilities)
+
+    await device_registry.register(
+        user_id=user_id,
+        device_id=device_id,
+        device_class=device_class,
+        capabilities=capabilities,
+    )
+
     queue: asyncio.Queue = asyncio.Queue()
-    key = str(user_id)
-    _subscribers[key].add(queue)
+    uid_s, did_s = str(user_id), str(device_id)
+    _subscribers[uid_s][did_s].add(queue)
 
     async def gen():
         try:
             # Initial hello — proves the channel is open even before any
-            # block ships. Frontend ignores any event with type != known.
-            yield "data: {\"type\":\"open\"}\n\n"
+            # block ships. Carries the device_id back so the client can
+            # confirm what the server registered (matters when the client
+            # didn't send one and we minted a fresh UUID).
+            yield f"data: {json.dumps({'type': 'open', 'device_id': did_s})}\n\n"
             while True:
                 if await request.is_disconnected():
                     break
@@ -80,9 +141,18 @@ async def dynamic_stream(
                     # paths from closing the stream.
                     yield ": keepalive\n\n"
         finally:
-            _subscribers[key].discard(queue)
-            if not _subscribers[key]:
-                _subscribers.pop(key, None)
+            queues = _subscribers.get(uid_s, {}).get(did_s)
+            if queues is not None:
+                queues.discard(queue)
+                if not queues:
+                    _subscribers[uid_s].pop(did_s, None)
+                    if not _subscribers[uid_s]:
+                        _subscribers.pop(uid_s, None)
+            # Don't await the DB write here — uvicorn cancels this task on
+            # client disconnect, and an in-flight asyncpg call inside a
+            # cancelled task leaves the pooled connection in a broken state.
+            device_registry.mark_offline_local(user_id=user_id, device_id=device_id)
+            device_registry.schedule_offline_write(device_id=device_id)
 
     return StreamingResponse(
         gen(),

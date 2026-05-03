@@ -10,17 +10,13 @@ export async function GET(request: Request) {
   if (deviceCaps) fwd["X-Device-Capabilities"] = deviceCaps;
 
   const backendBase = (process.env.BACKEND_URL || "http://127.0.0.1:8000").replace("localhost", "127.0.0.1");
-  const backendRes = await fetch(`${backendBase}/api/dynamic/stream`, {
+  const backendRes = await fetch(`${backendBase}/api/dynamic/media`, {
     method: "GET",
     headers: fwd,
-    signal: request.signal,
   });
-
-  return new Response(backendRes.body, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
+  const text = await backendRes.text();
+  return new Response(text, {
+    status: backendRes.status,
+    headers: { "Content-Type": backendRes.headers.get("Content-Type") || "application/json" },
   });
 }

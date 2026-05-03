@@ -9,11 +9,19 @@ The teacher's *interpretation* — preference embedding, distillation counter
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Float, Text, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infra.db import Base
+
+
+# Defaults match kokoro-onnx's defaults in services/speak/main.py so the
+# teacher's `speak` tool produces sound the moment the row is created,
+# without the user having to set anything.
+DEFAULT_VOICE_ID = "af_heart"
+DEFAULT_VOICE_SPEED = 1.0
+DEFAULT_VOICE_LANG = "en-us"
 
 
 class UserPreferences(Base):
@@ -33,4 +41,11 @@ class UserPreferences(Base):
     math_comfort: Mapped[str] = mapped_column(Text, default="moderate")
     pacing: Mapped[str] = mapped_column(Text, default="moderate")
     meta_notes: Mapped[str] = mapped_column(Text, default="")
+
+    # Voice / TTS output preferences. The teacher's `speak` tool reads
+    # these to seed unspecified params on the speak service request.
+    voice_id: Mapped[str] = mapped_column(Text, default=DEFAULT_VOICE_ID)
+    voice_speed: Mapped[float] = mapped_column(Float, default=DEFAULT_VOICE_SPEED)
+    voice_lang: Mapped[str] = mapped_column(Text, default=DEFAULT_VOICE_LANG)
+
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

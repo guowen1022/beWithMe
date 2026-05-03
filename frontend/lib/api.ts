@@ -1,3 +1,5 @@
+import { deviceHeaders } from "./deviceId";
+
 const API_BASE = "/api";
 const API_STREAM = "/api"; // use Next.js route handler for SSE
 
@@ -225,10 +227,12 @@ export async function askStream(
 // --- Dynamic UI back-channel ---
 
 export type DynamicEvent =
-  | { type: "open" }
+  | { type: "open"; device_id?: string }
   | { type: "ui-update"; action: "mount" | "replace" | "unmount"; block: { id: string; source: string; design_doc?: string | null } }
   | { type: "block-data"; block_id: string; topic: string; value: unknown }
-  | { type: "block-error"; block_id: string; error: string };
+  | { type: "block-error"; block_id: string; error: string }
+  | { type: "block-action"; block_id: string; action: "highlight" | "focus" | "scroll_to"; options?: Record<string, unknown> }
+  | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null };
 
 export async function subscribeToDynamicStream(
   onEvent: (event: DynamicEvent) => void,
@@ -236,7 +240,7 @@ export async function subscribeToDynamicStream(
 ): Promise<void> {
   const res = await fetch(`${API_STREAM}/dynamic/stream`, {
     method: "GET",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), ...deviceHeaders() },
     signal,
   });
   await throwIfUnknownUser(res);
@@ -265,10 +269,39 @@ export async function subscribeToDynamicStream(
 export async function fetchCanvas(): Promise<{ id: string; source: string; design_doc?: string | null }[]> {
   const res = await fetch(`${API_BASE}/dynamic/canvas`, {
     method: "GET",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), ...deviceHeaders() },
   });
   await throwIfUnknownUser(res);
   if (!res.ok) throw new Error(`fetchCanvas failed (${res.status})`);
+  return res.json();
+}
+
+// MediaInventory shape — mirrors infra/contracts/devices.py.
+// Used by the future teacher tool loop and by debug UIs.
+export interface MediaCanvas {
+  device_id: string;
+  device_class: "phone" | "tablet" | "desktop";
+  online: boolean;
+  blocks: { id: string; title?: string | null }[];
+}
+export interface MediaVoice {
+  device_id: string;
+  device_class: "phone" | "tablet" | "desktop";
+  online: boolean;
+}
+export interface MediaInventory {
+  user_id: string;
+  canvases: MediaCanvas[];
+  voices: MediaVoice[];
+}
+
+export async function fetchMediaInventory(): Promise<MediaInventory> {
+  const res = await fetch(`${API_BASE}/dynamic/media`, {
+    method: "GET",
+    headers: { ...authHeaders(), ...deviceHeaders() },
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`fetchMediaInventory failed (${res.status})`);
   return res.json();
 }
 

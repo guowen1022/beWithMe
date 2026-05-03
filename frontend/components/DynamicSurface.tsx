@@ -7,6 +7,7 @@ import { sourceRegistry, type SourceEntry } from "@/lib/dynamic";
 import { useDeviceClass } from "@/lib/device";
 import { fetchCanvas, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
+import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
 
 function useRegistry(): Readonly<SourceEntry[]> {
   return useSyncExternalStore(
@@ -69,6 +70,22 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
         }
       } else if (event.type === "block-data") {
         bus.publish(event.topic, event.value);
+      } else if (event.type === "block-action") {
+        // Defer one frame so a block mounted in the same SSE batch has had
+        // time to render before we try to scroll/highlight/focus it.
+        const apply = () => {
+          const ok = dynamicBlockRegistry.apply(event.action, event.block_id, event.options);
+          if (!ok) {
+            console.warn(
+              `[dynamic-surface] block-action ${event.action} on ${event.block_id} found no element`,
+            );
+          }
+        };
+        if (typeof requestAnimationFrame !== "undefined") {
+          requestAnimationFrame(apply);
+        } else {
+          apply();
+        }
       }
       // block-error / open / unknown: ignore on the surface; the bus and
       // the block's own fallback already handle the error display path.

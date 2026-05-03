@@ -11,7 +11,7 @@ loop and these contracts agree on what a block looks like.
 """
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -88,6 +88,36 @@ class BlockError(BaseModel):
     error: str
 
 
+class BlockAction(BaseModel):
+    """SSE event: 'invoke a standard handle on block X'.
+
+    Drives the per-block handles introduced in commit 739e931 (scroll/
+    highlight/focus). The frontend looks the block up in its registry
+    and calls the corresponding method.
+    """
+    model_config = _CFG
+    type: Literal["block-action"] = "block-action"
+    block_id: str
+    action: Literal["highlight", "focus", "scroll_to"]
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VoicePlay(BaseModel):
+    """SSE event: 'speak this text on the user's chosen device'.
+
+    The frontend's SpeakerSink fetches `/api/speak/stream` itself with
+    these params and pipes the PCM into Web Audio. We carry the text
+    rather than a synthesized blob so each connected device can play at
+    its own pace and the SSE channel stays text-only.
+    """
+    model_config = _CFG
+    type: Literal["voice-play"] = "voice-play"
+    text: str
+    voice: Optional[str] = None
+    speed: Optional[float] = None
+    lang: Optional[str] = None
+
+
 __all__ = [
     "GridPos",
     "BlockSpec",
@@ -95,4 +125,6 @@ __all__ = [
     "UIUpdate",
     "BlockMessage",
     "BlockError",
+    "BlockAction",
+    "VoicePlay",
 ]
