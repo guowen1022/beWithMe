@@ -18,6 +18,7 @@ from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
 
 from tools.block_action import block_action
+from tools.interactive_graph import interactive_graph
 from tools.list_media import list_media
 from tools.mount_template import mount_template
 from tools.point_arrow import point_arrow
@@ -172,6 +173,46 @@ def _make_push_block_content(user_id: UUID):
             target_device_id=target_uuid,
         )
         return json.dumps({"delivered_to": delivered})
+    return executor
+
+
+def _make_interactive_graph(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        mermaid_raw = args.get("mermaid")
+        if mermaid_raw is not None and not isinstance(mermaid_raw, str):
+            return json.dumps({"error": "mermaid must be a string"})
+        mermaid = mermaid_raw.strip() if isinstance(mermaid_raw, str) else None
+        if mermaid == "":
+            mermaid = None
+
+        highlight_raw = args.get("highlight_node")
+        if highlight_raw is not None and not isinstance(highlight_raw, str):
+            return json.dumps({"error": "highlight_node must be a string"})
+        highlight_node = highlight_raw.strip() if isinstance(highlight_raw, str) else None
+        if highlight_node == "":
+            highlight_node = None
+
+        clear = bool(args.get("clear") or False)
+
+        if mermaid is None and highlight_node is None and not clear:
+            return json.dumps({
+                "error": "pass at least one of mermaid, highlight_node, or clear=true",
+            })
+
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+
+        result = await interactive_graph(
+            user_id=user_id,
+            mermaid=mermaid,
+            highlight_node=highlight_node,
+            clear=clear,
+            target_device_id=target_uuid,
+        )
+        return json.dumps(result)
     return executor
 
 
@@ -374,6 +415,70 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_request_new_block(user_id),
+        ),
+        ToolSpec(
+            name="interactive_graph",
+            description=(
+                "Render or update the canonical interactive diagram on the "
+                "canvas (block id `interactive-graph`). The diagram is "
+                "authored in Mermaid syntax — flowcharts, UML (class / "
+                "sequence / state / ER / C4), mindmaps, gantt charts, pie "
+                "charts, sankey, timeline, xychart (bar/line), kanban, "
+                "journey, requirement, gitgraph, and more. Use this for "
+                "ANY relational/structural visualization: \"step 1 → step "
+                "2 → step 3\", \"class A inherits from B\", \"compare "
+                "options as a tree\", etc. FAST and DETERMINISTIC — no "
+                "engineer LLM in the loop, the update lands in tens of "
+                "milliseconds, perfect for narrating step-by-step while "
+                "the diagram grows. "
+                "INCREMENTAL EXPLANATION PATTERN: each call REPLACES the "
+                "diagram. To grow it alongside your narration, send a "
+                "fuller Mermaid string each turn — e.g. first turn just "
+                "step 1, next turn step 1 + step 2 + edge between them, "
+                "next turn step 1 + 2 + 3, etc. Pair with `speak` so the "
+                "diagram and your voice land together. "
+                "Use `highlight_node` to flash a specific node id while "
+                "you're talking about it (uses Mermaid's node ids — `A`, "
+                "`B`, `C` in `flowchart`, the class/actor name in UML). "
+                "Use `clear=true` to wipe between unrelated topics. "
+                "The block publishes user clicks on `graph.selected` and "
+                "parse errors on `graph.error`; both surface via "
+                "`read_media` (state.kind='graph', state.extra has "
+                "node_ids and selected_node_id)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "mermaid": {
+                        "type": "string",
+                        "description": (
+                            "Full Mermaid source. Replaces the prior diagram. "
+                            "Examples: 'flowchart TD\\n  A[Step 1] --> B[Step 2]'; "
+                            "'classDiagram\\nclass User { +String name }'; "
+                            "'sequenceDiagram\\nAlice->>Bob: Hi'; "
+                            "'xychart-beta\\ntitle \"Q1 sales\"\\nbar [10,20,30]'."
+                        ),
+                    },
+                    "highlight_node": {
+                        "type": "string",
+                        "description": (
+                            "Optional. Node id to flash for ~1.6s after the "
+                            "render lands. Use the same id you used in the "
+                            "Mermaid source (e.g. 'A', 'Step1')."
+                        ),
+                    },
+                    "clear": {
+                        "type": "boolean",
+                        "description": "If true, wipe the diagram. Use between unrelated topics.",
+                    },
+                    "target_device_id": {
+                        "type": "string",
+                        "description": "Optional UUID; update on this device only.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            executor=_make_interactive_graph(user_id),
         ),
         ToolSpec(
             name="push_block_content",
