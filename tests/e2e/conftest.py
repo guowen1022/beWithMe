@@ -12,7 +12,6 @@ import socket
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Iterator
 
@@ -157,17 +156,21 @@ def http(shell_url: str) -> Iterator[httpx.Client]:
         yield c
 
 
+DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
+
+
 @pytest.fixture(scope="session")
 def test_user_id(http: httpx.Client) -> str:
-    """A real user created via the public /api/users endpoint.
+    """The default user seeded by `scripts/init_db.py`.
 
     Auth-required tests use this so the shell's verifier accepts them. Skips
-    the whole module if Postgres is unreachable in this environment."""
-    username = f"e2e-test-{uuid.uuid4().hex[:8]}"
-    resp = http.post("/api/users", json={"username": username})
+    the whole module if the user can't be reached (DB / sidecars not up)."""
+    resp = http.get("/api/users")
     if resp.status_code != 200:
-        pytest.skip(f"cannot create test user (DB unreachable?): {resp.status_code} {resp.text[:200]}")
-    return resp.json()["id"]
+        pytest.skip(f"DB unreachable: {resp.status_code} {resp.text[:200]}")
+    if not any(u.get("id") == DEFAULT_USER_ID for u in resp.json()):
+        pytest.skip("default user not seeded; run scripts/init_db.py")
+    return DEFAULT_USER_ID
 
 
 @pytest.fixture(scope="session")

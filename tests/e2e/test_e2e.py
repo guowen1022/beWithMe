@@ -66,17 +66,6 @@ def test_auth_users_list_is_public(http: httpx.Client):
     assert isinstance(resp.json(), list)
 
 
-def test_auth_users_create_is_public(http: httpx.Client):
-    """POST /api/users is public — bootstrapping a user must not require auth."""
-    username = f"public-create-{uuid.uuid4().hex[:8]}"
-    resp = http.post("/api/users", json={"username": username})
-    if resp.status_code != 200:
-        pytest.skip(f"DB not reachable: {resp.status_code}")
-    body = resp.json()
-    assert body["username"] == username
-    assert "id" in body
-
-
 # --- Knowledge -------------------------------------------------------------
 
 

@@ -3,10 +3,6 @@
 Covers: known templates mount + write canvas_layout + emit SSE; unknown
 template returns 404; replace ids unmount + remove from layout in the
 same request; bad template names are rejected as 400.
-
-Uses a fresh user per test (rather than the session-scoped `test_user_id`)
-so the per-user-git workspace stays clean — these tests write blocks to
-that workspace and shouldn't leak state into other suites.
 """
 from __future__ import annotations
 
@@ -16,22 +12,6 @@ import time
 import uuid
 
 import httpx
-import pytest
-
-
-@pytest.fixture
-def fresh_user_id(http: httpx.Client) -> str:
-    """A new user per test. Avoids polluting the shared workspace."""
-    username = f"e2e-mt-{uuid.uuid4().hex[:8]}"
-    resp = http.post("/api/users", json={"username": username})
-    if resp.status_code != 200:
-        pytest.skip(f"cannot create test user: {resp.status_code} {resp.text[:200]}")
-    return resp.json()["id"]
-
-
-@pytest.fixture
-def fresh_auth(fresh_user_id: str) -> dict[str, str]:
-    return {"X-User-Id": fresh_user_id}
 
 
 def _device_headers(user_id: str, device_id: str | None = None) -> dict[str, str]:
@@ -81,10 +61,10 @@ def _wait_for(events: list[dict], pred, timeout: float = 5.0) -> dict | None:
     return None
 
 
-def test_mount_template_unknown_returns_404(http: httpx.Client, fresh_auth: dict):
+def test_mount_template_unknown_returns_404(http: httpx.Client, auth: dict):
     """Unknown template name → 404. The endpoint requires X-Device-Id but
     sends a 404 first when the template can't be found."""
-    headers = _device_headers(fresh_auth["X-User-Id"])
+    headers = _device_headers(auth["X-User-Id"])
     resp = http.post(
         "/api/dynamic/mount-template",
         headers={**headers, "Content-Type": "application/json"},
@@ -93,10 +73,10 @@ def test_mount_template_unknown_returns_404(http: httpx.Client, fresh_auth: dict
     assert resp.status_code == 404, resp.text
 
 
-def test_mount_template_invalid_name_returns_400(http: httpx.Client, fresh_auth: dict):
+def test_mount_template_invalid_name_returns_400(http: httpx.Client, auth: dict):
     """Names with characters outside [a-z0-9_-] are rejected as 400 (no path
     traversal possible)."""
-    headers = _device_headers(fresh_auth["X-User-Id"])
+    headers = _device_headers(auth["X-User-Id"])
     for bad in ["../etc/passwd", "/etc/passwd", "Foo", "with space"]:
         resp = http.post(
             "/api/dynamic/mount-template",
@@ -107,11 +87,11 @@ def test_mount_template_invalid_name_returns_400(http: httpx.Client, fresh_auth:
 
 
 def test_mount_template_passage_reader(
-    http: httpx.Client, shell_url: str, fresh_user_id: str
+    http: httpx.Client, shell_url: str, test_user_id: str
 ):
     """Mounting passage_reader fans out a UIUpdate mount on the dynamic
     stream and returns the assigned block id."""
-    headers = _device_headers(fresh_user_id)
+    headers = _device_headers(test_user_id)
     events: list[dict] = []
     open_seen = threading.Event()
     stop = threading.Event()
@@ -147,11 +127,11 @@ def test_mount_template_passage_reader(
 
 
 def test_mount_template_replace_unmounts_old(
-    http: httpx.Client, shell_url: str, fresh_user_id: str
+    http: httpx.Client, shell_url: str, test_user_id: str
 ):
     """`replace: [old_id]` triggers an unmount UIUpdate for old_id followed
     by a mount UIUpdate for the new template — in the same request."""
-    headers = _device_headers(fresh_user_id)
+    headers = _device_headers(test_user_id)
     events: list[dict] = []
     open_seen = threading.Event()
     stop = threading.Event()
