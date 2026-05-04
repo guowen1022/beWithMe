@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en" data-theme="void">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>beWithMe · canvas concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600;700;800&family=Fraunces:ital,opsz,wght@1,9..144,300..500&family=JetBrains+Mono:wght@400;500&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    /* dark — primary, cinematic */
+    --void:        #07070C;
+    --void-2:      #0E0E18;
+    --surface:     #12121E;
+    --surface-2:   #1A1A2A;
+    --border:      #262638;
+    --border-strong: #3A3A52;
+    --ink:         #F4F4F8;
+    --ink-muted:   #9090A8;
+    --ink-faint:   #4F4F66;
+    --accent:      #5C8CE6;
+    --accent-soft: rgba(92, 140, 230, 0.16);
+    --aurora-1:    #FF3DA8;
+    --aurora-2:    #7B3FF2;
+    --aurora-3:    #3D7BFF;
+    --aurora-4:    #3DD6FF;
+    --aurora-grad: linear-gradient(135deg, #FF3DA8 0%, #7B3FF2 32%, #3D7BFF 66%, #3DD6FF 100%);
+    --grid:        rgba(244, 244, 248, 0.035);
+    --shadow-frame: 0 30px 80px -36px rgba(0, 0, 0, 0.85),
+                    0 8px 24px -12px rgba(123, 63, 242, 0.18);
+  }
+
+  [data-theme="light"] {
+    --void:        #FAFAFC;
+    --void-2:      #F2F2F6;
+    --surface:     #FFFFFF;
+    --surface-2:   #F4F4F8;
+    --border:      #DCDCE4;
+    --border-strong: #B8B8C8;
+    --ink:         #0A0A14;
+    --ink-muted:   #5C5C6E;
+    --ink-faint:   #A8A8B8;
+    --accent:      #2D5FC9;
+    --accent-soft: rgba(45, 95, 201, 0.10);
+    --grid:        rgba(10, 10, 20, 0.04);
+    --shadow-frame: 0 24px 64px -32px rgba(10, 10, 20, 0.22),
+                    0 4px 12px -6px rgba(10, 10, 20, 0.08);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { min-height: 100%; }
+
+  body {
+    font-family: "Onest", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--void);
+    transition: background-color 0.45s ease, color 0.45s ease;
+    overflow-x: hidden;
+  }
+
+  /* ── HERO with aurora ─────────────────────────────── */
+  .hero {
+    position: relative;
+    overflow: hidden;
+    background: var(--void);
+    border-bottom: 1px solid var(--border);
+    transition: background-color 0.45s, border-color 0.45s;
+  }
+
+  .hero__aurora {
+    position: absolute;
+    inset: -15%;
+    background:
+      radial-gradient(ellipse 50% 38% at 18% 28%, rgba(255, 61, 168, 0.30), transparent 65%),
+      radial-gradient(ellipse 48% 36% at 50% 18%, rgba(123, 63, 242, 0.45), transparent 65%),
+      radial-gradient(ellipse 55% 42% at 78% 38%, rgba(61, 123, 255, 0.36), transparent 65%),
+      radial-gradient(ellipse 40% 30% at 92% 70%, rgba(61, 214, 255, 0.30), transparent 70%);
+    filter: blur(40px);
+    animation: drift 22s ease-in-out infinite;
+    pointer-events: none;
+  }
+  [data-theme="light"] .hero__aurora {
+    opacity: 0.55;
+    filter: blur(50px);
+  }
+
+  @keyframes drift {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33%      { transform: translate(-2%, 1.5%) scale(1.04); }
+    66%      { transform: translate(2%, -1%) scale(0.98); }
+  }
+
+  /* fine grid overlay over hero */
+  .hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 64px 64px;
+    pointer-events: none;
+    mix-blend-mode: lighten;
+  }
+
+  /* ── HEADER ─────────────────────────────────── */
+  .header {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 56px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+  }
+  .brand__mark {
+    font-family: "Onest", sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+  }
+  .brand__mark .glyph {
+    color: var(--accent);
+    margin: 0 1px;
+  }
+  .brand__sub {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+  }
+
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    font-family: "Onest", sans-serif;
+    font-size: 13px;
+    color: var(--ink-muted);
+  }
+  .nav a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .nav a.active { color: var(--ink); position: relative; }
+  .nav a.active::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -8px;
+    height: 1.5px;
+    background: var(--accent);
+  }
+  .nav a:hover { color: var(--ink); }
+
+  .theme-switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    user-select: none;
+  }
+  .theme-switch span[data-on] { color: var(--ink); }
+
+  .switch-track {
+    position: relative;
+    width: 50px;
+    height: 24px;
+    border: 1px solid var(--border-strong);
+    background: rgba(244, 244, 248, 0.04);
+    cursor: pointer;
+    border-radius: 0;
+  }
+  .switch-track::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: -1px;
+    width: 26px;
+    height: 24px;
+    background: var(--accent);
+    transition: transform 0.45s cubic-bezier(.5,0,.2,1);
+  }
+  [data-theme="light"] .switch-track::before { transform: translateX(24px); }
+
+  /* ── HERO BODY ─────────────────────────────── */
+  .hero__body {
+    position: relative;
+    z-index: 2;
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 100px 56px 140px;
+    text-align: center;
+  }
+
+  .hero__eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    margin-bottom: 26px;
+    color: var(--accent);
+  }
+
+  .hero__h {
+    font-family: "Onest", sans-serif;
+    font-weight: 700;
+    font-size: clamp(48px, 7.5vw, 104px);
+    line-height: 0.98;
+    letter-spacing: -0.04em;
+    color: var(--ink);
+    margin-bottom: 28px;
+  }
+  .hero__h em {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 144, "wght" 400;
+    font-weight: 400;
+    color: var(--accent);
+    padding: 0 4px;
+  }
+
+  .hero__lede {
+    max-width: 56ch;
+    margin: 0 auto;
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--ink-muted);
+  }
+
+  /* ── BOARD ──────────────────────────────────── */
+  .board-section {
+    background: var(--void);
+    transition: background-color 0.45s;
+    position: relative;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: 1.55fr 0.85fr 0.55fr;
+    gap: 36px;
+    padding: 80px 56px;
+    align-items: start;
+    max-width: 1500px;
+    margin: 0 auto;
+  }
+
+  .device {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise 0.7s cubic-bezier(.2,.8,.2,1) forwards;
+    position: relative;
+  }
+  .device:nth-child(1) { animation-delay: 0.08s; }
+  .device:nth-child(2) { animation-delay: 0.22s; }
+  .device:nth-child(3) { animation-delay: 0.36s; }
+
+  /* subtle aurora glow behind each frame */
+  .device::before {
+    content: "";
+    position: absolute;
+    inset: 30px -15% -15% -15%;
+    background:
+      radial-gradient(ellipse 70% 55% at 30% 40%, rgba(123, 63, 242, 0.18), transparent 70%),
+      radial-gradient(ellipse 60% 50% at 70% 60%, rgba(61, 123, 255, 0.14), transparent 70%);
+    filter: blur(30px);
+    pointer-events: none;
+    z-index: -1;
+    opacity: 1;
+    transition: opacity 0.45s;
+  }
+  [data-theme="light"] .device::before { opacity: 0.55; }
+
+  .device__label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 4px;
+  }
+  .device__label-name {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 96, "wght" 400;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .device__label-spec {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+  }
+
+  /* ── FRAMES ─────────────────────────────────── */
+  .frame {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-frame);
+    overflow: hidden;
+    transition: background-color 0.45s, border-color 0.45s, box-shadow 0.45s;
+  }
+  .frame--desktop { border-radius: 8px;  aspect-ratio: 16 / 10; }
+  .frame--tablet  { border-radius: 18px; aspect-ratio: 3 / 4; padding: 10px; }
+  .frame--phone   { border-radius: 30px; aspect-ratio: 9 / 19; padding: 8px; }
+
+  .chrome {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .chrome__lights { display: flex; gap: 6px; }
+  .chrome__lights span {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: var(--border-strong);
+  }
+  .chrome__url {
+    flex: 1;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--ink-muted);
+    text-align: center;
+    background: var(--void-2);
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+  }
+  .chrome__url .accent {
+    color: var(--accent);
+    margin: 0 4px;
+  }
+
+  /* ── CANVAS surface inside frame ────────────── */
+  .canvas {
+    position: relative;
+    background-color: var(--void-2);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+    padding: 18px;
+    display: grid;
+    gap: 14px;
+    transition: background-color 0.45s;
+  }
+  .frame--desktop .canvas {
+    height: calc(100% - 49px);
+    grid-template-columns: repeat(12, 1fr);
+    grid-template-rows: 1fr auto;
+    gap: 14px;
+  }
+  /* 12-col span helpers — apply on .block to fix width */
+  .col-2  { grid-column: span 2; }
+  .col-3  { grid-column: span 3; }
+  .col-4  { grid-column: span 4; }
+  .col-5  { grid-column: span 5; }
+  .col-6  { grid-column: span 6; }
+  .col-7  { grid-column: span 7; }
+  .col-8  { grid-column: span 8; }
+  .col-12 { grid-column: 1 / -1; }
+  .frame--tablet .canvas {
+    height: 100%;
+    border-radius: 12px;
+    background-size: 24px 24px;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1.4fr 1fr auto;
+  }
+  .frame--phone .canvas {
+    height: 100%;
+    border-radius: 26px;
+    padding: 14px 12px;
+    background-size: 18px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* ── BLOCK — sharp rectangles ───────────────── */
+  .block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    transform: translateY(8px);
+    animation: rise 0.55s cubic-bezier(.2,.8,.2,1) forwards;
+    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+    position: relative;
+  }
+  .block:hover {
+    transform: translateY(-1px);
+    border-color: var(--accent);
+  }
+
+  .block__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .block__id {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 8px;
+    border-radius: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+
+  .block__title {
+    flex: 1;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .block__handle {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 3px 2px;
+    cursor: grab;
+  }
+  .block__handle::before, .block__handle::after {
+    content: "";
+    width: 14px;
+    height: 1px;
+    background: var(--ink-faint);
+  }
+
+  .block__body {
+    flex: 1;
+    padding: 14px;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.55;
+    color: var(--ink-muted);
+  }
+
+  /* ── PDF page mock ─────────────────────────── */
+  .pdf-page {
+    background: var(--void);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    padding: 16px 18px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  [data-theme="light"] .pdf-page { background: var(--surface); }
+  .pdf-page__title {
+    font-family: "Onest", sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    line-height: 1.2;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+  }
+  .pdf-page__authors {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 24, "wght" 350;
+    font-size: 9.5px;
+    color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .pdf-line {
+    height: 4px;
+    background: var(--surface-2);
+  }
+  .pdf-line.short { width: 62%; }
+  .pdf-line.med   { width: 84%; }
+  .pdf-line.highlight {
+    background: linear-gradient(
+      90deg,
+      var(--accent) 0%,
+      var(--accent) 58%,
+      var(--surface-2) 58%);
+    width: 80%;
+  }
+
+  /* ── Recommendations ───────────────────────── */
+  .rec-list { display: flex; flex-direction: column; }
+  .rec-item {
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .rec-item:last-child { border-bottom: none; padding-bottom: 0; }
+  .rec-item:first-child { padding-top: 0; }
+  .rec-item__title {
+    color: var(--ink);
+    font-weight: 500;
+    font-size: 10.5px;
+    letter-spacing: -0.005em;
+    margin-bottom: 3px;
+  }
+  .rec-item__meta {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 24, "wght" 350;
+    font-size: 9.5px;
+    color: var(--ink-faint);
+  }
+  .rec-item__meta b {
+    font-style: normal;
+    font-family: "Onest", sans-serif;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── Concept chips ─────────────────────────── */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 9.5px;
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--surface-2);
+    color: var(--ink-muted);
+  }
+  .chip--active {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+
+  /* ── Ghost slot ─────────────────────────────── */
+  .ghost {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 0;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-faint);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    padding: 12px;
+    min-height: 42px;
+    opacity: 0;
+    animation: rise 0.55s ease forwards;
+  }
+
+  /* ── Command bar ────────────────────────────── */
+  .cmdbar {
+    display: flex;
+    align-items: stretch;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0;
+    opacity: 0;
+    animation: rise 0.5s ease forwards;
+  }
+  .frame--desktop .cmdbar { grid-column: 1 / -1; }   /* span 12 */
+
+  .cmdbar__chip {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 9.5px;
+    color: var(--ink-muted);
+    background: var(--surface-2);
+    padding: 9px 12px;
+    border-right: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+  .cmdbar__chip .arrow {
+    color: var(--accent);
+    margin: 0 6px;
+    font-weight: 600;
+  }
+
+  .cmdbar__input {
+    flex: 1;
+    padding: 9px 12px;
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 24, "wght" 380;
+    font-size: 12.5px;
+    color: var(--ink-faint);
+    display: flex;
+    align-items: center;
+  }
+
+  .cmdbar__send {
+    padding: 0 16px;
+    background: var(--accent);
+    color: #E8EEFA;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+  }
+
+  /* phone tweaks */
+  .frame--phone .block__head { padding: 7px 10px; }
+  .frame--phone .block__id { display: none; }
+  .frame--phone .block__title { font-size: 10px; }
+  .frame--phone .block__body { padding: 11px; font-size: 9.5px; }
+
+  .phone-notch {
+    width: 32%;
+    height: 22px;
+    background: #000;
+    border-radius: 14px;
+    margin: 4px auto 6px;
+    flex-shrink: 0;
+  }
+
+  .phone-passage {
+    font-family: "Onest", sans-serif;
+    font-weight: 400;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .phone-passage mark {
+    background: var(--accent-soft);
+    color: var(--ink);
+    padding: 0 4px;
+    border-radius: 0;
+    border-bottom: 1.5px solid var(--accent);
+  }
+
+  /* ── Footer ─────────────────────────────────── */
+  .footer {
+    padding: 64px 56px 96px;
+    text-align: center;
+    border-top: 1px solid var(--border);
+    background: var(--void);
+    transition: background-color 0.45s, border-color 0.45s;
+  }
+  .footer__line {
+    font-family: "Fraunces", serif;
+    font-style: italic;
+    font-variation-settings: "opsz" 144, "wght" 380;
+    font-size: 22px;
+    color: var(--ink-muted);
+    letter-spacing: -0.005em;
+    margin-bottom: 10px;
+  }
+  .footer__line .accent {
+    color: var(--accent);
+    font-style: normal;
+    font-family: "Onest", sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+  }
+  .footer__meta {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+  }
+
+  @media (max-width: 1100px) {
+    .board { grid-template-columns: 1fr; gap: 80px; }
+    .frame--desktop, .frame--tablet, .frame--phone { max-width: 720px; width: 100%; }
+    .nav { display: none; }
+  }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+
+  <section class="hero">
+    <div class="hero__aurora"></div>
+
+    <header class="header">
+      <div class="brand">
+        <div class="brand__mark">be<span class="glyph">/</span>withme</div>
+        <div class="brand__sub">canvas surface · v0.4</div>
+      </div>
+      <nav class="nav">
+        <a href="#" class="active">Reader</a>
+        <a href="#">Concepts</a>
+        <a href="#">Sessions</a>
+      </nav>
+      <label class="theme-switch">
+        <span data-on>void</span>
+        <button class="switch-track" id="switch" aria-label="toggle theme"></button>
+        <span>light</span>
+      </label>
+    </header>
+
+    <div class="hero__body">
+      <div class="hero__eyebrow">— canvas concept · multi-device</div>
+      <h1 class="hero__h">
+        Three rooms, <em>one</em> canvas.
+      </h1>
+      <p class="hero__lede">
+        Chromeless blocks. Hairline borders. A single placement grammar.
+        The persona decides what to mount; the device decides how it lays out.
+      </p>
+    </div>
+  </section>
+
+  <section class="board-section">
+    <main class="board">
+      <!-- DESKTOP ───────────────────────────────── -->
+      <section class="device" aria-label="desktop">
+        <div class="device__label">
+          <div class="device__label-name">Desktop</div>
+          <div class="device__label-spec">1440 × 900 · 12-col</div>
+        </div>
+
+        <div class="frame frame--desktop">
+          <div class="chrome">
+            <div class="chrome__lights"><span></span><span></span><span></span></div>
+            <div class="chrome__url">bewithme.local <span class="accent">/</span> reader <span class="accent">/</span> 1706.03762v7</div>
+          </div>
+
+          <div class="canvas">
+            <article class="block col-7" style="grid-row:1; animation-delay:.55s">
+              <div class="block__head">
+                <span class="block__id">pdf-reader · 7-col</span>
+                <span class="block__title">Attention Is All You Need · §3.2</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body" style="padding:12px">
+                <div class="pdf-page">
+                  <div class="pdf-page__title">Attention Is All You Need</div>
+                  <div class="pdf-page__authors">A. Vaswani, N. Shazeer, N. Parmar, et al. — NeurIPS 2017</div>
+                  <div class="pdf-line med"></div>
+                  <div class="pdf-line"></div>
+                  <div class="pdf-line short"></div>
+                  <div class="pdf-line med"></div>
+                  <div class="pdf-line highlight"></div>
+                  <div class="pdf-line"></div>
+                  <div class="pdf-line short"></div>
+                  <div class="pdf-line med"></div>
+                  <div class="pdf-line"></div>
+                </div>
+              </div>
+            </article>
+
+            <article class="block col-5" style="grid-row:1; animation-delay:.66s">
+              <div class="block__head">
+                <span class="block__id">recommendations · 5-col</span>
+                <span class="block__title">Suggested next</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body">
+                <div class="rec-list">
+                  <div class="rec-item">
+                    <div class="rec-item__title">BERT — bidirectional pre-training</div>
+                    <div class="rec-item__meta">Devlin et al. · builds on <b>§3.2</b></div>
+                  </div>
+                  <div class="rec-item">
+                    <div class="rec-item__title">Layer Normalization</div>
+                    <div class="rec-item__meta">Ba, Kiros, Hinton · referenced eq.</div>
+                  </div>
+                  <div class="rec-item">
+                    <div class="rec-item__title">Neural MT by jointly aligning</div>
+                    <div class="rec-item__meta">Bahdanau et al. · <b>earlier</b> attention</div>
+                  </div>
+                  <div class="rec-item">
+                    <div class="rec-item__title">Decomposable Attention Model</div>
+                    <div class="rec-item__meta">Parikh et al. · same lineage</div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <div class="cmdbar" style="animation-delay:.78s">
+              <span class="cmdbar__chip">USER<span class="arrow">→</span>TEACHER</span>
+              <span class="cmdbar__input">why is the dot product scaled by √dₖ?</span>
+              <span class="cmdbar__send">SEND ↵</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TABLET ───────────────────────────────── -->
+      <section class="device" aria-label="tablet">
+        <div class="device__label">
+          <div class="device__label-name">Tablet</div>
+          <div class="device__label-spec">834 × 1112 · 6-col</div>
+        </div>
+
+        <div class="frame frame--tablet">
+          <div class="canvas">
+            <article class="block" style="animation-delay:.62s">
+              <div class="block__head">
+                <span class="block__id">pdf-reader</span>
+                <span class="block__title">Attention Is All You Need</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body" style="padding:10px">
+                <div class="pdf-page">
+                  <div class="pdf-page__title">Attention Is All You Need</div>
+                  <div class="pdf-page__authors">A. Vaswani et al.</div>
+                  <div class="pdf-line med"></div>
+                  <div class="pdf-line"></div>
+                  <div class="pdf-line short"></div>
+                  <div class="pdf-line highlight"></div>
+                  <div class="pdf-line"></div>
+                  <div class="pdf-line med"></div>
+                </div>
+              </div>
+            </article>
+
+            <article class="block" style="animation-delay:.72s">
+              <div class="block__head">
+                <span class="block__id">concept-map</span>
+                <span class="block__title">Concepts touched today</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body">
+                <div class="chips">
+                  <span class="chip">self-attention</span>
+                  <span class="chip chip--active">multi-head</span>
+                  <span class="chip">positional encoding</span>
+                  <span class="chip">layer norm</span>
+                  <span class="chip">residual</span>
+                  <span class="chip">softmax</span>
+                </div>
+                <div style="margin-top:11px; font-family:'Fraunces',serif; font-style:italic; font-variation-settings:'opsz' 24,'wght' 380; font-size:10.5px; color:var(--ink-faint);">
+                  <span style="color:var(--accent);font-weight:600;">●</span> mastery rising · 4 of 6 reinforced
+                </div>
+              </div>
+            </article>
+
+            <div class="cmdbar" style="animation-delay:.84s">
+              <span class="cmdbar__chip">TEACHER</span>
+              <span class="cmdbar__input">explain figure 2…</span>
+              <span class="cmdbar__send">↵</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PHONE ────────────────────────────────── -->
+      <section class="device" aria-label="phone">
+        <div class="device__label">
+          <div class="device__label-name">Phone</div>
+          <div class="device__label-spec">390 × 844 · 1-col</div>
+        </div>
+
+        <div class="frame frame--phone">
+          <div class="canvas">
+            <div class="phone-notch"></div>
+
+            <article class="block" style="animation-delay:.7s">
+              <div class="block__head">
+                <span class="block__title">passage</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body">
+                <p class="phone-passage">
+                  "We propose the Transformer, a model architecture relying entirely on an
+                  <mark>attention mechanism</mark>
+                  to draw global dependencies between input and output."
+                </p>
+              </div>
+            </article>
+
+            <article class="block" style="animation-delay:.82s">
+              <div class="block__head">
+                <span class="block__title">teacher · note</span>
+                <span class="block__handle"></span>
+              </div>
+              <div class="block__body" style="font-family:'Fraunces',serif; font-style:italic; font-variation-settings:'opsz' 24,'wght' 400; font-size:11px; line-height:1.5; color:var(--ink-muted);">
+                You haven't seen <span style="color:var(--accent); font-style:normal; font-family:'Onest',sans-serif; font-weight:600">scaled dot-product</span> before — should I unpack it before §3.2?
+              </div>
+            </article>
+
+            <div class="ghost" style="animation-delay:.92s">slot · drop here</div>
+
+            <div class="cmdbar" style="margin-top:auto; animation-delay:1s">
+              <span class="cmdbar__input" style="padding:7px 10px; font-size:10.5px">ask…</span>
+              <span class="cmdbar__send" style="padding:0 14px; font-size:10px">↵</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <footer class="footer">
+    <div class="footer__line">canvas <span class="accent">=</span> a single surface, three rooms.</div>
+    <div class="footer__meta">three classes · one grammar · zero chrome</div>
+  </footer>
+
+  <script>
+    const sw = document.getElementById("switch");
+    const html = document.documentElement;
+    const labels = document.querySelectorAll(".theme-switch span");
+
+    sw.addEventListener("click", () => {
+      const next = html.dataset.theme === "void" ? "light" : "void";
+      html.dataset.theme = next;
+      labels[0].toggleAttribute("data-on", next === "void");
+      labels[1].toggleAttribute("data-on", next === "light");
+    });
+  </script>
+</body>
+</html>

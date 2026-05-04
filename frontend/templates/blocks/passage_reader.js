@@ -5,12 +5,11 @@
   // structured passage state, which is what the persona actually wants.
   autosnapshot: false,
   style: {
-    background: 'linear-gradient(180deg, #1f2937 0%, #111827 100%)',
-    color: '#f9fafb',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
-    borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    borderRadius: '0',
+    border: '1px solid var(--bw-border)',
     padding: '0',
     overflow: 'hidden',
     display: 'flex',
@@ -23,32 +22,35 @@
 
     // ---- Header ---------------------------------------------------------
     var header = document.createElement('div');
-    header.style.padding = '10px 14px';
-    header.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
-    header.style.background = 'rgba(15,23,42,0.6)';
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.gap = '10px';
-    header.style.flexShrink = '0';
+    header.style.cssText =
+      'display:flex; align-items:center; gap:10px;' +
+      'padding:9px 12px;' +
+      'background:var(--bw-surface-2);' +
+      'border-bottom:1px solid var(--bw-border);' +
+      'flex-shrink:0;';
 
-    var headerIcon = document.createElement('div');
-    headerIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
-    headerIcon.style.color = '#94a3b8';
-    headerIcon.style.display = 'flex';
+    var idChip = document.createElement('span');
+    idChip.textContent = 'PASSAGE';
+    idChip.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:9.5px;' +
+      'color:var(--bw-accent); background:var(--bw-accent-soft);' +
+      'padding:3px 8px; letter-spacing:.08em; text-transform:uppercase;';
 
     var headerTitle = document.createElement('div');
     headerTitle.textContent = 'Passage';
-    headerTitle.style.fontSize = '13px';
-    headerTitle.style.fontWeight = '600';
-    headerTitle.style.flex = '1';
+    headerTitle.style.cssText =
+      'flex:1; font-size:11.5px; font-weight:600;' +
+      'color:var(--bw-ink); white-space:nowrap;' +
+      'overflow:hidden; text-overflow:ellipsis;';
 
     var headerMeta = document.createElement('div');
-    headerMeta.style.fontSize = '11px';
-    headerMeta.style.color = '#64748b';
-    headerMeta.style.flexShrink = '0';
     headerMeta.textContent = 'empty';
+    headerMeta.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-faint); flex-shrink:0;' +
+      'text-transform:uppercase; letter-spacing:.08em;';
 
-    header.appendChild(headerIcon);
+    header.appendChild(idChip);
     header.appendChild(headerTitle);
     header.appendChild(headerMeta);
     root.appendChild(header);
@@ -57,18 +59,11 @@
     var textarea = document.createElement('textarea');
     textarea.placeholder = 'Paste or type a passage you want to read…';
     textarea.spellcheck = false;
-    textarea.style.flex = '1';
-    textarea.style.width = '100%';
-    textarea.style.padding = '16px 18px';
-    textarea.style.fontSize = '14px';
-    textarea.style.lineHeight = '1.6';
-    textarea.style.fontFamily = 'inherit';
-    textarea.style.color = '#e2e8f0';
-    textarea.style.background = 'transparent';
-    textarea.style.border = 'none';
-    textarea.style.outline = 'none';
-    textarea.style.resize = 'none';
-    textarea.style.boxSizing = 'border-box';
+    textarea.style.cssText =
+      'flex:1; width:100%; padding:14px 16px;' +
+      'font-family:inherit; font-size:13px; line-height:1.6;' +
+      'color:var(--bw-ink); background:transparent;' +
+      'border:none; outline:none; resize:none; box-sizing:border-box;';
     root.appendChild(textarea);
 
     // ---- Reporting (debounced 200ms) ------------------------------------

@@ -6,16 +6,14 @@
   // for itself.
   autosnapshot: false,
   style: {
-    background: 'linear-gradient(180deg, #1f2937 0%, #111827 100%)',
-    color: '#f9fafb',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
-    borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-    padding: '28px',
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    borderRadius: '0',
+    border: '1px solid var(--bw-border)',
+    padding: '0',
     display: 'flex',
     flexDirection: 'column',
-    gap: '20px',
     overflow: 'hidden',
   },
   publishes: [],
@@ -23,67 +21,84 @@
     var blockId = (helpers && helpers.blockId) || '__BLOCK_ID__';
     var backend = helpers && helpers.backend ? helpers.backend : null;
 
+    // ── Header strip ────────────────────────────────────
+    var header = document.createElement('div');
+    header.style.cssText =
+      'display:flex; align-items:center; gap:10px;' +
+      'padding:9px 12px;' +
+      'background:var(--bw-surface-2);' +
+      'border-bottom:1px solid var(--bw-border);' +
+      'flex-shrink:0;';
+
+    var idChip = document.createElement('span');
+    idChip.textContent = 'LAUNCHER';
+    idChip.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:9.5px;' +
+      'color:var(--bw-accent); background:var(--bw-accent-soft);' +
+      'padding:3px 8px; letter-spacing:.08em; text-transform:uppercase;';
+
+    var headerTitle = document.createElement('span');
+    headerTitle.textContent = 'Reader setup';
+    headerTitle.style.cssText =
+      'flex:1; font-size:11.5px; font-weight:600;' +
+      'color:var(--bw-ink);';
+
+    header.appendChild(idChip);
+    header.appendChild(headerTitle);
+    root.appendChild(header);
+
+    // ── Body ────────────────────────────────────────────
+    var body = document.createElement('div');
+    body.style.cssText =
+      'flex:1; padding:24px; display:flex; flex-direction:column; gap:18px;';
+    root.appendChild(body);
+
     var prompt = document.createElement('div');
     prompt.textContent = 'What would you like to read?';
-    prompt.style.fontSize = '15px';
-    prompt.style.fontWeight = '600';
-    prompt.style.opacity = '0.9';
-    prompt.style.letterSpacing = '-0.01em';
-    root.appendChild(prompt);
+    prompt.style.cssText =
+      'font-size:14px; font-weight:500;' +
+      'color:var(--bw-ink); letter-spacing:-0.005em;';
+    body.appendChild(prompt);
 
     var buttonRow = document.createElement('div');
-    buttonRow.style.display = 'flex';
-    buttonRow.style.gap = '12px';
-    buttonRow.style.flexWrap = 'wrap';
-    root.appendChild(buttonRow);
+    buttonRow.style.cssText = 'display:flex; gap:10px; flex-wrap:wrap;';
+    body.appendChild(buttonRow);
 
     var status = document.createElement('div');
-    status.style.fontSize = '12px';
-    status.style.opacity = '0.55';
-    status.style.minHeight = '14px';
-    root.appendChild(status);
+    status.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-faint); min-height:12px;' +
+      'text-transform:uppercase; letter-spacing:.1em;';
+    body.appendChild(status);
 
     function makeButton(label, hint, templateName) {
       var btn = document.createElement('button');
       btn.type = 'button';
-      btn.style.flex = '1 1 200px';
-      btn.style.minWidth = '180px';
-      btn.style.padding = '18px 16px';
-      btn.style.fontSize = '14px';
-      btn.style.fontWeight = '600';
-      btn.style.fontFamily = 'inherit';
-      btn.style.color = '#f9fafb';
-      btn.style.background = 'rgba(59,130,246,0.12)';
-      btn.style.border = '1px solid rgba(147,197,253,0.3)';
-      btn.style.borderRadius = '10px';
-      btn.style.cursor = 'pointer';
-      btn.style.textAlign = 'left';
-      btn.style.display = 'flex';
-      btn.style.flexDirection = 'column';
-      btn.style.gap = '6px';
-      btn.style.transition = 'background 0.15s ease, border-color 0.15s ease';
+      btn.style.cssText =
+        'flex:1 1 200px; min-width:180px;' +
+        'padding:16px 14px; border-radius:0;' +
+        'font-family:inherit; color:var(--bw-ink);' +
+        'background:var(--bw-surface-2);' +
+        'border:1px solid var(--bw-border);' +
+        'cursor:pointer; text-align:left;' +
+        'display:flex; flex-direction:column; gap:5px;' +
+        'transition:border-color 0.15s ease;';
 
       var titleEl = document.createElement('div');
       titleEl.textContent = label;
-      titleEl.style.fontSize = '14px';
-      titleEl.style.fontWeight = '600';
+      titleEl.style.cssText =
+        'font-size:13px; font-weight:600; color:var(--bw-ink);' +
+        'letter-spacing:-0.005em;';
       btn.appendChild(titleEl);
 
       var hintEl = document.createElement('div');
       hintEl.textContent = hint;
-      hintEl.style.fontSize = '12px';
-      hintEl.style.fontWeight = '400';
-      hintEl.style.opacity = '0.7';
+      hintEl.style.cssText =
+        'font-size:11px; font-weight:400; color:var(--bw-ink-muted);';
       btn.appendChild(hintEl);
 
-      var hover = function () {
-        btn.style.background = 'rgba(59,130,246,0.22)';
-        btn.style.borderColor = 'rgba(147,197,253,0.5)';
-      };
-      var unhover = function () {
-        btn.style.background = 'rgba(59,130,246,0.12)';
-        btn.style.borderColor = 'rgba(147,197,253,0.3)';
-      };
+      var hover = function () { btn.style.borderColor = 'var(--bw-accent)'; };
+      var unhover = function () { btn.style.borderColor = 'var(--bw-border)'; };
       btn.addEventListener('mouseenter', hover);
       btn.addEventListener('mouseleave', unhover);
       cleanup(function () {

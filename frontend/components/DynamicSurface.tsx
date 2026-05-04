@@ -118,7 +118,7 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
         display: "grid",
         gridTemplateColumns: "repeat(160, 1fr)",
         gridTemplateRows: "repeat(90, 1fr)",
-        background: "#0a0a0a",
+        background: "var(--bw-void)",
       }
     : {
         position: "fixed",

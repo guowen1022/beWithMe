@@ -3,12 +3,11 @@
   grid: { x: __GRID_X__, y: __GRID_Y__, w: __GRID_W__, h: __GRID_H__ },
   content: '',
   style: {
-    background: 'linear-gradient(180deg, #1f2937 0%, #111827 100%)',
-    color: '#f9fafb',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
-    borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    borderRadius: '0',
+    border: '1px solid var(--bw-border)',
     padding: '14px 18px',
     display: 'flex',
     alignItems: 'center',
@@ -24,37 +23,30 @@
 
     // Icon
     var icon = document.createElement('div');
-    icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
-    icon.style.color = '#93c5fd';
-    icon.style.flexShrink = '0';
-    icon.style.display = 'flex';
-    icon.style.alignItems = 'center';
-    icon.style.justifyContent = 'center';
-    icon.style.width = '36px';
-    icon.style.height = '36px';
-    icon.style.borderRadius = '10px';
-    icon.style.background = 'rgba(59,130,246,0.15)';
-    icon.style.border = '1px solid rgba(147,197,253,0.25)';
+    icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+    icon.style.cssText =
+      'flex-shrink:0; display:flex; align-items:center; justify-content:center;' +
+      'width:34px; height:34px; border-radius:0;' +
+      'color:var(--bw-accent);' +
+      'background:var(--bw-accent-soft);' +
+      'border:1px solid var(--bw-accent);';
 
     // Text column
     var textCol = document.createElement('div');
-    textCol.style.display = 'flex';
-    textCol.style.flexDirection = 'column';
-    textCol.style.flex = '1';
-    textCol.style.minWidth = '0';
+    textCol.style.cssText =
+      'display:flex; flex-direction:column; flex:1; min-width:0;';
     var title = document.createElement('div');
     title.textContent = 'Upload a PDF';
-    title.style.fontSize = '14px';
-    title.style.fontWeight = '600';
-    title.style.letterSpacing = '-0.01em';
+    title.style.cssText =
+      'font-size:13px; font-weight:600; color:var(--bw-ink);' +
+      'letter-spacing:-0.005em;';
     var status = document.createElement('div');
     status.textContent = 'No file chosen';
-    status.style.fontSize = '12px';
-    status.style.opacity = '0.6';
-    status.style.marginTop = '2px';
-    status.style.overflow = 'hidden';
-    status.style.textOverflow = 'ellipsis';
-    status.style.whiteSpace = 'nowrap';
+    status.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-faint); margin-top:3px;' +
+      'text-transform:uppercase; letter-spacing:.08em;' +
+      'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
     textCol.appendChild(title);
     textCol.appendChild(status);
 
@@ -66,21 +58,17 @@
 
     var button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'Choose file';
-    button.style.padding = '8px 14px';
-    button.style.fontSize = '13px';
-    button.style.fontWeight = '500';
-    button.style.fontFamily = 'inherit';
-    button.style.color = '#0b1220';
-    button.style.background = '#e5e7eb';
-    button.style.border = '1px solid rgba(255,255,255,0.1)';
-    button.style.borderRadius = '8px';
-    button.style.cursor = 'pointer';
-    button.style.flexShrink = '0';
-    button.style.transition = 'background 0.15s ease';
+    button.textContent = 'CHOOSE FILE';
+    button.style.cssText =
+      'padding:8px 14px; border:none; border-radius:0;' +
+      'font-family:var(--bw-font-mono); font-size:11px;' +
+      'font-weight:500; letter-spacing:.1em;' +
+      'color:#E8EEFA; background:var(--bw-accent);' +
+      'cursor:pointer; flex-shrink:0;' +
+      'transition:filter 0.15s ease;';
 
-    var hover = function () { button.style.background = '#f3f4f6'; };
-    var unhover = function () { button.style.background = '#e5e7eb'; };
+    var hover = function () { button.style.filter = 'brightness(1.1)'; };
+    var unhover = function () { button.style.filter = 'none'; };
     button.addEventListener('mouseenter', hover);
     button.addEventListener('mouseleave', unhover);
     cleanup(function () {
@@ -136,9 +124,11 @@
         title.textContent = 'Ready';
         var summary = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
         status.textContent = summary;
-        icon.style.color = '#86efac';
-        icon.style.background = 'rgba(34,197,94,0.15)';
-        icon.style.border = '1px solid rgba(134,239,172,0.3)';
+        // Semantic success — outside the theme accent on purpose. Status
+        // colors stay green/red across themes for universal recognition.
+        icon.style.color = '#7ED4A6';
+        icon.style.background = 'rgba(126,212,166,0.12)';
+        icon.style.border = '1px solid rgba(126,212,166,0.4)';
         bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
         // `completed: true` is the trigger signal for the teacher's
         // event-driven turn. The backend edge-detects the false→true
@@ -159,9 +149,10 @@
           title.textContent = 'Upload failed';
           var msg = err && err.message ? err.message : String(err);
           status.textContent = msg;
-          icon.style.color = '#fca5a5';
-          icon.style.background = 'rgba(239,68,68,0.15)';
-          icon.style.border = '1px solid rgba(252,165,165,0.3)';
+          // Semantic error — outside the theme accent on purpose.
+          icon.style.color = '#E5837C';
+          icon.style.background = 'rgba(229,131,124,0.12)';
+          icon.style.border = '1px solid rgba(229,131,124,0.4)';
           report({ kind: 'upload', content: 'Upload failed: ' + msg });
         })
         .finally(function () { setBusy(false); });

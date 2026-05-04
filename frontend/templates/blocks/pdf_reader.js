@@ -3,12 +3,11 @@
   grid: { x: __GRID_X__, y: __GRID_Y__, w: __GRID_W__, h: __GRID_H__ },
   content: '',
   style: {
-    background: 'linear-gradient(180deg, #0f172a 0%, #0b1220 100%)',
-    color: '#e2e8f0',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif',
-    borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.06)',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    borderRadius: '0',
+    border: '1px solid var(--bw-border)',
     padding: '0',
     overflow: 'hidden',
     display: 'flex',
@@ -81,50 +80,49 @@
         'cursor:text;transform-origin:0% 0%;' +
       '}' +
       '[data-block-id="' + blockId + '"] [data-pdf-text-layer] ::selection{' +
-        'background:rgba(59,130,246,0.4);color:transparent;' +
+        'background:var(--bw-accent-soft);color:transparent;' +
       '}' +
       '[data-block-id="' + blockId + '"] ::-webkit-scrollbar{width:10px;height:10px;}' +
       '[data-block-id="' + blockId + '"] ::-webkit-scrollbar-thumb{' +
-        'background:rgba(148,163,184,0.25);border-radius:5px;' +
+        'background:var(--bw-border-strong);' +
       '}' +
       '[data-block-id="' + blockId + '"] ::-webkit-scrollbar-thumb:hover{' +
-        'background:rgba(148,163,184,0.45);' +
+        'background:var(--bw-ink-faint);' +
       '}';
     document.head.appendChild(styleEl);
     cleanup(function () { if (styleEl.parentNode) styleEl.parentNode.removeChild(styleEl); });
 
     // Header bar
     var header = document.createElement('div');
-    header.style.padding = '10px 14px';
-    header.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
-    header.style.background = 'rgba(15,23,42,0.6)';
-    header.style.backdropFilter = 'blur(8px)';
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.gap = '10px';
-    header.style.flexShrink = '0';
+    header.style.cssText =
+      'display:flex; align-items:center; gap:10px;' +
+      'padding:9px 12px;' +
+      'background:var(--bw-surface-2);' +
+      'border-bottom:1px solid var(--bw-border);' +
+      'flex-shrink:0;';
 
-    var headerIcon = document.createElement('div');
-    headerIcon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-    headerIcon.style.color = '#94a3b8';
-    headerIcon.style.display = 'flex';
+    var idChip = document.createElement('span');
+    idChip.textContent = 'PDF-READER';
+    idChip.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:9.5px;' +
+      'color:var(--bw-accent); background:var(--bw-accent-soft);' +
+      'padding:3px 8px; letter-spacing:.08em; text-transform:uppercase;';
 
     var headerTitle = document.createElement('div');
     headerTitle.textContent = 'PDF reader';
-    headerTitle.style.fontSize = '13px';
-    headerTitle.style.fontWeight = '600';
-    headerTitle.style.flex = '1';
-    headerTitle.style.overflow = 'hidden';
-    headerTitle.style.textOverflow = 'ellipsis';
-    headerTitle.style.whiteSpace = 'nowrap';
+    headerTitle.style.cssText =
+      'flex:1; font-size:11.5px; font-weight:600;' +
+      'color:var(--bw-ink); white-space:nowrap;' +
+      'overflow:hidden; text-overflow:ellipsis;';
 
     var headerMeta = document.createElement('div');
-    headerMeta.style.fontSize = '11px';
-    headerMeta.style.color = '#64748b';
-    headerMeta.style.flexShrink = '0';
     headerMeta.textContent = 'waiting…';
+    headerMeta.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-faint); flex-shrink:0;' +
+      'text-transform:uppercase; letter-spacing:.08em;';
 
-    header.appendChild(headerIcon);
+    header.appendChild(idChip);
     header.appendChild(headerTitle);
     header.appendChild(headerMeta);
     root.appendChild(header);
@@ -144,11 +142,12 @@
 
     // Empty-state placeholder
     var empty = document.createElement('div');
-    empty.style.color = '#475569';
-    empty.style.fontSize = '13px';
-    empty.style.textAlign = 'center';
-    empty.style.padding = '40px 20px';
-    empty.innerHTML = '<div style="font-size:32px;opacity:0.4;margin-bottom:8px;">📄</div><div>Upload a PDF above to read it here.</div>';
+    empty.style.cssText =
+      'color:var(--bw-ink-muted); font-size:12px;' +
+      'text-align:center; padding:40px 20px;';
+    empty.innerHTML =
+      '<div style="font-size:28px;opacity:0.35;margin-bottom:10px;">📄</div>' +
+      '<div>Upload a PDF above to read it here.</div>';
     body.appendChild(empty);
 
     // Selection capture
@@ -298,9 +297,9 @@
               pageWrap.style.position = 'relative';
               pageWrap.style.width = firstVp.width + 'px';
               pageWrap.style.height = firstVp.height + 'px';
-              pageWrap.style.borderRadius = '8px';
+              pageWrap.style.borderRadius = '0';
               pageWrap.style.overflow = 'hidden';
-              pageWrap.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.3)';
+              pageWrap.style.border = '1px solid var(--bw-border)';
               pageWrap.style.background = '#ffffff';
               pageWrap.style.flexShrink = '0';
               pageWrap.style.setProperty('--scale-factor', String(scale));
@@ -324,10 +323,9 @@
           headerMeta.textContent = 'error';
           body.innerHTML = '';
           var errBox = document.createElement('div');
-          errBox.style.color = '#fca5a5';
-          errBox.style.fontSize = '13px';
-          errBox.style.padding = '20px';
-          errBox.style.textAlign = 'center';
+          errBox.style.cssText =
+            'font-family:var(--bw-font-mono); font-size:11px;' +
+            'color:var(--bw-accent); padding:20px; text-align:center;';
           errBox.textContent = 'Failed to render: ' + (err && err.message ? err.message : String(err));
           body.appendChild(errBox);
         });
