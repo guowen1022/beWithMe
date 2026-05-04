@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from infra.topology import service_port
+from persona.teacher import triggers as teacher_triggers
 from persona.teacher.silicon_brain_client import SiliconBrainClient
 
 # Register every model on infra.db.Base so FK constraints resolve.
@@ -40,9 +41,13 @@ from services.persona.routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.brain_client = SiliconBrainClient()
+    # Subscribe the event-driven teacher triggers to the perception cache.
+    # Idempotent — install() returns immediately if already wired.
+    teacher_triggers.install()
     try:
         yield
     finally:
+        teacher_triggers.uninstall()
         await app.state.brain_client.aclose()
 
 

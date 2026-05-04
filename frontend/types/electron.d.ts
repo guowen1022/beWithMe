@@ -21,6 +21,15 @@ declare global {
           cb: (p: { text: string; url: string; title: string }) => void,
         ): () => void;
         onLoadingChange(cb: (p: { loading: boolean }) => void): () => void;
+        onScrollChange(
+          cb: (p: {
+            url: string;
+            title: string;
+            scroll_y: number;
+            scroll_height: number;
+            viewport_text: string;
+          }) => void,
+        ): () => void;
       };
     };
   }

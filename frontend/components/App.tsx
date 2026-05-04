@@ -8,8 +8,9 @@ import {
 } from "@/lib/api";
 import UserSelector from "./UserSelector";
 import Onboarding from "./Onboarding";
-import Reader from "./Reader";
 import GoalPlanner from "./GoalPlanner";
+import DynamicSurface from "./DynamicSurface";
+import CanvasCommandBar from "./CanvasCommandBar";
 
 export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
@@ -61,8 +62,10 @@ export default function App() {
   }, [userId]);
 
   function handleUserSelected(id: string) {
+    // Don't dispatch `bewithme:user-changed` here — that event means
+    // "switch / sign out", and our own listener resets userId back to
+    // null on it. NavBar dispatches it when the user clicks "Switch".
     setUserId(id);
-    window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
   }
 
   // Step 1: User selection
@@ -84,10 +87,17 @@ export default function App() {
     return <Onboarding onComplete={() => setHasProfile(true)} />;
   }
 
-  // Step 4: Goal planner or main reader
+  // Step 4: Goal planner or canvas (the new reader surface).
   if (goalMode) {
     return <GoalPlanner onBack={() => setGoalMode(false)} />;
   }
 
-  return <Reader onGoalPlan={() => setGoalMode(true)} />;
+  // Canvas IS the reader. Inline render at "/", below the root NavBar.
+  // No /canvas route, no chromeless wrapper, no redirects.
+  return (
+    <div className="relative flex-1 bg-[#0a0a0a]">
+      <DynamicSurface mode="fullscreen" />
+      <CanvasCommandBar />
+    </div>
+  );
 }

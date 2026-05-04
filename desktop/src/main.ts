@@ -159,6 +159,19 @@ function createWindow() {
   });
   win.on("move", () => saveState(win));
   win.on("close", () => saveState(win));
+  // Clear our refs so the dock-icon `activate` handler can re-create the
+  // window. Without this, `mainWindow` still points at a destroyed
+  // BrowserWindow and `if (!mainWindow)` is false → nothing reopens.
+  win.on("closed", () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+      shellView = null;
+      // browserView lives inside mainWindow's contentView, so closing
+      // the window also tears it down. Drop the refs to match reality.
+      browserView = null;
+      browserVisible = false;
+    }
+  });
 }
 
 ipcMain.handle("browser:navigate", async (_e, url: string) => {
@@ -204,6 +217,22 @@ ipcMain.on(
   },
 );
 
+ipcMain.on(
+  "browser:scroll-raw",
+  (
+    _e,
+    payload: {
+      url: string;
+      title: string;
+      scroll_y: number;
+      scroll_height: number;
+      viewport_text: string;
+    },
+  ) => {
+    shellView?.webContents.send("browser:scroll-changed", payload);
+  },
+);
+
 function configurePermissions() {
   const allowed = new Set(["media", "mediaKeySystem", "clipboard-read"]);
   session.defaultSession.setPermissionRequestHandler(
@@ -219,8 +248,13 @@ app.whenReady().then(() => {
   createWindow();
 });
 
+// Close-the-window = quit-the-app. macOS convention is to keep apps in the
+// dock after the last window closes, but for this dev shell that creates
+// confusing pile-ups (the user sees three Electron icons after three
+// dev-desktop runs). Quit eagerly so dock state mirrors what's actually
+// running.
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  app.quit();
 });
 
 app.on("activate", () => {

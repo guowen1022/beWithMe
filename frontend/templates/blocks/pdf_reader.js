@@ -16,9 +16,52 @@
   },
   subscribes: ['__DOC_TOPIC__'],
   publishes: ['__SELECTION_TOPIC__'],
-  run(root, bus, cleanup) {
+  // Skip auto-snapshot — we emit structured reports below (page + total +
+  // viewport text). The textLayer is `color: transparent` so innerText would
+  // come out garbled anyway.
+  autosnapshot: false,
+  run(root, bus, cleanup, helpers) {
     var userId = (typeof localStorage !== 'undefined' && localStorage.getItem('bewithme_user_id')) || '';
     var blockId = root.getAttribute('data-block-id') || '__BLOCK_ID__';
+    var report = helpers && helpers.reportState ? helpers.reportState : function () {};
+
+    // Per-doc state we report on every visible-page change.
+    var currentDocId = null;
+    var currentDocTitle = null;
+    var totalPages = 0;
+    var lastReportedPage = null;
+
+    function viewportText(pageNum) {
+      // The text layer renders <span>s with `color: transparent` and absolute
+      // positioning. innerText still concatenates them in DOM order, which
+      // is good enough for a 200-char persona summary. Returns '' if the
+      // page hasn't rendered its text layer yet.
+      var wrap = body.querySelector('[data-page-num="' + pageNum + '"]');
+      if (!wrap) return '';
+      var tl = wrap.querySelector('[data-pdf-text-layer]');
+      if (!tl) return '';
+      var t = (tl.innerText || '').replace(/\s+/g, ' ').trim();
+      return t.slice(0, 220);
+    }
+
+    function reportVisiblePage(pageNum) {
+      if (!currentDocId) return;
+      var snippet = viewportText(pageNum);
+      var content = 'page ' + pageNum + ' of ' + totalPages;
+      if (snippet) content += ': ' + snippet;
+      report({
+        kind: 'pdf',
+        content: content,
+        extra: {
+          document_id: currentDocId,
+          document_title: currentDocTitle,
+          page: pageNum,
+          total_pages: totalPages,
+          viewport_text: snippet,
+        },
+      });
+      lastReportedPage = pageNum;
+    }
 
     // Inject text-layer CSS once per block. pdfjs's TextLayer class outputs
     // <span>s with inline `transform: matrix(...)` but relies on CSS class
@@ -120,10 +163,22 @@
     var renderDoc = function (id, title) {
       if (!window.pdfjsLib) {
         headerMeta.textContent = 'pdf.js not loaded';
+        report({
+          kind: 'pdf',
+          content: 'pdf.js not loaded',
+          extra: { document_id: id, document_title: title || null },
+        });
         return;
       }
       headerMeta.textContent = 'loading…';
       headerTitle.textContent = title || 'PDF reader';
+      currentDocId = id;
+      currentDocTitle = title || null;
+      report({
+        kind: 'pdf',
+        content: 'loading: ' + (title || id),
+        extra: { document_id: id, document_title: title || null },
+      });
       fetch('/api/documents/' + encodeURIComponent(id) + '/pdf', {
         headers: userId ? { 'X-User-Id': userId } : {},
       })
@@ -144,41 +199,66 @@
           var scale = 1.4;
           body.innerHTML = '';
           headerMeta.textContent = 'page 1 / ' + pdf.numPages;
+          totalPages = pdf.numPages;
 
           var renderedPages = {}; // page number → promise (idempotent)
           var visiblePage = 1;
+
+          // HiDPI fix: on Retina (devicePixelRatio = 2 or 3), the canvas's
+          // pixel buffer needs to be scaled up so each CSS pixel maps to
+          // multiple device pixels. Otherwise text + figures look blurry.
+          // We keep the CSS size at viewport.width/height and inflate the
+          // pixel buffer + render transform by `outputScale`.
+          var outputScale = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
 
           function renderPageInto(pageNum, pageWrap, canvas, textLayerDiv) {
             if (renderedPages[pageNum]) return renderedPages[pageNum];
             renderedPages[pageNum] = pdf.getPage(pageNum).then(function (page) {
               var viewport = page.getViewport({ scale: scale });
-              // Match the placeholder's size to the real viewport in case
-              // page 1's aspect differed (covers mixed-page-size PDFs).
+              // CSS size of both the wrap and the canvas drives layout.
               pageWrap.style.width = viewport.width + 'px';
               pageWrap.style.height = viewport.height + 'px';
               pageWrap.style.setProperty('--scale-factor', String(scale));
-              canvas.width = viewport.width;
-              canvas.height = viewport.height;
-              return page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport })
+              canvas.style.width = viewport.width + 'px';
+              canvas.style.height = viewport.height + 'px';
+              // Pixel buffer is scaled up for HiDPI sharpness.
+              canvas.width = Math.floor(viewport.width * outputScale);
+              canvas.height = Math.floor(viewport.height * outputScale);
+              var renderTransform = outputScale !== 1
+                ? [outputScale, 0, 0, outputScale, 0, 0]
+                : null;
+              return page.render({
+                canvasContext: canvas.getContext('2d'),
+                viewport: viewport,
+                transform: renderTransform,
+              })
                 .promise
                 .then(function () { return page.getTextContent(); })
                 .then(function (textContent) {
+                  var renderP;
                   if (typeof window.pdfjsLib.TextLayer === 'function') {
                     var tl = new window.pdfjsLib.TextLayer({
                       textContentSource: textContent,
                       container: textLayerDiv,
                       viewport: viewport,
                     });
-                    return tl.render();
-                  }
-                  if (typeof window.pdfjsLib.renderTextLayer === 'function') {
-                    return window.pdfjsLib.renderTextLayer({
+                    renderP = tl.render();
+                  } else if (typeof window.pdfjsLib.renderTextLayer === 'function') {
+                    renderP = window.pdfjsLib.renderTextLayer({
                       textContentSource: textContent,
                       container: textLayerDiv,
                       viewport: viewport,
                       textDivs: [],
                     }).promise;
+                  } else {
+                    renderP = Promise.resolve();
                   }
+                  return renderP.then(function () {
+                    // If this page is the currently-visible one, the
+                    // earlier IntersectionObserver report carried no text
+                    // (text layer wasn't rendered yet). Re-report now.
+                    if (pageNum === visiblePage) reportVisiblePage(pageNum);
+                  });
                 });
             });
             return renderedPages[pageNum];
@@ -196,6 +276,7 @@
               if (entry.intersectionRatio > 0.3) {
                 visiblePage = pageNum;
                 headerMeta.textContent = 'page ' + visiblePage + ' / ' + pdf.numPages;
+                if (pageNum !== lastReportedPage) reportVisiblePage(pageNum);
               }
               var canvas = wrap.querySelector('canvas');
               var textLayerDiv = wrap.querySelector('[data-pdf-text-layer]');

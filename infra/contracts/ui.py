@@ -102,6 +102,20 @@ class BlockAction(BaseModel):
     options: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TeacherThinking(BaseModel):
+    """SSE event: 'the teacher just woke up to react to something' — for
+    the dev "llm thinking" panel, not the chat. Carries a summary of the
+    trigger that fired, the tool calls the teacher made, and any text it
+    emitted (capped). The frontend treats it as transient debug info."""
+    model_config = _CFG
+    type: Literal["teacher-thinking"] = "teacher-thinking"
+    phase: Literal["start", "end"]
+    trigger: str                            # e.g. "block-completed"
+    summary: str = ""                       # one-line description of what fired
+    text: Optional[str] = None              # teacher's text output (end phase)
+    tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class VoicePlay(BaseModel):
     """SSE event: 'speak this text on the user's chosen device'.
 
@@ -126,5 +140,6 @@ __all__ = [
     "BlockMessage",
     "BlockError",
     "BlockAction",
+    "TeacherThinking",
     "VoicePlay",
 ]

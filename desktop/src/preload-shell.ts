@@ -6,6 +6,13 @@ type Rect = { x: number; y: number; width: number; height: number };
 type UrlPayload = { url: string; title: string };
 type SelectionPayload = { text: string; url: string; title: string };
 type LoadingPayload = { loading: boolean };
+type ScrollPayload = {
+  url: string;
+  title: string;
+  scroll_y: number;
+  scroll_height: number;
+  viewport_text: string;
+};
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_e: unknown, payload: T) => cb(payload);
@@ -31,5 +38,7 @@ contextBridge.exposeInMainWorld("beWithMeBridge", {
       subscribe<SelectionPayload>("browser:selection-changed", cb),
     onLoadingChange: (cb: (p: LoadingPayload) => void) =>
       subscribe<LoadingPayload>("browser:loading-changed", cb),
+    onScrollChange: (cb: (p: ScrollPayload) => void) =>
+      subscribe<ScrollPayload>("browser:scroll-changed", cb),
   },
 });

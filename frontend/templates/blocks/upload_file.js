@@ -16,7 +16,10 @@
     overflow: 'hidden',
   },
   publishes: ['__DOC_TOPIC__'],
-  run(root, bus, cleanup) {
+  run(root, bus, cleanup, helpers) {
+    var report = helpers && helpers.reportState ? helpers.reportState : function () {};
+    var backend = helpers && helpers.backend ? helpers.backend : null;
+    // Back-compat fallback when helpers.backend isn't present.
     var userId = (typeof localStorage !== 'undefined' && localStorage.getItem('bewithme_user_id')) || '';
 
     // Icon
@@ -106,31 +109,60 @@
       status.textContent = f.name;
       title.textContent = 'Uploading…';
       setBusy(true);
+      report({ kind: 'upload', content: 'Uploading ' + f.name });
       var fd = new FormData();
       fd.append('file', f);
-      fetch('/api/documents/upload', {
-        method: 'POST',
-        headers: userId ? { 'X-User-Id': userId } : {},
-        body: fd,
-      })
-        .then(function (res) {
+      var p;
+      if (backend && backend.upload) {
+        // helpers.backend resolved from the template manifest. Already
+        // injects auth + device headers + multipart Content-Type.
+        p = backend.upload(fd).then(function (r) {
+          if (!r.ok) throw new Error('upload failed: ' + r.status);
+          return r.data;
+        });
+      } else {
+        // Backward-compat path: helpers.backend not present (template
+        // wasn't manifest-aware). Fall through to a direct fetch.
+        p = fetch('/api/documents/upload', {
+          method: 'POST',
+          headers: userId ? { 'X-User-Id': userId } : {},
+          body: fd,
+        }).then(function (res) {
           if (!res.ok) throw new Error('upload failed: ' + res.status);
           return res.json();
-        })
-        .then(function (json) {
-          title.textContent = 'Ready';
-          status.textContent = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
-          icon.style.color = '#86efac';
-          icon.style.background = 'rgba(34,197,94,0.15)';
-          icon.style.border = '1px solid rgba(134,239,172,0.3)';
-          bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
-        })
+        });
+      }
+      p.then(function (json) {
+        title.textContent = 'Ready';
+        var summary = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
+        status.textContent = summary;
+        icon.style.color = '#86efac';
+        icon.style.background = 'rgba(34,197,94,0.15)';
+        icon.style.border = '1px solid rgba(134,239,172,0.3)';
+        bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
+        // `completed: true` is the trigger signal for the teacher's
+        // event-driven turn. The backend edge-detects the false→true
+        // transition and wakes the tool loop with this state.
+        report({
+          kind: 'upload',
+          content: 'Ready: ' + summary,
+          completed: true,
+          extra: {
+            document_id: json.id,
+            title: json.title,
+            pages: json.pages,
+            filename: json.filename,
+          },
+        });
+      })
         .catch(function (err) {
           title.textContent = 'Upload failed';
-          status.textContent = err && err.message ? err.message : String(err);
+          var msg = err && err.message ? err.message : String(err);
+          status.textContent = msg;
           icon.style.color = '#fca5a5';
           icon.style.background = 'rgba(239,68,68,0.15)';
           icon.style.border = '1px solid rgba(252,165,165,0.3)';
+          report({ kind: 'upload', content: 'Upload failed: ' + msg });
         })
         .finally(function () { setBusy(false); });
     };

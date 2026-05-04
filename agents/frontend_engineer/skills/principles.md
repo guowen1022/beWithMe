@@ -65,3 +65,64 @@ Only when the turn taught you something durable — a specific user
 preference, a template pitfall, a topic-naming gotcha. Not for generic
 advice. CAUTIOUS.md is read every turn; bloat there poisons future
 prompts.
+
+## Reporting block state (perception)
+
+The teacher persona reads what the user is currently receiving by calling
+`read_media`, which returns each mounted block's latest self-reported
+state. Every block participates — there is no opt-out.
+
+There are two tiers:
+
+### Tier 1 — rich (preferred)
+
+Your block calls `helpers.reportState({...})` whenever something the
+persona would care about changes. Use a concrete `kind` and a one-line
+human-readable `content` summary; put structured data in `extra`.
+
+```js
+// inside block.run(root, bus, cleanup, helpers):
+helpers.reportState({
+  kind: "pdf",
+  content: `page ${page} of ${total}: ${visibleSnippet}`,
+  extra: {
+    page,
+    total,
+    scroll_pct: scrollY / scrollHeight,
+    visible_chunks: visibleChunkIds,
+  },
+});
+```
+
+Call it on *real* state changes — page turn, value tick, item selected —
+not on every animation frame. The reporter debounces (~200 ms) so a
+burst of changes coalesces, but emitting every frame still wastes CPU.
+
+### Tier 2 — automatic snapshot (fallback)
+
+If your block doesn't call `helpers.reportState`, `Block.tsx` watches
+the block's DOM for mutations and reports
+`{kind: "snapshot", content: root.innerText}` for you. Cheap, universal,
+honest. You don't need to do anything to get this.
+
+Prefer tier 1 only when you have structured data the persona would
+benefit from (page numbers, IDs, counters). For "block that displays
+text and changes when its bus topic ticks", the snapshot is fine.
+
+### `focus` is filled in for you
+
+The frontend tracks which block has the user's attention (mouseover or
+keyboard focus) and stamps every state report with `focus: "active" |
+"visible" | "background"`. Never set it yourself unless you have very
+specific reason to override; let the focus tracker decide.
+
+### Don't
+
+- Don't report from inside an animation frame loop. Use real state
+  events (input change, fetch settled, message received).
+- Don't put gigabytes in `extra`. The cache caps `content` at 1000
+  chars; keep `extra` similarly compact (IDs, counts, summaries — not
+  raw file contents).
+- Don't try to opt out of reporting. If a block is mounted on a canvas,
+  it's by definition something the user can receive. The persona must
+  be able to read it.

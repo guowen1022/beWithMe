@@ -35,6 +35,8 @@ from infra.auth import parse_user_id as get_current_user_id
 from infra.contracts.devices import DeviceCapabilities
 from infra.contracts.ui import BlockError, BlockMessage, BlockSource, UIUpdate
 from infra.devices import registry as device_registry
+from infra import perception
+from infra.perception.contracts import BlockState
 
 from agents.frontend_engineer import llm_engineer
 
@@ -211,3 +213,80 @@ async def dynamic_canvas(
     would deliver if the user re-issued every command they've ever run.
     """
     return llm_engineer.list_blocks(user_id)
+
+
+class _MountTemplateBody(BaseModel):
+    template: str
+    block_id: str | None = None
+    grid: dict[str, int] | None = None
+    replace: list[str] | None = None
+
+
+@router.post("/dynamic/mount-template")
+async def dynamic_mount_template(
+    body: _MountTemplateBody,
+    user_id: UUID = Depends(get_current_user_id),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+):
+    """Materialize a built-in template into the user's workspace + canvas.
+
+    The frontend uses this for the empty-canvas auto-mount and for the
+    inputs_launcher's buttons. The persona could also call it as a tool
+    (deferred to a follow-up).
+    """
+    # Local import: tools.mount_template imports from this router for
+    # enqueue_for_user. Top-level would create a cycle.
+    from tools.mount_template import mount_template
+
+    try:
+        device_uuid = UUID(x_device_id) if x_device_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="X-Device-Id not a valid UUID")
+
+    try:
+        result = await mount_template(
+            user_id=user_id,
+            template_name=body.template,
+            block_id=body.block_id,
+            grid=body.grid,
+            replace=body.replace,
+            target_device_id=device_uuid,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"unknown template: {body.template}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {
+        "block_id": result.block_id,
+        "template": result.template,
+        "deleted": result.deleted,
+    }
+
+
+@router.post("/dynamic/state/{block_id}")
+async def dynamic_state(
+    block_id: str,
+    state: BlockState,
+    user_id: UUID = Depends(get_current_user_id),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+):
+    """Frontend pushes a block's current state to the perception cache.
+
+    One-way: client → server. The cache is what the persona's read_media
+    tool reads back. Returns 400 if no X-Device-Id header — every state
+    report is per-device by design.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="X-Device-Id required")
+    try:
+        device_uuid = UUID(x_device_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="X-Device-Id not a valid UUID")
+    perception.record_block_state(
+        user_id=user_id,
+        device_id=device_uuid,
+        block_id=block_id,
+        state=state,
+    )
+    return {"recorded": True}

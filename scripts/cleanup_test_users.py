@@ -1,11 +1,15 @@
 """Delete users created by the e2e test suite (and other test fixtures).
 
 Default targets the obvious test-fixture patterns:
-  e2e-test-*, public-create-*, voice-test-*
+  e2e-test-*, e2e-mt-*, public-create-*, voice-test-*
 
 These are short-lived users created during pytest runs and ad-hoc probes.
 Their data (interactions, concepts, sessions, etc.) cascades automatically
 via ON DELETE CASCADE on the user_id foreign keys.
+
+Also wipes each deleted user's per-user-git canvas workspace under
+`data/canvases/<uuid>/` so a fresh user with the same UUID would start
+clean (defensive — UUIDs don't realistically collide).
 
 Real users and benchmark users are preserved by default. Use --include-bench
 to also wipe `bench_*` users; --include-default to wipe `00000000-...` too.
@@ -19,11 +23,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
 import sys
 from pathlib import Path
 
 # Make project root importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO_ROOT))
 
 import asyncpg
 
@@ -31,9 +37,15 @@ from infra.config import settings
 
 
 # Patterns we treat as test users by default.
-TEST_PATTERNS = ("e2e-test-%", "public-create-%", "voice-test-%")
+TEST_PATTERNS = (
+    "e2e-test-%",
+    "e2e-mt-%",
+    "public-create-%",
+    "voice-test-%",
+)
 BENCH_PATTERN = "bench_%"
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
+CANVASES_ROOT = _REPO_ROOT / "data" / "canvases"
 
 
 def _asyncpg_url(sa_url: str) -> str:
@@ -81,6 +93,17 @@ async def main(apply: bool, include_bench: bool, include_default: bool) -> None:
             ids,
         )
         print(f"\nDeleted {deleted} users (related rows cascaded).")
+
+        # Wipe per-user-git canvas workspaces. The DB cascade doesn't touch
+        # the on-disk git repos.
+        wiped = 0
+        for uid in ids:
+            ws_path = CANVASES_ROOT / str(uid)
+            if ws_path.is_dir():
+                shutil.rmtree(ws_path, ignore_errors=True)
+                wiped += 1
+        if wiped:
+            print(f"Wiped {wiped} canvas workspaces under {CANVASES_ROOT}.")
     finally:
         await conn.close()
 

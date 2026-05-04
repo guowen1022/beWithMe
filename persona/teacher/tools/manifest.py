@@ -19,8 +19,10 @@ from infra.model.tools import ToolSpec
 
 from tools.block_action import block_action
 from tools.list_media import list_media
+from tools.mount_template import mount_template
 from tools.point_arrow import point_arrow
 from tools.push_block_content import push_block_content
+from tools.read_media import read_media
 from tools.request_ui_block import request_ui_block
 from tools.speak import speak
 
@@ -47,6 +49,91 @@ def _make_list_media(user_id: UUID):
             for v in inv.voices
         ]
         return json.dumps({"canvases": canvases, "voices": voices})
+    return executor
+
+
+def _make_read_media(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        block_ids = args.get("block_ids") or None
+        device_ids_raw = args.get("device_ids") or None
+        device_ids = None
+        if device_ids_raw:
+            try:
+                device_ids = [UUID(d) for d in device_ids_raw]
+            except (ValueError, TypeError):
+                return json.dumps({"error": "device_ids must be valid UUIDs"})
+        perc = await read_media(user_id, block_ids=block_ids, device_ids=device_ids)
+
+        # Compact serialisation — keep only what the persona reasons over.
+        canvases = []
+        for c in perc.canvases:
+            canvases.append({
+                "device_id": str(c.device_id),
+                "device_class": c.device_class,
+                "online": c.online,
+                "blocks": [
+                    {
+                        "id": b.id,
+                        "title": b.title,
+                        "state": (b.state.model_dump() if b.state else None),
+                        "last_updated_s_ago": (
+                            round(b.last_updated_s_ago, 1)
+                            if b.last_updated_s_ago is not None else None
+                        ),
+                    }
+                    for b in c.blocks
+                ],
+            })
+        voices = []
+        for v in perc.voices:
+            voices.append({
+                "device_id": str(v.device_id),
+                "device_class": v.device_class,
+                "online": v.online,
+                "recent_utterances": [
+                    {
+                        "text": u.text,
+                        "voice": u.voice,
+                        "played_at": u.played_at.isoformat(),
+                    }
+                    for u in v.recent_utterances[-5:]   # last 5 — context-friendly
+                ],
+            })
+        return json.dumps({"canvases": canvases, "voices": voices})
+    return executor
+
+
+def _make_mount_template(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        template_name = (args.get("template") or "").strip()
+        if not template_name:
+            return json.dumps({"error": "template is required"})
+        replace = args.get("replace") or None
+        if replace is not None and not isinstance(replace, list):
+            return json.dumps({"error": "replace must be a list of block ids"})
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        try:
+            result = await mount_template(
+                user_id=user_id,
+                template_name=template_name,
+                replace=replace,
+                target_device_id=target_uuid,
+            )
+        except FileNotFoundError:
+            return json.dumps({
+                "error": f"unknown template {template_name!r}",
+            })
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps({
+            "block_id": result.block_id,
+            "template": result.template,
+            "deleted": result.deleted,
+        })
     return executor
 
 
@@ -169,12 +256,45 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
     """
     return [
         ToolSpec(
+            name="read_media",
+            description=(
+                "Read what the user is currently receiving — every canvas's "
+                "mounted blocks (with each block's current self-reported "
+                "state: what it shows, whether the user has it focused) and "
+                "every voice device (with what you've recently said on it). "
+                "Use this whenever your next action depends on what the user "
+                "is actually looking at, hearing, or has highlighted. Pass "
+                "no arguments to read everything; pass block_ids/device_ids "
+                "to narrow the response. Each block's state has fields: "
+                "kind (e.g. 'pdf', 'snapshot', 'browser'), content (one-line "
+                "summary), focus ('active' = user attention here, 'visible', "
+                "'background'), extra (block-specific structured data)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "block_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Only return state for these block ids.",
+                    },
+                    "device_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. Only return canvases/voices for these device UUIDs.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            executor=_make_read_media(user_id),
+        ),
+        ToolSpec(
             name="list_media",
             description=(
-                "Inventory the user's currently connected canvases and voice "
-                "outputs. Use this when you need to know which device(s) "
-                "to act on, or to see what blocks are already mounted. "
-                "Takes no arguments."
+                "DEPRECATED: prefer read_media, which returns the same "
+                "inventory plus per-block state. Kept for backward "
+                "compatibility. Inventory the user's currently connected "
+                "canvases and voice outputs. Takes no arguments."
             ),
             params_schema={
                 "type": "object",
@@ -184,13 +304,59 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
             executor=_make_list_media(user_id),
         ),
         ToolSpec(
+            name="mount_template",
+            description=(
+                "Materialize a known UI template onto the user's canvas. "
+                "FAST and DETERMINISTIC — no engineer LLM in the loop. "
+                "This is your PRIMARY tool for satisfying user intents that "
+                "involve a UI surface. "
+                "Available templates: "
+                "`upload_file` (PDF picker — use whenever the user wants to "
+                "upload, attach, share, or open a PDF/document), "
+                "`passage_reader` (textarea for pasting/typing — use when the "
+                "user wants to paste, type, or edit text directly), "
+                "`pdf_reader` (renders a PDF that was uploaded via "
+                "upload_file — auto-mounts via the engineer in most flows; "
+                "you only need to call this if the upload happened but the "
+                "reader didn't appear), "
+                "`inputs_launcher` (the two-button starter — usually the "
+                "frontend mounts this on first paint; rarely useful for you "
+                "to mount manually). "
+                "Pass `replace: [block_id]` to atomically swap out an "
+                "existing block (e.g., replace inputs_launcher when you "
+                "mount upload_file)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "template": {
+                        "type": "string",
+                        "description": "Template filename stem (e.g. 'upload_file').",
+                    },
+                    "replace": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Block ids to unmount in the same batch.",
+                    },
+                    "target_device_id": {
+                        "type": "string",
+                        "description": "Optional UUID; mount on this device only.",
+                    },
+                },
+                "required": ["template"],
+                "additionalProperties": False,
+            },
+            executor=_make_mount_template(user_id),
+        ),
+        ToolSpec(
             name="request_new_block",
             description=(
-                "Ask the frontend_engineer to create a new UI block, or to "
-                "update one that already exists. Provide a short, concrete "
-                "description of what the block should do or display. "
-                "Optionally target a single device's canvas via "
-                "target_device_id (use list_media to discover ids)."
+                "Ask the frontend_engineer to author a NOVEL UI block — one "
+                "no template covers. SLOW (engineer LLM authors code). "
+                "Prefer `mount_template` when an existing template fits. "
+                "Provide a short, concrete description of what the block "
+                "should do or display. Optionally target a single device's "
+                "canvas via target_device_id (use list_media to discover ids)."
             ),
             params_schema={
                 "type": "object",

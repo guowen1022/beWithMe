@@ -18,6 +18,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from infra import perception
 from infra.contracts.ui import VoicePlay
 from infra.db import async_session
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
@@ -60,11 +61,21 @@ async def speak(
         raise ValueError("text is empty")
 
     pref_voice, pref_speed, pref_lang = await _load_voice_prefs(user_id)
+    chosen_voice = voice or pref_voice
     event = VoicePlay(
         text=text,
-        voice=voice or pref_voice,
+        voice=chosen_voice,
         speed=speed if speed is not None else pref_speed,
         lang=lang or pref_lang,
+    )
+
+    # Record what the persona itself said so subsequent turns can read it
+    # via read_media (e.g. "I said X 30s ago, don't repeat it").
+    perception.record_voice(
+        user_id=user_id,
+        text=text,
+        voice=chosen_voice,
+        device_id=target_device_id,
     )
 
     if target_device_id is not None:

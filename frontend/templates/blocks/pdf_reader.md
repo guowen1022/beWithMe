@@ -1,8 +1,15 @@
 ---
 keywords: pdf, read, view, show, render, document, paper
 purpose: Renders every page of a PDF inside the block, with selectable text. Pages render lazily as they scroll into view so the document feels instant on long PDFs.
-subscribes: __DOC_TOPIC__ — { id, title?, pages? }
-publishes: __SELECTION_TOPIC__ — string (selected text)
+subscribes:
+  - __DOC_TOPIC__
+publishes:
+  - __SELECTION_TOPIC__
+grid:
+  x: 0
+  y: 0
+  w: 160
+  h: 90
 ---
 
 Use this template when the user wants to read or view a PDF on the canvas.

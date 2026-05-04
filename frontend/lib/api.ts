@@ -232,7 +232,8 @@ export type DynamicEvent =
   | { type: "block-data"; block_id: string; topic: string; value: unknown }
   | { type: "block-error"; block_id: string; error: string }
   | { type: "block-action"; block_id: string; action: "highlight" | "focus" | "scroll_to"; options?: Record<string, unknown> }
-  | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null };
+  | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null }
+  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string; text?: string | null; tool_calls?: { name?: string; arguments?: Record<string, unknown> }[] };
 
 export async function subscribeToDynamicStream(
   onEvent: (event: DynamicEvent) => void,
@@ -293,6 +294,35 @@ export interface MediaInventory {
   user_id: string;
   canvases: MediaCanvas[];
   voices: MediaVoice[];
+}
+
+export interface MountTemplateBody {
+  template: string;
+  block_id?: string;
+  grid?: { x: number; y: number; w: number; h: number };
+  replace?: string[];
+}
+
+export interface MountTemplateResult {
+  block_id: string;
+  template: string;
+  deleted: string[];
+}
+
+export async function mountTemplate(
+  body: MountTemplateBody,
+): Promise<MountTemplateResult> {
+  const res = await fetch(`${API_BASE}/dynamic/mount-template`, {
+    method: "POST",
+    headers: { ...authHeaders(), ...deviceHeaders() },
+    body: JSON.stringify(body),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`mountTemplate failed (${res.status}): ${detail.slice(0, 200)}`);
+  }
+  return res.json();
 }
 
 export async function fetchMediaInventory(): Promise<MediaInventory> {
