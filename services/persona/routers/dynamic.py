@@ -59,15 +59,40 @@ _subscribers: dict[str, dict[str, Set[asyncio.Queue]]] = defaultdict(lambda: def
 _mounted_blocks: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
 
 
+# TEMP diagnostic: also write trace lines to a known file path so the user
+# (and Claude reading from any shell) can grep them regardless of how
+# dev-services was launched (terminal stdout vs piped log file). Strip
+# this once the user-reported "teacher doesn't see PDF" bug is closed.
+import time as _time
+_TRACE_LOG_PATH = "/tmp/bewithme-perception-trace.log"
+
+def _trace_log(line: str) -> None:
+    print(line, flush=True)
+    try:
+        with open(_TRACE_LOG_PATH, "a") as f:
+            f.write(f"{_time.strftime('%H:%M:%S')} {line}\n")
+    except Exception:
+        pass
+
+
 def _record_mount_local(user_id_s: str, device_id_s: str, block_id: str) -> None:
     _mounted_blocks[user_id_s][device_id_s].add(block_id)
+    _trace_log(
+        f"[mount-tracker] MOUNT uid={user_id_s[:8]} did={device_id_s[:8]} bid={block_id} "
+        f"=> set={sorted(_mounted_blocks[user_id_s][device_id_s])}"
+    )
 
 
 def _record_unmount_local(user_id_s: str, device_id_s: str, block_id: str) -> None:
     bucket = _mounted_blocks.get(user_id_s, {}).get(device_id_s)
     if not bucket:
+        _trace_log(f"[mount-tracker] UNMOUNT uid={user_id_s[:8]} did={device_id_s[:8]} bid={block_id} (no bucket)")
         return
     bucket.discard(block_id)
+    _trace_log(
+        f"[mount-tracker] UNMOUNT uid={user_id_s[:8]} did={device_id_s[:8]} bid={block_id} "
+        f"=> set={sorted(bucket)}"
+    )
     if not bucket:
         _mounted_blocks[user_id_s].pop(device_id_s, None)
         if not _mounted_blocks.get(user_id_s):
@@ -198,29 +223,22 @@ async def dynamic_stream(
                     yield ": keepalive\n\n"
         finally:
             queues = _subscribers.get(uid_s, {}).get(did_s)
-            last_queue_for_device = False
             if queues is not None:
                 queues.discard(queue)
                 if not queues:
-                    last_queue_for_device = True
                     _subscribers[uid_s].pop(did_s, None)
                     if not _subscribers[uid_s]:
                         _subscribers.pop(uid_s, None)
-            # When the device's last SSE connection closes, the browser
-            # has nothing on screen anymore (page closed/reloaded; the
-            # next page load starts with an empty canvas because
-            # templates are ephemeral). Clear our mount tracker for
-            # that device so the perception cache doesn't keep
-            # hallucinating blocks from a previous session.
-            if last_queue_for_device:
-                stale_blocks = list(_mounted_blocks.get(uid_s, {}).get(did_s, set()))
-                for stale_bid in stale_blocks:
-                    _record_unmount_local(uid_s, did_s, stale_bid)
-                # Also forget per-block content state so read_media stops
-                # returning ghost entries for unmounted blocks.
-                from infra.perception import forget_block as _forget_block
-                for stale_bid in stale_blocks:
-                    _forget_block(user_id=user_id, block_id=stale_bid)
+            # NOTE: deliberately do NOT sweep _mounted_blocks here.
+            # Earlier I tried that to clean up "ghost" entries after a
+            # browser reload, but it backfired hard: any transient SSE
+            # disconnect (hot-reload, momentary network blip, Electron
+            # tab inactive timeout) wiped the device's tracker and made
+            # the teacher say "canvas is empty" while the user was
+            # staring at a fully-rendered PDF. Mount tracking lives for
+            # the persona-process lifetime; ghosts from previous
+            # sessions get cleaned up only when the same device's next
+            # SSE channel re-mounts blocks (or by an explicit unmount).
             # Don't await the DB write here — uvicorn cancels this task on
             # client disconnect, and an in-flight asyncpg call inside a
             # cancelled task leaves the pooled connection in a broken state.
@@ -374,5 +392,11 @@ async def dynamic_state(
         device_id=device_uuid,
         block_id=block_id,
         state=state,
+    )
+    extra_doc = (state.extra or {}).get("document_id")
+    _trace_log(
+        f"[state-write] uid={str(user_id)[:8]} did={x_device_id[:8]} bid={block_id} "
+        f"kind={state.kind} completed={state.completed} doc_id={extra_doc} "
+        f"content={(state.content or '')[:60]!r}"
     )
     return {"recorded": True}

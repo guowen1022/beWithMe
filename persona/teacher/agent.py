@@ -123,6 +123,38 @@ async def assemble_context(
     canvas_state = None
     try:
         canvas_state = await read_media(user_id)
+        # TEMP debug — log every block read_media returned, plus the
+        # full rendered canvas-state prompt section. Tees to
+        # /tmp/bewithme-perception-trace.log so the user can grep
+        # what the teacher actually saw at this turn.
+        try:
+            import time as _t
+            _path = "/tmp/bewithme-perception-trace.log"
+            online = [c for c in canvas_state.canvases if c.online]
+            lines = []
+            ts = _t.strftime("%H:%M:%S")
+            lines.append(f"{ts} [ask-turn-start] uid={str(user_id)[:8]} q={(body.question or '')[:80]!r}")
+            for c in online:
+                for b in c.blocks:
+                    s = b.state
+                    extra_doc = (s.extra or {}).get("document_id") if s else None
+                    lines.append(
+                        f"{ts} [canvas-snapshot] did={str(c.device_id)[:8]} "
+                        f"bid={b.id} kind={s.kind if s else None} "
+                        f"completed={s.completed if s else None} doc_id={extra_doc} "
+                        f"age={b.last_updated_s_ago}"
+                    )
+            if not online:
+                lines.append(f"{ts} [canvas-snapshot] uid={str(user_id)[:8]} NO ONLINE CANVASES")
+            for ln in lines:
+                print(ln, flush=True)
+            try:
+                with open(_path, "a") as f:
+                    f.write("\n".join(lines) + "\n")
+            except Exception:
+                pass
+        except Exception:
+            pass
     except Exception as e:
         print(f"[teacher] read_media error (canvas state): {e}", flush=True)
 

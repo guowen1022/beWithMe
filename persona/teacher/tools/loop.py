@@ -97,6 +97,32 @@ async def run(
     last_usage: Dict[str, Any] = {}
     tool_rounds = 0
 
+    # TEMP debug — record the EXACT dynamic_user (which carries
+    # `=== CURRENTLY ON CANVAS ===`) the LLM is about to see, plus the
+    # last 200 chars of the static system prompt so we can confirm it's
+    # not stale-cached. Tee to /tmp/bewithme-perception-trace.log.
+    try:
+        import time as _t
+        _path = "/tmp/bewithme-perception-trace.log"
+        ts = _t.strftime("%H:%M:%S")
+        sep = "=" * 60
+        lines = [
+            f"{ts} {sep}",
+            f"{ts} [llm-prompt] dynamic_user (full, {len(dynamic_user or '')} chars):",
+            *[f"{ts} | {ln}" for ln in (dynamic_user or '').splitlines()[:80]],
+            f"{ts} [llm-prompt] static_system tail: ...{(static_system or '')[-200:]!r}",
+            f"{ts} [llm-prompt] prior_messages: {len(history)} turns",
+        ]
+        for ln in lines:
+            print(ln, flush=True)
+        try:
+            with open(_path, "a") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     for turn in range(_MAX_TOOL_TURNS + 1):
         pending_calls: List[Dict[str, Any]] = []
         stop_reason = "end_turn"
@@ -122,6 +148,30 @@ async def run(
             elif kind == "done":
                 last_usage = evt.get("usage", {}) or {}
                 stop_reason = evt.get("stop_reason") or "end_turn"
+
+        # TEMP debug — record what the LLM said this turn + any tool calls.
+        try:
+            import time as _t
+            _path = "/tmp/bewithme-perception-trace.log"
+            ts = _t.strftime("%H:%M:%S")
+            answer_text = "".join(full_text_parts)
+            tool_summary = ", ".join(
+                f"{c.get('name')}({list((c.get('arguments') or {}).keys())})"
+                for c in pending_calls
+            ) if pending_calls else "(none)"
+            lines = [
+                f"{ts} [llm-response] turn={turn} stop_reason={stop_reason} tool_calls={tool_summary}",
+                f"{ts} [llm-response] text ({len(answer_text)} chars): {answer_text[:500]!r}",
+            ]
+            for ln in lines:
+                print(ln, flush=True)
+            try:
+                with open(_path, "a") as f:
+                    f.write("\n".join(lines) + "\n")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         if not pending_calls or stop_reason != "tool_use":
             break
