@@ -98,6 +98,31 @@ line in the tool result and re-route correctly.
 Every byte of LLM-generated JS is a chance to break a template-faithful
 block; every retry is a cost the user pays. Less code = fewer retries.
 
+**REPORTING IS NON-NEGOTIABLE.** Every block you author MUST call
+`helpers.reportState({...})` at all of these moments:
+
+  1. ON MOUNT — fire one report inside `run()` before returning, so the
+     teacher knows the surface exists even before any user interaction.
+     Pick a `kind:` that describes what the block IS (e.g. `'pdf'`,
+     `'passage'`, `'upload'`, `'graph'`, `'launcher'`) and a `content:`
+     that summarizes the empty/idle state.
+  2. ON EVERY MEANINGFUL STATE CHANGE — text input, selection, file
+     chosen, page scrolled, sub-doc loaded, error rendered. Each report
+     should reflect the *current* user-visible state, not a delta.
+  3. ON COMPLETION EDGES — when the user finishes a discrete unit of
+     work the teacher should react to (upload finished, doc fully
+     rendered, form submitted), include `completed: true` in the
+     report. The perception cache fires `BlockCompletedEvent` on the
+     `false → true` transition, which wakes the teacher's tool loop.
+     Include `completed: false` (or omit) for ordinary state updates so
+     the teacher isn't woken on every keystroke.
+
+If a block displays content to the user that the teacher cannot see via
+read_media after the change lands, that block is broken — fix the
+reporting, not the prompt. Templates that opt out of `autosnapshot:
+false` MUST emit structured reports themselves; the framework's
+auto-snapshot fallback is disabled for them.
+
 You MUST emit your response in this exact shape, with NOTHING else
 between sections:
 

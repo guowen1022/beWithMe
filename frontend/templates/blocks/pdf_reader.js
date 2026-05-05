@@ -29,6 +29,13 @@
     var currentDocTitle = null;
     var totalPages = 0;
     var lastReportedPage = null;
+    // Flips to true on the first reportVisiblePage after a doc loads,
+    // attaching `completed: true` to that single report so the perception
+    // cache fires a BlockCompletedEvent — which wakes the teacher's tool
+    // loop. Reset to false on every renderDoc so a re-loaded doc fires
+    // again. Page changes after that do NOT re-fire the completion edge
+    // (they're just state updates, not milestones).
+    var loadCompletionPending = false;
 
     function viewportText(pageNum) {
       // The text layer renders <span>s with `color: transparent` and absolute
@@ -48,9 +55,12 @@
       var snippet = viewportText(pageNum);
       var content = 'page ' + pageNum + ' of ' + totalPages;
       if (snippet) content += ': ' + snippet;
+      var completed = loadCompletionPending;
+      loadCompletionPending = false;  // one-shot edge per doc load
       report({
         kind: 'pdf',
         content: content,
+        completed: completed,
         extra: {
           document_id: currentDocId,
           document_title: currentDocTitle,
@@ -173,6 +183,9 @@
       headerTitle.textContent = title || 'PDF reader';
       currentDocId = id;
       currentDocTitle = title || null;
+      // Arm the completion edge — the first reportVisiblePage after the
+      // doc renders will carry `completed: true`, waking the teacher.
+      loadCompletionPending = true;
       report({
         kind: 'pdf',
         content: 'loading: ' + (title || id),
@@ -335,5 +348,18 @@
       if (payload && payload.id) renderDoc(payload.id, payload.title);
     });
     cleanup(function () { unsub(); });
+
+    // Report `kind:"pdf"` state on mount, even before a document loads.
+    // The teacher's read_media uses perception state as the source of
+    // truth for "what's on the canvas"; without an initial report, an
+    // idle pdf_reader is invisible to the teacher (the user can be
+    // looking at a rendered PDF and the teacher would still think no
+    // surface is mounted). When a doc actually loads, reportVisiblePage
+    // overwrites this with the full page+title+viewport_text payload.
+    report({
+      kind: 'pdf',
+      content: '(awaiting document)',
+      extra: { document_id: null, document_title: null, page: null, total_pages: 0 },
+    });
   },
 })

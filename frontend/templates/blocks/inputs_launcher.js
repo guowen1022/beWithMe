@@ -20,6 +20,16 @@
   run(root, bus, cleanup, helpers) {
     var blockId = (helpers && helpers.blockId) || '__BLOCK_ID__';
     var backend = helpers && helpers.backend ? helpers.backend : null;
+    var report = helpers && helpers.reportState ? helpers.reportState : function () {};
+
+    // Report on mount so the teacher knows the launcher is the current
+    // first-paint surface. Anything visible to the user must report —
+    // otherwise the teacher can't tell what's on screen.
+    report({
+      kind: 'launcher',
+      content: 'Reader setup — awaiting user choice (Upload PDF / Paste Passage)',
+      extra: { stage: 'idle' },
+    });
 
     // ── Header strip ────────────────────────────────────
     var header = document.createElement('div');

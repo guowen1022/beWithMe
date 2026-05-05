@@ -159,5 +159,16 @@
     };
     input.addEventListener('change', onChange);
     cleanup(function () { input.removeEventListener('change', onChange); });
+
+    // Report idle state on mount so the teacher knows the picker is up
+    // even before the user clicks Choose File. Every state transition
+    // below (uploading / ready / failed) overwrites this with the
+    // current status — the perception cache always reflects what the
+    // user is actually seeing.
+    report({
+      kind: 'upload',
+      content: 'Upload a PDF (no file chosen)',
+      extra: { stage: 'idle' },
+    });
   },
 })

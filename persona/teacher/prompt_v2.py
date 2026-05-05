@@ -181,6 +181,8 @@ def _format_block_line(block) -> str:
                 head = f'- upload widget: ready ({content})'
             else:
                 head = "- upload widget: waiting for file"
+        elif kind == "launcher":
+            head = "- launcher: awaiting user's choice (Upload PDF / Paste Passage)"
         elif kind == "snapshot":
             label = title or content or bid
             head = f'- panel: "{label}"'
@@ -371,6 +373,12 @@ def build_answer_prompt(
         "Only fall back to request_new_block when neither fits.\n"
         "- If the user is referring to a surface that's already up (check CURRENTLY ON CANVAS), update it in "
         "place — push_block_content for new content, block_action to draw attention. Don't mount a duplicate.\n"
+        "- POST-UPLOAD CLEANUP. When CURRENTLY ON CANVAS shows a PDF reader has finished loading a "
+        "document (kind=pdf with a real document_title and page X of Y) AND the upload widget is also still "
+        "up, the upload step is done — unmount the upload widget so it stops crowding the canvas. Use "
+        "`mount_template({template: \"pdf_reader\", replace: [\"upload-file\"]})` (re-mounting the same "
+        "pdf_reader id is harmless; the `replace` does the cleanup). Same goes for the launcher: once any "
+        "real reading surface is up, the launcher should not be on screen.\n"
         "- After tool calls land, finish with a normal answer (it must follow the OUTPUT FORMAT below).\n"
     )
 
