@@ -1,20 +1,16 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from "react";
-import ContentInput, { type ContentResult } from "./ContentInput";
-import ReadingPane from "./ReadingPane";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import QuestionBar from "./QuestionBar";
 import AnswerDrawer from "./AnswerDrawer";
 import ParentCard from "./ParentCard";
 import DebugPanel from "./DebugPanel";
 import ExplorationTreePanel from "./ExplorationTreePanel";
 import { askStream, endSession, recordSignal, type DebugEvent } from "@/lib/api";
-import { postBlockState } from "@/lib/blockState";
+import { bus } from "@/lib/bus";
 import type { Direction } from "./LogicBlock";
-import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
-import BrowserSlot from "./BrowserSlot";
+import type { OutlineSection } from "@/lib/passageOutline";
 import DynamicSurface from "./DynamicSurface";
-import { getBrowserBridge, isDesktop } from "@/lib/desktopBridge";
 import { BlockRegistryProvider } from "@/lib/blockRegistry";
 import {
   type ExplorationTree,
@@ -22,12 +18,8 @@ import {
   addNode as addTreeNode,
   updateTreeNode,
   toggleCollapsed,
-  getPathToRoot,
   rebuildStack,
 } from "@/lib/explorationTree";
-
-// Lazy-load the PDF viewer so pdf.js isn't in the initial bundle.
-const PdfViewer = lazy(() => import("./PdfViewer"));
 
 export type AgentStatus = "idle" | "thinking" | "searching" | "done";
 
@@ -54,9 +46,7 @@ export type QuestionNode = {
 
 type SelectionSource = "passage" | "parent" | "active";
 
-export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
-  const [content, setContent] = useState("");
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
+export default function Reader({ onGoalPlan: _onGoalPlan }: { onGoalPlan?: () => void }) {
   const [selectedText, setSelectedText] = useState("");
   const [selectionSource, setSelectionSource] = useState<SelectionSource | null>(null);
   const [questionStack, setQuestionStack] = useState<QuestionNode[]>([]);
@@ -69,49 +59,25 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   const [recordTrigger, setRecordTrigger] = useState(0);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [endingSession, setEndingSession] = useState(false);
-  const [browserMode, setBrowserMode] = useState(false);
-  const [browserUrl, setBrowserUrl] = useState("");
   const [debugInitialTab, setDebugInitialTab] = useState<"prefs" | "sessions" | undefined>(undefined);
 
   // Persist block collapse/review-later state across navigation
   // Key: nodeLocalId, Value: { collapsed: Set<blockId>, reviewLater: Set<blockId> }
   const blockStatesRef = useRef<Map<string, { collapsed: Set<string>; reviewLater: Set<string> }>>(new Map());
-  const [pdfScrollTarget, setPdfScrollTarget] = useState<string | null>(null);
 
-  // The legacy reading area (PDF / passage / browser) lives outside the
-  // dynamic canvas, so the teacher can't see it via read_media unless we
-  // explicitly report into the perception cache. We synthesize a single
-  // "main-reader" block id whose state reflects whatever's currently up.
+  // Dynamic readers (pdf_reader, passage_reader) publish text selections
+  // on a shared topic. Subscribe so the QuestionBar gets `selectedText`
+  // without us having to own the reading widgets ourselves.
   useEffect(() => {
-    if (pdfFile) {
-      postBlockState("main-reader", {
-        kind: "pdf",
-        content: pdfFile.name,
-        focus: "active",
-        extra: { filename: pdfFile.name, size_bytes: pdfFile.size },
-      });
-    } else if (browserMode && browserUrl) {
-      postBlockState("main-reader", {
-        kind: "browser",
-        content: browserUrl,
-        focus: "active",
-      });
-    } else if (content) {
-      const preview = content.slice(0, 200).replace(/\s+/g, " ").trim();
-      postBlockState("main-reader", {
-        kind: "passage",
-        content: preview,
-        focus: "active",
-        extra: { length_chars: content.length },
-      });
-    } else {
-      postBlockState("main-reader", {
-        kind: "snapshot",
-        content: "(empty — no PDF, passage, or page loaded)",
-        focus: "background",
-      });
-    }
-  }, [pdfFile, browserMode, browserUrl, content]);
+    const unsub = bus.subscribe("reader.selection", (value) => {
+      const text = typeof value === "string" ? value.trim() : "";
+      if (!text) return;
+      setSelectedText(text);
+      setSelectionSource("passage");
+      setRecordTrigger((n) => n + 1);
+    });
+    return () => unsub();
+  }, []);
 
   const activeNode = questionStack.length > 0 ? questionStack[questionStack.length - 1] : null;
   const parentNode = questionStack.length >= 2 ? questionStack[questionStack.length - 2] : null;
@@ -125,11 +91,10 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     [questionStack],
   );
 
-  // Parse passage into structural outline for the exploration panel
-  const outlineSections = useMemo(
-    () => (content ? parsePassageOutline(content) : []),
-    [content],
-  );
+  // TODO: passage outline used to come from `content` set by the legacy
+  // ContentInput. The exploration tree will move to a dynamic block in a
+  // follow-up commit; for now no outline is produced.
+  const outlineSections: OutlineSection[] = useMemo(() => [], []);
 
   const treeRef = useRef(explorationTree);
   useEffect(() => { treeRef.current = explorationTree; }, [explorationTree]);
@@ -194,14 +159,6 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Callback-based selection for components that can't use the global
-  // mouseup router (e.g. PdfViewer renders in a separate context).
-  const handleSelection = useCallback((text: string) => {
-    setSelectedText(text);
-    setSelectionSource("passage");
-    setRecordTrigger((n) => n + 1);
-  }, []);
-
   function makeNode(
     question: string,
     selText: string | null,
@@ -241,78 +198,12 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     [],
   );
 
-  const handleSectionClick = useCallback((section: OutlineSection) => {
-    // For PDF mode: skip past the title heading and use the body text as anchor.
-    // The title itself is often short and non-unique (e.g. "Attention" appears in abstract too).
-    // The body text right after the heading is unique to that section.
-    if (pdfFile) {
-      const sectionContent = content.slice(section.textStart, section.textEnd);
-      // Skip past the first line (the heading) to get body text
-      const firstNewline = sectionContent.indexOf("\n");
-      const bodyStart = firstNewline >= 0 ? firstNewline + 1 : 0;
-      const bodyText = sectionContent.slice(bodyStart).trim();
-      // Use at least 50 chars of body text for reliable matching
-      const anchor = bodyText.slice(0, Math.max(100, Math.min(300, bodyText.length)));
-      if (anchor.length >= 20) {
-        setPdfScrollTarget(anchor + "|||" + Date.now());
-      }
-      return;
-    }
-
-    const pane = document.querySelector("[data-panel='center']");
-    if (!pane) return;
-
-    const sectionText = content.slice(section.textStart, section.textStart + 60);
-    let best: Element | null = null;
-
-    // Strategy 1: match by data-offset (ReadingPane paragraphs)
-    const offsetEls = pane.querySelectorAll("p[data-offset]");
-    for (const p of offsetEls) {
-      const offset = parseInt(p.getAttribute("data-offset") || "-1", 10);
-      if (offset >= section.textStart && offset < section.textEnd) {
-        best = p;
-        break;
-      }
-    }
-
-    // Strategy 2: search by section title in all text elements (works for PDF text layers)
-    if (!best) {
-      const title = section.title;
-      // Split title into key words for fuzzy matching
-      const titleWords = title.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-      const allEls = pane.querySelectorAll("p, span, div, .textLayer span");
-
-      // First try: exact title substring match
-      for (const el of allEls) {
-        const text = el.textContent || "";
-        if (text.toLowerCase().includes(title.toLowerCase().slice(0, 30))) {
-          best = el;
-          break;
-        }
-      }
-
-      // Second try: word-level match on page containers
-      if (!best && titleWords.length >= 2) {
-        const pages = pane.querySelectorAll(".react-pdf__Page, article, section");
-        for (const page of pages) {
-          const text = (page.textContent || "").toLowerCase();
-          const matches = titleWords.filter((w) => text.includes(w));
-          if (matches.length >= Math.min(2, titleWords.length)) {
-            best = page;
-            break;
-          }
-        }
-      }
-    }
-
-    if (best) {
-      best.scrollIntoView({ behavior: "smooth", block: "start" });
-      const el = best as HTMLElement;
-      el.style.transition = "background-color 0.3s";
-      el.style.backgroundColor = "rgba(250, 204, 21, 0.4)";
-      setTimeout(() => { el.style.backgroundColor = ""; }, 2000);
-    }
-  }, [content, pdfFile]);
+  // TODO: section-click jumping into the PDF/passage used to drive
+  // pdfScrollTarget on the legacy <PdfViewer>. With the dynamic
+  // pdf_reader template, this would publish on a "scroll-to" topic the
+  // template subscribes to. Wire up in the same commit that templatizes
+  // the exploration tree.
+  const handleSectionClick = useCallback((_section: OutlineSection) => {}, []);
 
   const navigateToNode = useCallback((localId: string) => {
     const tree = treeRef.current;
@@ -325,73 +216,12 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     setExplorationTree((tree) => tree ? toggleCollapsed(tree, localId) : tree);
   }, []);
 
-  function handleContentSubmit(result: ContentResult) {
-    setContent(result.text);
-    setBrowserMode(result.type === "browser");
-    setBrowserUrl(result.url ?? "");
-    // Create exploration tree and open outline panel only when we have
-    // content to parse. Browser mode starts with empty text; opening the
-    // panel anyway reserves ml-96 for a panel that never renders.
-    setExplorationTree(createTree(result.text));
-    setTreePanelOpen(result.text.length > 0);
-    if (result.type === "pdf" && result.file) {
-      setPdfFile(result.file);
-    }
-  }
-
-  // Fetch the live URL's extracted text in the background so the outline
-  // panel and any passage-reading flows have real content to work with.
-  // The inline browser keeps rendering immediately; this only populates
-  // `content` once trafilatura on the backend returns.
+  // Open the exploration tree on first session start so the user has a
+  // panel to navigate questions in. Tree nodes are populated as the user
+  // asks questions (no pre-existing passage to seed from).
   useEffect(() => {
-    if (!browserMode || !browserUrl) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { uploadUrl } = await import("@/lib/api");
-        const result = await uploadUrl(browserUrl);
-        if (cancelled) return;
-        if (result.text && result.text.trim().length > 0) {
-          setContent(result.text);
-          setExplorationTree(createTree(result.text));
-          setTreePanelOpen(true);
-        }
-      } catch (err) {
-        console.warn("uploadUrl for inline browser failed", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [browserMode, browserUrl]);
-
-  // Browser selection: desktop uses an event subscription to the inline
-  // WebContentsView; web falls back to polling the backend (legacy flow).
-  useEffect(() => {
-    if (!browserMode) return;
-    if (isDesktop()) {
-      const bridge = getBrowserBridge();
-      if (!bridge) return;
-      return bridge.onSelectionChange(({ text }) => {
-        if (text) {
-          setSelectedText(text);
-          setSelectionSource("passage");
-          setRecordTrigger((n) => n + 1);
-        }
-      });
-    }
-    const interval = setInterval(async () => {
-      try {
-        const { getBrowserSelection } = await import("@/lib/api");
-        const { selection } = await getBrowserSelection();
-        if (selection) {
-          setSelectedText(selection);
-          setSelectionSource("passage");
-        }
-      } catch {}
-    }, 800);
-    return () => clearInterval(interval);
-  }, [browserMode]);
+    setExplorationTree((tree) => tree ?? createTree(""));
+  }, []);
 
   /**
    * Core question-firing helper. Creates a QuestionNode, adds it to the
@@ -552,9 +382,9 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     } catch (err) {
       console.error("Failed to end session:", err);
     }
-    // Reset reader state — return to content input
-    setContent("");
-    setPdfFile(null);
+    // Reset session state — the canvas itself stays whatever the user
+    // has up; the dynamic templates (upload_file, pdf_reader, etc.)
+    // own their own lifecycle.
     setSelectedText("");
     setSelectionSource(null);
     setQuestionStack([]);
@@ -562,40 +392,11 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     setTreePanelOpen(false);
     setNavigatedNodeId(null);
     setLastDebug(null);
-    setBrowserMode(false);
-    setBrowserUrl("");
 
     // Show debug panel on Sessions tab so user sees the result appear
     setDebugInitialTab("sessions");
     setDebugOpen(true);
     setEndingSession(false);
-  }
-
-  if (!content && !browserMode) {
-    return (
-      <div className="relative flex h-screen">
-        <DebugPanel open={debugOpen} onClose={() => { setDebugOpen(false); setDebugInitialTab(undefined); }} lastDebug={lastDebug} promptVersion={promptVersion} onPromptVersionChange={setPromptVersion} initialTab={debugInitialTab} />
-        {!debugOpen && (
-          <button
-            onClick={() => setDebugOpen(true)}
-            className="fixed top-1/2 left-0 -translate-y-1/2 z-40 rounded-r-lg bg-purple-600 p-2.5 text-white shadow-lg hover:bg-purple-700 transition-colors"
-            aria-label="Show learning profile"
-            title="Learning profile (debug)"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          </button>
-        )}
-        <div
-          className={`flex-1 flex flex-col transition-all duration-300 ${
-            debugOpen ? "ml-[28rem]" : "ml-0"
-          }`}
-        >
-          <ContentInput onSubmit={handleContentSubmit} onGoalPlan={onGoalPlan} />
-        </div>
-      </div>
-    );
   }
 
   const leftMargin = treePanelOpen ? "ml-96" : debugOpen ? "ml-[28rem]" : "ml-0";
@@ -605,7 +406,7 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
     <div className="relative flex h-screen">
       {/* Dynamic UI surface — mounts blocks pushed by frontend_engineer
           via SSE. Self-hides when no blocks are present. */}
-      <DynamicSurface />
+      <DynamicSurface mode="fullscreen" />
 
       {/* End Session button (top-right) */}
       {explorationTree && (
@@ -668,7 +469,10 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
 
       {/* Pinned source passage removed — parent blocks view replaces it */}
 
-      {/* Middle surface — passage when no drilling, parent card otherwise */}
+      {/* Middle surface — the dynamic canvas owns the actual reading
+          UI now (upload_file, pdf_reader, passage_reader, future
+          browser template). ParentCard is a thin React overlay until
+          we templatize it (TODO). */}
       <div
         data-panel="center"
         tabIndex={0}
@@ -676,42 +480,8 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
           drawerOpen ? "mr-[28rem]" : "mr-0"
         } ${leftMargin}`}
       >
-        {parentNode ? (
+        {parentNode && (
           <ParentCard node={parentNode} childNode={activeNode} onPop={popActive} />
-        ) : browserMode && !parentNode ? (
-          isDesktop() && browserUrl ? (
-            <BrowserSlot url={browserUrl} />
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-8 max-w-md">
-                <h2 className="text-lg font-semibold text-gray-200 mb-2">Reading in Browser</h2>
-                <p className="text-sm text-gray-400 mb-4">
-                  Select text in the Chromium window, then ask questions below.
-                </p>
-                {selectedText && (
-                  <div className="mt-3 p-3 rounded-lg bg-blue-900/30 border border-blue-700/50 text-left">
-                    <p className="text-xs text-blue-400 mb-1 font-medium">Selected:</p>
-                    <p className="text-sm text-gray-300 line-clamp-4">{selectedText}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        ) : pdfFile ? (
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center py-20 text-gray-400">
-                Loading PDF viewer...
-              </div>
-            }
-          >
-            <PdfViewer file={pdfFile} onSelection={handleSelection} scrollToText={pdfScrollTarget} />
-          </Suspense>
-        ) : (
-          <ReadingPane
-            content={content}
-            onPlainClick={drawerOpen ? popActive : undefined}
-          />
         )}
       </div>
 

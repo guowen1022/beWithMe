@@ -60,19 +60,38 @@ def _format_canvas_state(perc: object) -> str:
     canvases = getattr(perc, "canvases", []) or []
     voices = getattr(perc, "voices", []) or []
 
-    lines: list[str] = []
-    seen_block_ids: set[str] = set()  # collapse duplicates across devices
+    # The same block id can appear under multiple devices (canvas_layout
+    # row OR state-cache key per device). Pick the most informative view
+    # for each block: prefer the device whose entry has structured state
+    # (state.kind set) and the most recent update timestamp.
+    best_by_id: dict = {}
     for canvas in canvases:
         if not getattr(canvas, "online", False):
             continue
         for block in getattr(canvas, "blocks", []) or []:
             bid = block.id
-            if bid in seen_block_ids:
+            cur = best_by_id.get(bid)
+            if cur is None:
+                best_by_id[bid] = block
                 continue
-            seen_block_ids.add(bid)
-            line = _format_block_line(block)
-            if line:
-                lines.append(line)
+            cur_has_state = getattr(cur, "state", None) is not None
+            new_has_state = getattr(block, "state", None) is not None
+            if new_has_state and not cur_has_state:
+                best_by_id[bid] = block
+                continue
+            if cur_has_state and not new_has_state:
+                continue
+            # Both have state (or neither): pick the more recent update.
+            cur_age = getattr(cur, "last_updated_s_ago", None)
+            new_age = getattr(block, "last_updated_s_ago", None)
+            if new_age is not None and (cur_age is None or new_age < cur_age):
+                best_by_id[bid] = block
+
+    lines: list[str] = []
+    for block in best_by_id.values():
+        line = _format_block_line(block)
+        if line:
+            lines.append(line)
 
     voice_lines: list[str] = []
     for voice in voices:
@@ -126,20 +145,42 @@ def _format_block_line(block) -> str:
         if state is None or state.kind in ("snapshot", None):
             return ""
 
-    # Other surfaces: dispatch on state.kind.
+    # Other surfaces: dispatch on state.kind. Prefer the runtime-reported
+    # document/page title over the block's design_doc title — the latter
+    # describes the *template purpose* ("Use this template when…"), not
+    # the actual content the user is looking at.
     head = None
     if state is not None:
         kind = state.kind
+        extra = state.extra or {}
         content = (state.content or "").strip().replace("\n", " ")
         if len(content) > 70:
             content = content[:67] + "…"
         if kind == "pdf":
-            head = f'- PDF reader: "{title or content or "open"}"'
+            doc_title = extra.get("document_title") or title or "open document"
+            page = extra.get("page")
+            total = extra.get("total_pages")
+            viewport = extra.get("viewport_text") or ""
+            page_str = f"page {page} of {total}" if page and total else "open"
+            preview = ""
+            if viewport:
+                v = viewport.strip().replace("\n", " ")
+                if len(v) > 60:
+                    v = v[:57] + "…"
+                preview = f' — "{v}"'
+            head = f'- PDF reader: "{doc_title}" ({page_str}){preview}'
         elif kind == "passage":
-            label = title or content or "(empty)"
+            label = extra.get("title") or content or title or "(empty)"
             head = f'- text panel: "{label}"'
         elif kind == "browser":
             head = f"- browser: {content or '(loading)'}"
+        elif kind == "upload":
+            # upload_file template state — completed flag tells us if the
+            # user has actually uploaded yet.
+            if state.completed:
+                head = f'- upload widget: ready ({content})'
+            else:
+                head = "- upload widget: waiting for file"
         elif kind == "snapshot":
             label = title or content or bid
             head = f'- panel: "{label}"'

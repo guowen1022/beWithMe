@@ -120,16 +120,25 @@ export function Block({ id, source }: Props) {
     // Focus tracker: subscribe so a focus-only change still pushes state
     // (MutationObserver won't fire on hover). Element observation is
     // idempotent.
+    //
+    // Important: blocks that opt out of auto-snapshot (autosnapshot:false)
+    // do so because they emit STRUCTURED reports via helpers.reportState.
+    // Sending a kind="snapshot" with raw innerText on every focus change
+    // would clobber those structured reports — the perception cache only
+    // keeps the latest write per (device, block). Skip the snapshot post
+    // for autosnap-disabled blocks; just observe the focus state.
     focusTracker.observeElement(id);
-    const focusUnsub = focusTracker.subscribe(id, (focus: BlockFocus) => {
-      const text = (el.innerText ?? "").trim().slice(0, SNAPSHOT_MAX_CHARS);
-      postBlockState(id, {
-        kind: "snapshot",
-        content: text,
-        focus,
+    if (autosnap) {
+      const focusUnsub = focusTracker.subscribe(id, (focus: BlockFocus) => {
+        const text = (el.innerText ?? "").trim().slice(0, SNAPSHOT_MAX_CHARS);
+        postBlockState(id, {
+          kind: "snapshot",
+          content: text,
+          focus,
+        });
       });
-    });
-    cleanups.push(focusUnsub);
+      cleanups.push(focusUnsub);
+    }
     // ---------------------------------------------------------------------
 
     return () => {
