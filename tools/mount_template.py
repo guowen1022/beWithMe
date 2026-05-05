@@ -30,6 +30,7 @@ from sqlalchemy import delete
 from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockSource, UIUpdate
 from infra.db import async_session
+from infra.perception import forget_block
 from infra.templates import Template, load_template
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
@@ -169,16 +170,18 @@ async def mount_template(
     # One-shot cleanup: drop pre-existing workspace files and canvas_layout
     # rows for any leftover known-template blocks. For each cleaned id, fan
     # out an explicit unmount so any browser still hydrated from the old
-    # workspace state drops the orphan block.
+    # workspace state drops the orphan block — and forget the block's
+    # perception state so the teacher doesn't see a stale "ready" entry
+    # for a block that's no longer on screen.
     swept = await _migrate_workspace_if_needed(user_id)
     for stale_id in swept:
         if stale_id == bid:
-            # We're about to mount this id with fresh content anyway.
             continue
         await _send(UIUpdate(
             action="unmount",
             block=BlockSource(id=stale_id, source=""),
         ))
+        forget_block(user_id=user_id, block_id=stale_id)
 
     deleted: list[str] = []
     if replace:
@@ -189,6 +192,7 @@ async def mount_template(
                 action="unmount",
                 block=BlockSource(id=old_id, source=""),
             ))
+            forget_block(user_id=user_id, block_id=old_id)
             deleted.append(old_id)
 
     await _send(UIUpdate(action="mount", block=block_source))

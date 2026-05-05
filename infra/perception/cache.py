@@ -227,6 +227,36 @@ def record_block_state(
         ))
 
 
+def forget_block(*, user_id: UUID, block_id: str) -> None:
+    """Drop the cached state for a block id across every device.
+
+    Called when a block is unmounted from the canvas — the block is no
+    longer visible to the user, so its last-reported state should not
+    keep showing up in `read_for_user`. Without this, an unmounted
+    upload widget's "Ready: …" state would linger and the teacher
+    would still think the widget is on screen.
+
+    Idempotent. No event is fired (consumers care about *changes* on
+    live blocks, not removals — and the unmount itself is already
+    delivered via the SSE channel).
+    """
+    uid_s = str(user_id)
+    by_device = _block_state.get(uid_s)
+    if not by_device:
+        return
+    empty_devices: list[str] = []
+    for did_s, by_block in by_device.items():
+        if block_id in by_block:
+            del by_block[block_id]
+            _block_state_at.pop((uid_s, did_s, block_id), None)
+        if not by_block:
+            empty_devices.append(did_s)
+    for did_s in empty_devices:
+        del by_device[did_s]
+    if not by_device:
+        _block_state.pop(uid_s, None)
+
+
 def record_voice(
     *,
     user_id: UUID,

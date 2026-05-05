@@ -11,6 +11,7 @@ from infra.perception.cache import (
     record_block_state,
     record_voice,
     read_for_user,
+    forget_block,
     subscribe,
     unsubscribe,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "record_block_state",
     "record_voice",
     "read_for_user",
+    "forget_block",
     "subscribe",
     "unsubscribe",
     "BlockState",
