@@ -206,12 +206,27 @@ async def dynamic_error(
 async def dynamic_canvas(
     user_id: UUID = Depends(get_current_user_id),
 ) -> list[BlockSource]:
-    """Return every block currently in the user's per-user-git workspace.
+    """Return every block currently persisted in the user's workspace.
 
-    Used by the /canvas page to hydrate the dynamic surface on first load —
-    so blocks survive page reloads. The list mirrors what mount events
-    would deliver if the user re-issued every command they've ever run.
+    Used by the /canvas page to hydrate the dynamic surface on first
+    load. Templates mounted via `mount_template` are ephemeral and
+    won't appear here; only engineer-novel widgets (request_new_block)
+    and arrow-overlay-style tool-owned blocks may persist.
+
+    Before returning, run the one-shot mount-template migration: pre-
+    this-architecture, every mount_template call wrote to git, so old
+    workspaces have leftover template files. Sweep them here so the
+    user gets a clean canvas on next reload.
     """
+    # Local import: tools.mount_template imports from this module for
+    # enqueue_for_user. Top-level would create a cycle.
+    from tools.mount_template import _migrate_workspace_if_needed
+    swept = await _migrate_workspace_if_needed(user_id)
+    for stale_id in swept:
+        await enqueue_for_user(user_id, UIUpdate(
+            action="unmount",
+            block=BlockSource(id=stale_id, source=""),
+        ))
     return llm_engineer.list_blocks(user_id)
 
 
