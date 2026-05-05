@@ -98,7 +98,7 @@ class BlockAction(BaseModel):
     model_config = _CFG
     type: Literal["block-action"] = "block-action"
     block_id: str
-    action: Literal["highlight", "focus", "scroll_to"]
+    action: Literal["highlight", "focus", "scroll_to", "raise"]
     options: Dict[str, Any] = Field(default_factory=dict)
 
 

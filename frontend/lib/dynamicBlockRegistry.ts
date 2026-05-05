@@ -6,10 +6,16 @@
 // level and re-render frequently; querying the DOM at action-time is
 // simpler than maintaining a parallel handles map. Keep it stateless.
 
-export type DynamicBlockAction = "highlight" | "focus" | "scroll_to";
+export type DynamicBlockAction = "highlight" | "focus" | "scroll_to" | "raise";
 
 const FLASH_CLASS = "block-flash";
 const DEFAULT_HIGHLIGHT_MS = 1600;
+
+// Monotonically increasing z-index counter. Every `raise` bumps the
+// target above whatever was raised most recently. Starts at 200 so it
+// dominates the static `(isOverlay ? 100 : 0) + userZ` from Block.tsx
+// without needing to know what the per-block userZ is.
+let _topZ = 200;
 
 function findElement(blockId: string): HTMLElement | null {
   if (typeof document === "undefined") return null;
@@ -77,6 +83,20 @@ export const dynamicBlockRegistry = {
     return true;
   },
 
+  /**
+   * Bring the block to the front of the stacking order. Sets an inline
+   * z-index above all previously-raised blocks; subsequent raises bump
+   * higher still. Inline style overrides the static grid-style zIndex
+   * computed in Block.tsx, so a raised block always wins regardless of
+   * its declared `z` or `layer === "overlay"`.
+   */
+  raise(blockId: string): boolean {
+    const el = findElement(blockId);
+    if (!el) return false;
+    el.style.zIndex = String(++_topZ);
+    return true;
+  },
+
   apply(action: DynamicBlockAction, blockId: string, options?: Record<string, unknown>): boolean {
     switch (action) {
       case "scroll_to":
@@ -85,11 +105,35 @@ export const dynamicBlockRegistry = {
         return this.highlight(blockId, (options?.durationMs as number | undefined) ?? DEFAULT_HIGHLIGHT_MS);
       case "focus":
         return this.focus(blockId);
+      case "raise":
+        return this.raise(blockId);
       default:
         return false;
     }
   },
 };
+
+// Click-to-raise: a single delegated listener on document picks any
+// click inside `[data-dynamic-surface] [data-block-id="..."]` and
+// raises that block. One listener for the whole surface, no per-block
+// boilerplate, no React re-renders. Idempotent — module loads once.
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "mousedown",
+    (e) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      const el = target.closest?.("[data-dynamic-surface] [data-block-id]") as HTMLElement | null;
+      if (!el) return;
+      const id = el.getAttribute("data-block-id");
+      if (id) dynamicBlockRegistry.raise(id);
+    },
+    // Use capture so the raise happens BEFORE the block's own click
+    // handlers see the event — keeps z-index stable while interacting
+    // with controls inside the block.
+    true,
+  );
+}
 
 if (typeof window !== "undefined") {
   (window as unknown as { __dynamicBlockRegistry?: typeof dynamicBlockRegistry }).__dynamicBlockRegistry =

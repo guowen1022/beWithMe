@@ -94,10 +94,12 @@
 
     var onChange = function (e) {
       var f = e.target.files && e.target.files[0];
-      if (!f) return;
+      console.log('[upload_file:trace] onChange fired, file:', f && f.name, 'size:', f && f.size);
+      if (!f) { console.log('[upload_file:trace] no file in event, bailing'); return; }
       status.textContent = f.name;
       title.textContent = 'Uploading…';
       setBusy(true);
+      console.log('[upload_file:trace] backend.upload available?', !!(backend && backend.upload));
       report({ kind: 'upload', content: 'Uploading ' + f.name });
       var fd = new FormData();
       fd.append('file', f);
@@ -122,6 +124,7 @@
         });
       }
       p.then(function (json) {
+        console.log('[upload_file:trace] upload SUCCESS, response:', json);
         title.textContent = 'Ready';
         var summary = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
         status.textContent = summary;
@@ -130,6 +133,7 @@
         icon.style.color = '#7ED4A6';
         icon.style.background = 'rgba(126,212,166,0.12)';
         icon.style.border = '1px solid rgba(126,212,166,0.4)';
+        console.log('[upload_file:trace] publishing documents.uploaded topic, id:', json.id);
         bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
         // `completed: true` is the trigger signal for the teacher's
         // event-driven turn. The backend edge-detects the false→true
@@ -152,16 +156,19 @@
         // subscribes to the same documents.uploaded topic; sticky
         // pub/sub means the value we just published is replayed to it
         // on subscribe, so no race on doc loading.
+        console.log('[upload_file:trace] backend.mount_template available?', !!(backend && backend.mount_template), 'blockId:', blockId);
         if (backend && backend.mount_template) {
+          console.log('[upload_file:trace] calling mount_template(pdf_reader, replace=[' + blockId + '])');
           backend.mount_template({
             template: 'pdf_reader',
             replace: [blockId],
+          }).then(function (r) {
+            console.log('[upload_file:trace] mount_template result:', r);
           }).catch(function (err) {
-            // Non-fatal: even if the swap fails, the topic publish
-            // above means any pre-existing pdf_reader still gets the
-            // doc. Log and move on.
-            console.warn('[upload_file] mount pdf_reader failed', err);
+            console.warn('[upload_file:trace] mount_template FAILED:', err);
           });
+        } else {
+          console.warn('[upload_file:trace] DETERMINISTIC SWAP SKIPPED — backend.mount_template not in helpers. Manifest may be missing the entry.');
         }
       })
         .catch(function (err) {

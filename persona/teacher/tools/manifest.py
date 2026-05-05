@@ -606,9 +606,19 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
             name="block_action",
             description=(
                 "Draw the user's attention to a surface already on the "
-                "canvas — 'highlight' (flash a glow), 'focus' (move "
-                "keyboard focus), or 'scroll_to' (scroll into view). "
-                "Use the block_id you see in CURRENTLY ON CANVAS."
+                "canvas. Actions: "
+                "'highlight' (flash a glow), "
+                "'focus' (move keyboard focus), "
+                "'scroll_to' (scroll into view), "
+                "'raise' (bring the surface to the front of the stack — "
+                "use when one block is hidden behind another, e.g. you "
+                "drew a diagram while a PDF was open and the user "
+                "asks to see the PDF again, or you want to put a "
+                "particular surface in front for emphasis). Newly-"
+                "mounted surfaces are auto-raised, so you only need "
+                "'raise' to flip the user back to a previously-mounted "
+                "surface. Use the block_id you see in CURRENTLY ON "
+                "CANVAS."
             ),
             params_schema={
                 "type": "object",
@@ -616,7 +626,7 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                     "block_id": {"type": "string"},
                     "action": {
                         "type": "string",
-                        "enum": ["highlight", "focus", "scroll_to"],
+                        "enum": ["highlight", "focus", "scroll_to", "raise"],
                     },
                     "options": {
                         "type": "object",

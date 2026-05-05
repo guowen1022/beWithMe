@@ -5,7 +5,7 @@ import { Block } from "./Block";
 import { bus } from "@/lib/bus";
 import { sourceRegistry, type SourceEntry } from "@/lib/dynamic";
 import { useDeviceClass } from "@/lib/device";
-import { fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
+import { fetchCanvas, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
 
@@ -70,6 +70,16 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
           sourceRegistry.unmount(event.block.id);
         } else {
           sourceRegistry.mount({ id: event.block.id, source: event.block.source });
+          // Auto-raise the freshly-mounted block above existing ones,
+          // so e.g. a teacher's interactive_graph drawn while a PDF is
+          // open lands on top instead of vanishing behind the PDF.
+          // Defer one frame so React has committed the new DOM node.
+          const newId = event.block.id;
+          if (typeof requestAnimationFrame !== "undefined") {
+            requestAnimationFrame(() => dynamicBlockRegistry.raise(newId));
+          } else {
+            dynamicBlockRegistry.raise(newId);
+          }
         }
       } else if (event.type === "block-data") {
         bus.publish(event.topic, event.value);

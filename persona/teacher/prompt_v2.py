@@ -412,6 +412,10 @@ def build_answer_prompt(
         "`mount_template({template: \"pdf_reader\", replace: [\"upload-file\"]})` (re-mounting the same "
         "pdf_reader id is harmless; the `replace` does the cleanup). Same goes for the launcher: once any "
         "real reading surface is up, the launcher should not be on screen.\n"
+        "- LAYERING. Newly-mounted surfaces auto-raise to the front, and clicking any block raises it. So "
+        "after you mount a new diagram while a PDF is open, the diagram is on top automatically — you don't "
+        "need to do anything. If the user later asks to see a previously-mounted surface that's now behind "
+        "another, call `block_action({block_id, action: \"raise\"})` to flip the stack.\n"
         "- After tool calls land, finish with a normal answer (it must follow the OUTPUT FORMAT below).\n"
     )
 

@@ -52,6 +52,7 @@
 
     function reportVisiblePage(pageNum) {
       if (!currentDocId) return;
+      console.log('[pdf_reader:trace] reportVisiblePage', pageNum, 'completed:', loadCompletionPending, 'docId:', currentDocId);
       var snippet = viewportText(pageNum);
       var content = 'page ' + pageNum + ' of ' + totalPages;
       if (snippet) content += ': ' + snippet;
@@ -344,8 +345,22 @@
         });
     };
 
+    console.log('[pdf_reader:trace] run() fired, blockId:', blockId);
+    // Inspect the bus's sticky cache for documents.uploaded BEFORE we subscribe.
+    // If sticky pub/sub is working, the value should already be there from
+    // upload_file's earlier publish. If it's NOT here, we know the publish
+    // happened on a different bus instance (module duplication, distinct
+    // closure, etc.) — that's the bug to chase.
+    try {
+      var stickyHas = bus && bus.getValue && bus.getValue('__DOC_TOPIC__');
+      console.log('[pdf_reader:trace] bus sticky for documents.uploaded BEFORE subscribe:', stickyHas);
+      var snap = bus && bus.snapshot && bus.snapshot();
+      console.log('[pdf_reader:trace] bus snapshot keys:', snap ? Object.keys(snap) : '(no snapshot)');
+    } catch (e) { console.warn('[pdf_reader:trace] bus inspect threw', e); }
     var unsub = bus.subscribe('__DOC_TOPIC__', function (payload) {
+      console.log('[pdf_reader:trace] documents.uploaded received, payload:', payload);
       if (payload && payload.id) renderDoc(payload.id, payload.title);
+      else console.warn('[pdf_reader:trace] payload missing id, ignoring');
     });
     cleanup(function () { unsub(); });
 
