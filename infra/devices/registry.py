@@ -72,6 +72,20 @@ async def register(
         stmt = stmt.on_conflict_do_update(
             index_elements=[DeviceORM.device_id],
             set_={
+                # `user_id` MUST be in the update set. A device belongs
+                # to whoever is currently signed in on it. If we keep
+                # the row's user_id sticky to whoever first registered,
+                # then any user who later signs in on the same device
+                # is invisible to read_media — list_for_user filters
+                # by DeviceORM.user_id, the device row stays under the
+                # original user, the "current" user appears to have
+                # no devices online. (Real-world hit: an Electron
+                # session that previously held a bench profile, then
+                # signed in as `default` — _online tracks the new user
+                # but the DB row stayed under the old one, so the
+                # teacher saw "NO ONLINE CANVASES" while a PDF was on
+                # screen.)
+                "user_id": user_id,
                 "device_class": device_class,
                 "capabilities": caps.model_dump(),
                 "last_seen": now,
