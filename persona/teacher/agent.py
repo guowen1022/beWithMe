@@ -27,6 +27,7 @@ from persona.teacher.prompt import PromptParts, build_answer_prompt, build_histo
 from persona.teacher.prompt_v2 import build_answer_prompt as build_answer_prompt_v2
 from persona.teacher.schemas import AskRequest
 from persona.teacher.silicon_brain_client import SiliconBrainClient
+from tools.read_media import read_media
 
 
 # Registry: maps version string -> builder callable
@@ -116,7 +117,16 @@ async def assemble_context(
     prior_interactions = await _fetch_session_history(db, user_id, body.session_id)
     prior_messages = build_history_messages(prior_interactions)
 
-    # 7. Build the prompt.
+    # 7. Current canvas state — what surfaces are mounted right now, in
+    # the teacher's vocabulary. Defensive: any failure here just drops the
+    # section, doesn't break the prompt.
+    canvas_state = None
+    try:
+        canvas_state = await read_media(user_id)
+    except Exception as e:
+        print(f"[teacher] read_media error (canvas state): {e}", flush=True)
+
+    # 8. Build the prompt.
     builder = _PROMPT_BUILDERS[body.prompt_version]
     parts = builder(
         passage=body.passage_text,
@@ -127,6 +137,7 @@ async def assemble_context(
         user_profile=user_profile,
         concept_nodes=concept_nodes,
         graph_context=graph_ctx,
+        canvas_state=canvas_state,
     )
 
     return TeacherContext(parts=parts, prior_messages=prior_messages)

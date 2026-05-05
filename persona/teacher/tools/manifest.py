@@ -11,6 +11,7 @@ echoing back the full payload.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List
 from uuid import UUID
 
@@ -138,11 +139,45 @@ def _make_mount_template(user_id: UUID):
     return executor
 
 
+# Tripwire: descriptions matching any of these patterns are diagram-shaped
+# requests and must go through `interactive_graph`, not the engineer LLM.
+# We catch this server-side so the teacher gets immediate, deterministic
+# feedback even if its prompt-side discipline slips.
+_DIAGRAM_HINTS = re.compile(
+    r"\b(flow ?chart|flow diagram|sequence diagram|class diagram|"
+    r"er diagram|state diagram|"
+    r"mind ?map|gantt|sankey|timeline|"
+    r"step\s*\d|step[s]?\s*->|->\s*step|"
+    r"hierarchy|tree of|relation(ship)?s? between|"
+    r"diagram (of|showing|for)|chart (of|showing))\b",
+    re.IGNORECASE,
+)
+# A separate check: arrow chains in the description are almost always a flow.
+_ARROW_CHAIN = re.compile(r"(->|→|=>|-->).*?(->|→|=>|-->)")
+
+
 def _make_request_new_block(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
         description = (args.get("description") or "").strip()
         if not description:
             return json.dumps({"error": "description is required"})
+
+        # Diagram-shaped requests must go through interactive_graph. The
+        # engineer must never end up authoring per-step JS for a flow,
+        # sequence, hierarchy, etc. — that's content, not code, and per-
+        # step JS does not belong in the user's git workspace.
+        if _DIAGRAM_HINTS.search(description) or _ARROW_CHAIN.search(description):
+            return json.dumps({
+                "error": (
+                    "diagram-shaped request — use interactive_graph(name='...', "
+                    "mermaid='flowchart LR ...') instead. request_new_block is "
+                    "for novel interactive widgets only (sliders, simulations, "
+                    "custom inputs); diagrams are content rendered by the "
+                    "ephemeral interactive_graph surface, not code in the "
+                    "user's workspace."
+                )
+            })
+
         target_device_id = args.get("target_device_id")
         try:
             target_uuid = UUID(target_device_id) if target_device_id else None
@@ -178,6 +213,11 @@ def _make_push_block_content(user_id: UUID):
 
 def _make_interactive_graph(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
+        name_raw = args.get("name")
+        if name_raw is not None and not isinstance(name_raw, str):
+            return json.dumps({"error": "name must be a string"})
+        name = (name_raw or "main").strip() or "main"
+
         mermaid_raw = args.get("mermaid")
         if mermaid_raw is not None and not isinstance(mermaid_raw, str):
             return json.dumps({"error": "mermaid must be a string"})
@@ -207,6 +247,7 @@ def _make_interactive_graph(user_id: UUID):
 
         result = await interactive_graph(
             user_id=user_id,
+            name=name,
             mermaid=mermaid,
             highlight_node=highlight_node,
             clear=clear,
@@ -347,25 +388,14 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="mount_template",
             description=(
-                "Materialize a known UI template onto the user's canvas. "
-                "FAST and DETERMINISTIC — no engineer LLM in the loop. "
-                "This is your PRIMARY tool for satisfying user intents that "
-                "involve a UI surface. "
-                "Available templates: "
-                "`upload_file` (PDF picker — use whenever the user wants to "
-                "upload, attach, share, or open a PDF/document), "
-                "`passage_reader` (textarea for pasting/typing — use when the "
-                "user wants to paste, type, or edit text directly), "
-                "`pdf_reader` (renders a PDF that was uploaded via "
-                "upload_file — auto-mounts via the engineer in most flows; "
-                "you only need to call this if the upload happened but the "
-                "reader didn't appear), "
-                "`inputs_launcher` (the two-button starter — usually the "
-                "frontend mounts this on first paint; rarely useful for you "
-                "to mount manually). "
-                "Pass `replace: [block_id]` to atomically swap out an "
-                "existing block (e.g., replace inputs_launcher when you "
-                "mount upload_file)."
+                "Display a known reading surface — `upload_file` (PDF "
+                "picker), `passage_reader` (paste/type text), `pdf_reader` "
+                "(rendered PDF), `inputs_launcher` (two-button starter, "
+                "auto-mounted on empty canvas — rarely needed manually). "
+                "Use when the user wants to upload, paste, or read. Fast "
+                "and deterministic. Pass `replace: [...]` to atomically "
+                "swap out an existing surface (e.g. replace the launcher "
+                "when you bring up the upload picker)."
             ),
             params_schema={
                 "type": "object",
@@ -392,12 +422,14 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="request_new_block",
             description=(
-                "Ask the frontend_engineer to author a NOVEL UI block — one "
-                "no template covers. SLOW (engineer LLM authors code). "
-                "Prefer `mount_template` when an existing template fits. "
-                "Provide a short, concrete description of what the block "
-                "should do or display. Optionally target a single device's "
-                "canvas via target_device_id (use list_media to discover ids)."
+                "Use **only** for novel *interactive widgets* — sliders, "
+                "custom inputs, simulations, anything that needs fresh "
+                "JavaScript. **DO NOT** use for diagrams (flows, "
+                "sequences, charts, hierarchies, classes, mind maps, "
+                "timelines): those go to `interactive_graph`. **DO NOT** "
+                "use to display text or a passage: those go to "
+                "`mount_template`. The engineer LLM authors code here — "
+                "slow, and only justified for genuinely novel UI."
             ),
             params_schema={
                 "type": "object",
@@ -419,41 +451,44 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="interactive_graph",
             description=(
-                "Render or update the canonical interactive diagram on the "
-                "canvas (block id `interactive-graph`). The diagram is "
-                "authored in Mermaid syntax — flowcharts, UML (class / "
-                "sequence / state / ER / C4), mindmaps, gantt charts, pie "
-                "charts, sankey, timeline, xychart (bar/line), kanban, "
-                "journey, requirement, gitgraph, and more. Use this for "
-                "ANY relational/structural visualization: \"step 1 → step "
-                "2 → step 3\", \"class A inherits from B\", \"compare "
-                "options as a tree\", etc. FAST and DETERMINISTIC — no "
-                "engineer LLM in the loop, the update lands in tens of "
-                "milliseconds, perfect for narrating step-by-step while "
-                "the diagram grows. "
-                "INCREMENTAL EXPLANATION PATTERN: each call REPLACES the "
-                "diagram. To grow it alongside your narration, send a "
-                "fuller Mermaid string each turn — e.g. first turn just "
-                "step 1, next turn step 1 + step 2 + edge between them, "
-                "next turn step 1 + 2 + 3, etc. Pair with `speak` so the "
-                "diagram and your voice land together. "
-                "Use `highlight_node` to flash a specific node id while "
-                "you're talking about it (uses Mermaid's node ids — `A`, "
-                "`B`, `C` in `flowchart`, the class/actor name in UML). "
-                "Use `clear=true` to wipe between unrelated topics. "
-                "The block publishes user clicks on `graph.selected` and "
-                "parse errors on `graph.error`; both surface via "
-                "`read_media` (state.kind='graph', state.extra has "
-                "node_ids and selected_node_id)."
+                "Draw or update a diagram on the canvas — flowcharts, "
+                "sequence diagrams, classes (UML), mindmaps, charts "
+                "(bar / line / pie), gantt, sankey, timelines, ER, "
+                "state machines, and more. Each diagram has a `name` you "
+                "choose (e.g. \"steps\", \"protocol\"). Pass the SAME "
+                "name to update an existing diagram in place; pass a "
+                "DIFFERENT name to add a second diagram alongside. "
+                "Diagrams are written in Mermaid syntax — concise text. "
+                "The CURRENTLY ON CANVAS section in your prompt tells "
+                "you which diagrams are already up. Diagrams are "
+                "EPHEMERAL: they appear, illustrate the concept, and "
+                "disappear when the user reloads. Don't worry about "
+                "saving them. Pair with `speak` to narrate while the "
+                "diagram grows; use `highlight_node` to flash a node "
+                "while you're talking about it; use `clear=true` to "
+                "wipe a diagram. For step-by-step explanation, send a "
+                "fuller Mermaid each turn under the same name and the "
+                "diagram grows with your words."
             ),
             params_schema={
                 "type": "object",
                 "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Semantic name for the diagram instance — "
+                            "kebab-case (e.g. \"steps\", \"tls-handshake\", "
+                            "\"krebs-cycle\"). Same name = update existing; "
+                            "different name = add alongside. Defaults to "
+                            "\"main\" if omitted."
+                        ),
+                    },
                     "mermaid": {
                         "type": "string",
                         "description": (
-                            "Full Mermaid source. Replaces the prior diagram. "
-                            "Examples: 'flowchart TD\\n  A[Step 1] --> B[Step 2]'; "
+                            "Full Mermaid source. Replaces the prior content "
+                            "of the named diagram. Examples: "
+                            "'flowchart LR\\n  A[Step 1] --> B[Step 2]'; "
                             "'classDiagram\\nclass User { +String name }'; "
                             "'sequenceDiagram\\nAlice->>Bob: Hi'; "
                             "'xychart-beta\\ntitle \"Q1 sales\"\\nbar [10,20,30]'."
@@ -462,14 +497,14 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                     "highlight_node": {
                         "type": "string",
                         "description": (
-                            "Optional. Node id to flash for ~1.6s after the "
-                            "render lands. Use the same id you used in the "
-                            "Mermaid source (e.g. 'A', 'Step1')."
+                            "Optional. Node id to flash for ~1.6s. Use the "
+                            "same id you used in the Mermaid source "
+                            "(e.g. 'A', 'Step1', or a class/actor name)."
                         ),
                     },
                     "clear": {
                         "type": "boolean",
-                        "description": "If true, wipe the diagram. Use between unrelated topics.",
+                        "description": "If true, wipe the named diagram.",
                     },
                     "target_device_id": {
                         "type": "string",
@@ -483,10 +518,9 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="push_block_content",
             description=(
-                "Publish a value to a topic on a mounted block's bus. The "
-                "block must be subscribed to that topic for the update to "
-                "land. Use this to drive live content (counters, text "
-                "updates, list rows) into an existing block."
+                "Send a value into a topic that an existing surface "
+                "listens on. Use to drive live data (counters, list rows, "
+                "text updates) into something already up — no remount."
             ),
             params_schema={
                 "type": "object",
@@ -571,10 +605,10 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="block_action",
             description=(
-                "Invoke a standard handle on an existing block: "
-                "'highlight' (flash a glow), 'focus' (move keyboard focus), "
-                "or 'scroll_to' (scroll into view). Use to draw the user's "
-                "attention to a specific block."
+                "Draw the user's attention to a surface already on the "
+                "canvas — 'highlight' (flash a glow), 'focus' (move "
+                "keyboard focus), or 'scroll_to' (scroll into view). "
+                "Use the block_id you see in CURRENTLY ON CANVAS."
             ),
             params_schema={
                 "type": "object",

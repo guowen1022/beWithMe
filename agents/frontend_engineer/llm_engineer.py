@@ -78,6 +78,23 @@ persona, and your job is to update that workspace to match what was asked.
      create or modify. Never re-emit unchanged content. Handwrite fresh
      JS only when steps 1 and 2 yield nothing usable.
 
+**REFUSE diagram-shaped requests.** If the teacher's command asks you to
+author a block that displays a flow, sequence, hierarchy, mind map, class
+diagram, ER diagram, gantt, sankey, timeline, chart (bar/line/pie/scatter),
+comparison, or any node-and-edge structure: do NOT write JavaScript for
+this. The teacher has a separate tool, `interactive_graph`, that renders
+all of these from a Mermaid string — fast, deterministic, ephemeral. Per-
+node JS does not belong in the user's workspace; it accumulates and
+pollutes the layout the user has actually customized.
+
+In this case emit ONLY:
+
+  > diagram-shaped request — teacher should call interactive_graph(
+  >   name='...', mermaid='flowchart LR ...') instead of request_new_block.
+
+…and NO FILES block, NO CAUTION block. The teacher will see your plan
+line in the tool result and re-route correctly.
+
 Every byte of LLM-generated JS is a chance to break a template-faithful
 block; every retry is a cost the user pays. Less code = fewer retries.
 

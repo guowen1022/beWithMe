@@ -1,75 +1,96 @@
-"""interactive_graph — teacher's tool for a Mermaid-driven canvas diagram.
+"""interactive_graph — teacher's tool for ephemeral Mermaid diagrams.
 
-One canonical block (`interactive-graph`) renders Mermaid syntax. The
-teacher publishes Mermaid strings on the `graph.mermaid` topic; the
-block re-renders the SVG on every tick. For incremental teaching the
-teacher emits a fuller diagram each turn (step 1, step 1 + step 2, …)
-and the same block grows in place.
+Diagrams the teacher draws to explain something are *ephemeral overlays*:
+they appear over SSE, render in the browser, and disappear on next reload.
+Nothing persists — no workspace file, no canvas_layout row. The user's git
+workspace is reserved for surfaces they've actually customized for their
+own workflow (upload bars, layouts, saved widgets); a teacher's in-the-
+moment diagram is not that.
 
-Mechanics:
-  1. Ensure `blocks/interactive-graph.{js,md}` exists in the user's git
-     workspace. The block code is a fixed template — no engineer LLM in
-     the loop, so the diagram update lands in tens of milliseconds.
-  2. Mount it on the user's canvas if it isn't already (UIUpdate event +
-     canvas_layout row).
-  3. Publish the Mermaid source on `graph.mermaid` (sticky pub/sub means
-     a block mounted in the same SSE batch sees the value).
-  4. Optionally publish a node id on `graph.highlight` to flash that
-     node, or `True` on `graph.clear` to wipe the diagram.
+Multiple diagrams can be on screen at once, each addressed by a semantic
+`name` the teacher chooses (default `"main"`). Block id is derived:
+`interactive-graph` for `main`, `interactive-graph-<name>` otherwise.
+Topics are namespaced by block id so instances don't trample each other.
 
-Topics:
+Topics (per instance):
   Subscribed by the block:
-    - `graph.mermaid`   string — full Mermaid source
-    - `graph.highlight` {node_id, durationMs?}
-    - `graph.clear`     truthy — wipe the SVG
+    - `graph.<block_id>.mermaid`   string — full Mermaid source
+    - `graph.<block_id>.highlight` {node_id, durationMs?}
+    - `graph.<block_id>.clear`     truthy — wipe the SVG
 
   Published by the block:
-    - `graph.selected`  {node_id, label} — when the user clicks a node
-    - `graph.error`     {message} — Mermaid render/parse error
+    - `graph.<block_id>.selected`  {node_id, label} — when the user clicks
+    - `graph.<block_id>.error`     {message} — Mermaid render/parse error
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import delete
 
 from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockMessage, BlockSource, UIUpdate
 from infra.db import async_session
-from infra.devices import registry as device_registry
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
 
 
-_GRAPH_BLOCK_ID = "interactive-graph"
-_TOPIC_MERMAID = "graph.mermaid"
-_TOPIC_HIGHLIGHT = "graph.highlight"
-_TOPIC_CLEAR = "graph.clear"
+_DEFAULT_NAME = "main"
+_BASE_BLOCK_ID = "interactive-graph"
+
+# `name` must match this — same kebab-case rule the workspace uses for block
+# stems. We re-validate here even though the block isn't going to disk:
+# `name` becomes part of the block id, which the browser uses as a DOM
+# attribute and topic key, so we want clean characters.
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
-_GRAPH_BLOCK_JS = """\
+def _block_id_for(name: str) -> str:
+    return _BASE_BLOCK_ID if name == _DEFAULT_NAME else f"{_BASE_BLOCK_ID}-{name}"
+
+
+def _topic(block_id: str, suffix: str) -> str:
+    return f"graph.{block_id}.{suffix}"
+
+
+_GRAPH_BLOCK_JS_TEMPLATE = """\
 ({
-  id: 'interactive-graph',
+  id: '__BLOCK_ID__',
   grid: { x: 30, y: 10, w: 100, h: 70 },
   // Block reports its own structured state below; skip the DOM-text fallback.
   autosnapshot: false,
   style: {
-    background: '#0f172a',
-    color: '#e5e7eb',
-    border: '1px solid rgba(148,163,184,0.18)',
-    borderRadius: '12px',
-    boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    border: '1px solid var(--bw-border)',
+    borderRadius: '0',
     padding: '12px',
     overflow: 'auto',
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
   },
-  subscribes: ['graph.mermaid', 'graph.highlight', 'graph.clear'],
-  publishes: ['graph.selected', 'graph.error'],
+  // Topics are namespaced per instance so multiple diagrams don't collide.
+  subscribes: [
+    'graph.__BLOCK_ID__.mermaid',
+    'graph.__BLOCK_ID__.highlight',
+    'graph.__BLOCK_ID__.clear',
+  ],
+  publishes: [
+    'graph.__BLOCK_ID__.selected',
+    'graph.__BLOCK_ID__.error',
+  ],
   run(root, bus, cleanup, helpers) {
-    var blockId = (helpers && helpers.blockId) || 'interactive-graph';
+    var blockId = (helpers && helpers.blockId) || '__BLOCK_ID__';
+    var T_MERMAID   = 'graph.' + blockId + '.mermaid';
+    var T_HIGHLIGHT = 'graph.' + blockId + '.highlight';
+    var T_CLEAR     = 'graph.' + blockId + '.clear';
+    var T_SELECTED  = 'graph.' + blockId + '.selected';
+    var T_ERROR     = 'graph.' + blockId + '.error';
+
     var report = helpers && typeof helpers.reportState === 'function'
       ? helpers.reportState
       : function () {};
@@ -156,7 +177,7 @@ _GRAPH_BLOCK_JS = """\
             var labelEl = g.querySelector('foreignObject, .nodeLabel, text');
             var label = labelEl ? (labelEl.textContent || '').trim() : '';
             selectedNode = id || null;
-            try { bus.publish('graph.selected', { node_id: id, label: label }); } catch (e) {}
+            try { bus.publish(T_SELECTED, { node_id: id, label: label }); } catch (e) {}
             pushState();
           };
           g.addEventListener('click', onClick);
@@ -208,7 +229,6 @@ _GRAPH_BLOCK_JS = """\
       if (typeof window === 'undefined') return Promise.reject(new Error('no window'));
       if (window.__mermaidReady) return window.__mermaidReady;
       if (window.mermaid) return Promise.resolve(window.mermaid);
-      // Loader hasn't run yet — poll briefly.
       return new Promise(function (resolve, reject) {
         var tries = 0;
         var iv = setInterval(function () {
@@ -233,7 +253,7 @@ _GRAPH_BLOCK_JS = """\
       return mermaid;
     }).catch(function (err) {
       status.textContent = 'mermaid failed to load: ' + (err && err.message || err);
-      try { bus.publish('graph.error', { message: String(err && err.message || err) }); } catch (e) {}
+      try { bus.publish(T_ERROR, { message: String(err && err.message || err) }); } catch (e) {}
       throw err;
     });
 
@@ -252,8 +272,6 @@ _GRAPH_BLOCK_JS = """\
     }
 
     function fitSvg(svg) {
-      // Make the SVG fill the container box on both axes while preserving
-      // aspect ratio (no overflow, no off-screen content).
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.removeAttribute('width');
       svg.removeAttribute('height');
@@ -269,7 +287,7 @@ _GRAPH_BLOCK_JS = """\
       lastSource = String(source || '');
       lastKind = detectKind(lastSource);
       ready.then(function (mermaid) {
-        if (seq !== renderSeq) return;  // a newer render superseded this one
+        if (seq !== renderSeq) return;
         var renderId = 'mermaid-' + blockId + '-' + seq;
         Promise.resolve()
           .then(function () { return mermaid.render(renderId, lastSource); })
@@ -289,7 +307,6 @@ _GRAPH_BLOCK_JS = """\
             } else {
               nodeIds = [];
             }
-            // Selection survives a re-render only if the same node id is still present.
             if (selectedNode && nodeIds.indexOf(selectedNode) < 0) selectedNode = null;
             pushState();
           })
@@ -300,13 +317,13 @@ _GRAPH_BLOCK_JS = """\
             status.textContent = 'render error: ' + msg;
             container.innerHTML = '';
             nodeIds = [];
-            try { bus.publish('graph.error', { message: msg }); } catch (e) {}
+            try { bus.publish(T_ERROR, { message: msg }); } catch (e) {}
             pushState({ error: msg });
           });
       });
     }
 
-    var unsubMermaid = bus.subscribe('graph.mermaid', function (value) {
+    var unsubMermaid = bus.subscribe(T_MERMAID, function (value) {
       if (value === null || value === undefined) {
         clearSvg();
         return;
@@ -320,7 +337,7 @@ _GRAPH_BLOCK_JS = """\
     });
     cleanup(unsubMermaid);
 
-    var unsubHighlight = bus.subscribe('graph.highlight', function (value) {
+    var unsubHighlight = bus.subscribe(T_HIGHLIGHT, function (value) {
       if (!value) return;
       var nodeId = typeof value === 'string' ? value : value.node_id;
       var ms = (typeof value === 'object' && value) ? value.durationMs : null;
@@ -330,7 +347,7 @@ _GRAPH_BLOCK_JS = """\
     });
     cleanup(unsubHighlight);
 
-    var unsubClear = bus.subscribe('graph.clear', function (value) {
+    var unsubClear = bus.subscribe(T_CLEAR, function (value) {
       if (!value) return;
       clearSvg();
     });
@@ -342,91 +359,103 @@ _GRAPH_BLOCK_JS = """\
 })
 """
 
-_GRAPH_BLOCK_MD = (
-    "# interactive-graph\n\n"
-    "Canonical Mermaid diagram block owned by the teacher's "
-    "`interactive_graph` tool. Subscribes to `graph.mermaid` (string: "
-    "full Mermaid source), `graph.highlight` ({node_id, durationMs?}), "
-    "and `graph.clear` (truthy: wipe). Publishes `graph.selected` "
-    "({node_id, label}) on click and `graph.error` ({message}) on "
-    "render failure. Re-renders on every `graph.mermaid` tick — for "
-    "incremental teaching, the teacher emits a fuller diagram each "
-    "turn and the same block grows in place.\n"
-)
 
+def _build_graph_block(name: str) -> BlockSource:
+    """Build a fresh in-memory BlockSource for the named diagram instance.
 
-def _ensure_graph_block_in_workspace(user_id: UUID) -> BlockSource:
-    """Write blocks/interactive-graph.{js,md} if missing or stale.
-
-    Always returns the BlockSource so callers can ship it as a mount event.
+    No disk I/O, no commit, no canvas_layout row. The browser evaluates the
+    JS on every mount; on reload, the diagram is gone (nothing in workspace
+    to hydrate from) — which is correct for an ephemeral overlay.
     """
+    block_id = _block_id_for(name)
+    js = _GRAPH_BLOCK_JS_TEMPLATE.replace("__BLOCK_ID__", block_id)
+    return BlockSource(id=block_id, source=js, design_doc=None)
+
+
+# Per-process guard so we don't redo the v1 cleanup migration on every call
+# for the same user. The migration itself is idempotent — this just avoids
+# the read_snapshot+commit overhead.
+_MIGRATED_USERS: set[str] = set()
+
+
+async def _migrate_v1_workspace_if_needed(user_id: UUID) -> list[str]:
+    """v1 wrote `blocks/interactive-graph*.{js,md}` to git and recorded
+    canvas_layout rows. v1.1 makes the diagram ephemeral. Sweep any leftovers.
+
+    Returns the list of block ids that were cleaned up, so the caller can
+    fan out unmount events for any browser still hydrated from old state.
+    """
+    key = str(user_id)
+    if key in _MIGRATED_USERS:
+        return []
     snap = ws.read_snapshot(user_id)
-    existing = snap.blocks.get(_GRAPH_BLOCK_ID)
-    if existing is None or existing.js != _GRAPH_BLOCK_JS:
-        ws.write_files(
-            user_id,
-            [
-                ws.FileWrite(path=f"blocks/{_GRAPH_BLOCK_ID}.js", content=_GRAPH_BLOCK_JS),
-                ws.FileWrite(path=f"blocks/{_GRAPH_BLOCK_ID}.md", content=_GRAPH_BLOCK_MD),
-            ],
-        )
-        ws.regenerate_topics(user_id)
-        ws.commit(user_id, "tools.interactive_graph: install interactive-graph block")
-    return BlockSource(id=_GRAPH_BLOCK_ID, source=_GRAPH_BLOCK_JS, design_doc=_GRAPH_BLOCK_MD)
+    stale_ids = [
+        bid for bid in snap.blocks
+        if bid == _BASE_BLOCK_ID or bid.startswith(_BASE_BLOCK_ID + "-")
+    ]
+    if not stale_ids:
+        _MIGRATED_USERS.add(key)
+        return []
 
+    ws.delete_blocks(user_id, stale_ids)
+    ws.regenerate_topics(user_id)
+    ws.commit(user_id, "tools.interactive_graph: stop persisting ephemeral diagrams")
 
-async def _online_device_ids(user_id: UUID) -> list[UUID]:
-    devices = await device_registry.list_for_user(user_id)
-    return [d.device_id for d in devices if d.online]
-
-
-async def _record_mount(user_id: UUID, block_id: str, device_ids: list[UUID]) -> None:
-    if not device_ids:
-        return
     async with async_session() as session:
-        for did in device_ids:
-            stmt = (
-                pg_insert(CanvasLayout)
-                .values(user_id=user_id, device_id=did, block_id=block_id)
-                .on_conflict_do_nothing(
-                    index_elements=["user_id", "device_id", "block_id"],
-                )
+        await session.execute(
+            delete(CanvasLayout).where(
+                CanvasLayout.user_id == user_id,
+                CanvasLayout.block_id.in_(stale_ids),
             )
-            await session.execute(stmt)
+        )
         await session.commit()
+
+    _MIGRATED_USERS.add(key)
+    return stale_ids
 
 
 async def interactive_graph(
     *,
     user_id: UUID,
+    name: str = _DEFAULT_NAME,
     mermaid: Optional[str] = None,
     highlight_node: Optional[str] = None,
     clear: bool = False,
     target_device_id: Optional[UUID] = None,
 ) -> dict:
-    """Mount the interactive-graph block (idempotent) and update its state.
+    """Mount or update an ephemeral diagram on the user's canvas.
+
+    `name` selects which diagram instance. Pass the same `name` to update
+    the same diagram; pass a different `name` to add a second diagram
+    alongside. Default is `"main"`.
 
     At least one of `mermaid`, `highlight_node`, `clear` must be set.
     Order within the SSE batch: clear (if set) → mermaid (if set) → highlight.
     """
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        return {"error": "name must be kebab-case (lowercase letters, digits, dashes; start with a letter or digit)"}
+
     if mermaid is None and highlight_node is None and not clear:
         return {"error": "no-op: pass mermaid, highlight_node, or clear=True"}
 
-    block = _ensure_graph_block_in_workspace(user_id)
-    mount_event = UIUpdate(action="mount", block=block)
+    block = _build_graph_block(name)
+    block_id = block.id
 
     async def _send(event) -> int:
         if target_device_id is not None:
             return await enqueue_for_device(user_id, target_device_id, event)
         return await enqueue_for_user(user_id, event)
 
-    if target_device_id is not None:
-        mount_targets = [target_device_id]
-    else:
-        mount_targets = await _online_device_ids(user_id)
+    # One-time cleanup: if v1 left workspace files / layout rows for any
+    # interactive-graph* block, remove them and unmount on connected browsers.
+    stale_ids = await _migrate_v1_workspace_if_needed(user_id)
+    for stale_id in stale_ids:
+        if stale_id == block_id:
+            # We're about to mount this id with fresh content anyway.
+            continue
+        await _send(UIUpdate(action="unmount", block=BlockSource(id=stale_id, source="")))
 
-    delivered_mount = await _send(mount_event)
-    await _record_mount(user_id, _GRAPH_BLOCK_ID, mount_targets)
+    delivered_mount = await _send(UIUpdate(action="mount", block=block))
 
     delivered_clear = 0
     delivered_mermaid = 0
@@ -434,25 +463,26 @@ async def interactive_graph(
 
     if clear:
         delivered_clear = await _send(
-            BlockMessage(block_id=_GRAPH_BLOCK_ID, topic=_TOPIC_CLEAR, value=True)
+            BlockMessage(block_id=block_id, topic=_topic(block_id, "clear"), value=True)
         )
 
     if mermaid is not None:
         delivered_mermaid = await _send(
-            BlockMessage(block_id=_GRAPH_BLOCK_ID, topic=_TOPIC_MERMAID, value=mermaid)
+            BlockMessage(block_id=block_id, topic=_topic(block_id, "mermaid"), value=mermaid)
         )
 
     if highlight_node:
         delivered_highlight = await _send(
             BlockMessage(
-                block_id=_GRAPH_BLOCK_ID,
-                topic=_TOPIC_HIGHLIGHT,
+                block_id=block_id,
+                topic=_topic(block_id, "highlight"),
                 value={"node_id": highlight_node, "durationMs": 1600},
             )
         )
 
     return {
-        "block_id": _GRAPH_BLOCK_ID,
+        "name": name,
+        "block_id": block_id,
         "delivered_mount": delivered_mount,
         "delivered_mermaid": delivered_mermaid,
         "delivered_highlight": delivered_highlight,
@@ -460,6 +490,7 @@ async def interactive_graph(
         "mermaid_chars": len(mermaid) if mermaid else 0,
         "highlighted": bool(highlight_node),
         "cleared": bool(clear),
+        "v1_cleaned_up": stale_ids,
     }
 
 

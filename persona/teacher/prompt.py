@@ -90,6 +90,7 @@ def build_answer_prompt(
     user_profile: Optional[UserProfileState] = None,
     concept_nodes: Optional[List[ConceptNode]] = None,
     graph_context: str = "",
+    canvas_state: object = None,  # v1 ignores; v2 renders. Accepted for dispatcher uniformity.
 ) -> PromptParts:
     """Build the answer prompt in three parts so the LLM layer can apply
     prompt caching to the static prefix.

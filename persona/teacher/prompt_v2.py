@@ -36,6 +36,136 @@ def load_skill(name: str) -> str:
     return ""
 
 
+_GRAPH_BLOCK_PREFIX = "interactive-graph"
+
+
+def _diagram_name_from_block_id(block_id: str) -> str:
+    """`interactive-graph` → `main`; `interactive-graph-steps` → `steps`."""
+    if block_id == _GRAPH_BLOCK_PREFIX:
+        return "main"
+    if block_id.startswith(_GRAPH_BLOCK_PREFIX + "-"):
+        return block_id[len(_GRAPH_BLOCK_PREFIX) + 1:]
+    return block_id
+
+
+def _format_canvas_state(perc: object) -> str:
+    """Render the user's current canvas + voice state as a terse, intent-vocab
+    section the teacher can read without thinking about block ids.
+
+    `perc` is a MediaPerception (avoiding the import here to keep this
+    builder framework-light). Returns empty string when nothing is up.
+    """
+    if perc is None:
+        return ""
+    canvases = getattr(perc, "canvases", []) or []
+    voices = getattr(perc, "voices", []) or []
+
+    lines: list[str] = []
+    seen_block_ids: set[str] = set()  # collapse duplicates across devices
+    for canvas in canvases:
+        if not getattr(canvas, "online", False):
+            continue
+        for block in getattr(canvas, "blocks", []) or []:
+            bid = block.id
+            if bid in seen_block_ids:
+                continue
+            seen_block_ids.add(bid)
+            line = _format_block_line(block)
+            if line:
+                lines.append(line)
+
+    voice_lines: list[str] = []
+    for voice in voices:
+        if not getattr(voice, "online", False):
+            continue
+        utts = getattr(voice, "recent_utterances", []) or []
+        if not utts:
+            continue
+        last = utts[-1]
+        text = (getattr(last, "text", "") or "").strip().replace("\n", " ")
+        if len(text) > 70:
+            text = text[:67] + "…"
+        voice_lines.append(f'- voice: last said "{text}"')
+
+    if not lines and not voice_lines:
+        return ""
+
+    parts = ["=== CURRENTLY ON CANVAS ==="]
+    parts.extend(lines)
+    parts.extend(voice_lines)
+    return "\n".join(parts)
+
+
+def _format_block_line(block) -> str:
+    """One line per surface, in the teacher's vocabulary (never expose block id)."""
+    state = getattr(block, "state", None)
+    title = getattr(block, "title", None)
+    bid = block.id
+    age = getattr(block, "last_updated_s_ago", None)
+
+    # Diagram surface (interactive-graph instances): describe by name + kind.
+    if bid == _GRAPH_BLOCK_PREFIX or bid.startswith(_GRAPH_BLOCK_PREFIX + "-"):
+        name = _diagram_name_from_block_id(bid)
+        if state is not None and state.kind == "graph":
+            extra = state.extra or {}
+            kind = extra.get("mermaid_kind") or "diagram"
+            n_nodes = len(extra.get("node_ids") or [])
+            sel = extra.get("selected_node_id")
+            bits = [f'- diagram "{name}": {kind}, {n_nodes} nodes']
+            if sel:
+                bits.append(f'(selected: "{sel}")')
+            tail = _format_focus_tail(state, age)
+            if tail:
+                bits.append(tail)
+            return " ".join(bits)
+        return f'- diagram "{name}" (empty)'
+
+    # Other surfaces: dispatch on state.kind.
+    head = None
+    if state is not None:
+        kind = state.kind
+        content = (state.content or "").strip().replace("\n", " ")
+        if len(content) > 70:
+            content = content[:67] + "…"
+        if kind == "pdf":
+            head = f'- PDF reader: "{title or content or "open"}"'
+        elif kind == "passage":
+            label = title or content or "(empty)"
+            head = f'- text panel: "{label}"'
+        elif kind == "browser":
+            head = f"- browser: {content or '(loading)'}"
+        elif kind == "snapshot":
+            label = title or content or bid
+            head = f'- panel: "{label}"'
+        else:
+            head = f"- {kind} panel" + (f': "{content}"' if content else "")
+    else:
+        head = f'- {title or bid} (no state yet)'
+
+    tail = _format_focus_tail(state, age) if state is not None else ""
+    return head + (f" {tail}" if tail else "")
+
+
+def _format_focus_tail(state, age) -> str:
+    """e.g. '(user is here, 12s ago)' / '(idle)'."""
+    if state is None:
+        return ""
+    pieces = []
+    focus = state.focus
+    if focus == "active":
+        pieces.append("user is here")
+    elif focus == "background":
+        pieces.append("idle")
+    if age is not None:
+        if age < 60:
+            pieces.append(f"{int(age)}s ago")
+        elif age < 3600:
+            pieces.append(f"{int(age // 60)}m ago")
+    if not pieces:
+        return ""
+    return "(" + ", ".join(pieces) + ")"
+
+
 def build_answer_prompt(
     passage: Optional[str],
     selected_text: Optional[str],
@@ -45,6 +175,7 @@ def build_answer_prompt(
     user_profile: Optional[UserProfileState] = None,
     concept_nodes: Optional[List[ConceptNode]] = None,
     graph_context: str = "",
+    canvas_state: object = None,
 ) -> PromptParts:
     """Build the answer prompt v2 — loads skills from markdown files."""
 
@@ -122,12 +253,28 @@ def build_answer_prompt(
         "    RIGHT: block_action({block_id: \"pdf-reader\", action: \"highlight\", ...}).\n"
         "  user: \"show me the flow: step 1 eat well, step 2 sleep well\"\n"
         "    WRONG: request_new_block({description: \"a flow with two steps\"}).\n"
-        "    RIGHT: interactive_graph({mermaid: \"flowchart LR\\n  A[EAT WELL] --> B[SLEEP WELL]\"}).\n"
-        "    For step-by-step narration, send a fuller Mermaid each turn — same block grows in place.\n"
+        "           (request_new_block authors fresh JavaScript per call. Diagrams are CONTENT,\n"
+        "            not code; per-step JS does not belong in the user's workspace.)\n"
+        "    RIGHT: interactive_graph({name: \"steps\",\n"
+        "             mermaid: \"flowchart LR\\n  A[EAT WELL] --> B[SLEEP WELL]\"}).\n"
+        "  user: \"now add 'exercise daily' as a third step\"\n"
+        "    RIGHT: interactive_graph({name: \"steps\",\n"
+        "             mermaid: \"flowchart LR\\n  A[EAT WELL] --> B[SLEEP WELL] --> C[EXERCISE DAILY]\"}).\n"
+        "           (Same `name` — replaces the same diagram in place.)\n"
+        "  user: \"also draw the TLS handshake separately\"\n"
+        "    RIGHT: interactive_graph({name: \"tls\",\n"
+        "             mermaid: \"sequenceDiagram\\n  Client->>Server: ClientHello\\n  ...\"}).\n"
+        "           (Different `name` — second diagram appears alongside the first.)\n"
         "  user: \"draw the class hierarchy of User and Admin\"\n"
-        "    RIGHT: interactive_graph({mermaid: \"classDiagram\\n  Admin --|> User\\n  class User { +String name }\"}).\n"
+        "    RIGHT: interactive_graph({name: \"users\",\n"
+        "             mermaid: \"classDiagram\\n  Admin --|> User\\n  class User { +String name }\"}).\n"
         "  user: \"chart Q1 sales as bars\"\n"
-        "    RIGHT: interactive_graph({mermaid: \"xychart-beta\\n  title \\\"Q1 sales\\\"\\n  x-axis [Jan, Feb, Mar]\\n  bar [10, 25, 40]\"}).\n"
+        "    RIGHT: interactive_graph({name: \"q1-sales\",\n"
+        "             mermaid: \"xychart-beta\\n  title \\\"Q1 sales\\\"\\n  x-axis [Jan, Feb, Mar]\\n  bar [10, 25, 40]\"}).\n"
+        "\n"
+        "Diagrams are EPHEMERAL — they appear, illustrate, and disappear when the user reloads.\n"
+        "Don't worry about saving them; that's the right behavior. Persistent saving is a separate,\n"
+        "future feature the user opts in to.\n"
         "\n"
         "Anything that touches the surface the user sees — you do it via a tool. "
         "Workarounds, instructions, \"you can paste here\" — never. We are not "
@@ -140,34 +287,33 @@ def build_answer_prompt(
     # may happen in mid-turn before the final answer is produced.
     system_parts.append(
         "TOOLS (you may call these mid-turn — the system will run them and feed results back before you finish):\n"
-        "- read_media: see what the user is currently receiving — every canvas's mounted blocks (each with current "
-        "state: what it shows, whether the user has it focused) and every voice device (with what you've recently said). "
-        "Call this whenever your next move depends on what the user is actually looking at, hearing, or has highlighted.\n"
-        "- mount_template: materialize a known UI template onto the canvas. Available templates: "
-        "upload_file (PDF picker), passage_reader (paste/type text), pdf_reader (renders an uploaded PDF), "
-        "inputs_launcher (two-button starter). This is your PRIMARY tool for satisfying user intents — fast, "
-        "deterministic, no engineer roundtrip. Pass `replace: [block_id]` to atomically swap out an existing block.\n"
-        "- interactive_graph: render or update the canonical Mermaid diagram on the canvas (block id "
-        "`interactive-graph`). Use for ANY structural/relational visual: flowcharts (\"step 1 → step 2\"), "
-        "UML (class / sequence / state / ER / C4), mindmaps, gantt, pie, sankey, timeline, xychart (bar/line), "
-        "decision trees, dependency graphs. Fast and deterministic — NO engineer roundtrip. CRITICAL: prefer "
-        "this over request_new_block whenever the user describes a flow, sequence, comparison, hierarchy, or "
-        "any multi-step / multi-entity relationship. Each call replaces the diagram; for incremental teaching, "
-        "send a fuller Mermaid string each turn (e.g. first turn: \"flowchart LR\\n  A[EAT WELL]\"; next turn: "
-        "\"flowchart LR\\n  A[EAT WELL] --> B[SLEEP WELL]\"). Pair with `speak` and `highlight_node` to walk "
-        "the user through it.\n"
-        "- request_new_block: ask the engineer to write a *novel* UI block (one no template covers and that "
-        "interactive_graph cannot express). Slow because the engineer LLM has to author code. Use ONLY when "
-        "neither mount_template nor interactive_graph fits — e.g. interactive sliders, custom widgets, "
-        "free-form animations.\n"
-        "- push_block_content: publish a value into a topic on a block already mounted on the canvas. "
-        "Use to update a live block (counter, list, displayed text) without rebuilding it.\n"
-        "- block_action: invoke a standard handle on an existing block — 'highlight' (flash a glow), "
-        "'focus' (move keyboard focus), or 'scroll_to'. Use to direct the user's eye to a block you're discussing.\n"
-        "- point_arrow: draw an arrow on the canvas from one block to another, with an optional short label. "
-        "Use to visually connect two ideas (question → answer, cause → effect). Pass both ids empty to clear.\n"
-        "- speak: synthesize speech on the user's connected speakers. Use only when audio is genuinely better than text "
-        "(short cues, alerts, hands-busy moments) and the user has not opted out of voice.\n"
+        "\n"
+        "**You think in WHAT TO SHOW THE USER** — a diagram, a passage, a PDF, a sound. The system maps your "
+        "intent to surfaces. The CURRENTLY ON CANVAS section above tells you what's already up, in the same "
+        "vocabulary. You don't address surfaces by internal id; you address them by their human name (e.g. "
+        "diagram \"steps\", text panel \"Glycolysis\").\n"
+        "\n"
+        "- read_media: see what's on every canvas / voice the user is currently using, with the latest self-reported "
+        "state of each surface. The CURRENTLY ON CANVAS section above is a digest — call this for the full picture "
+        "when you need block-level details.\n"
+        "- mount_template: display a known reading surface — upload_file (PDF picker), passage_reader "
+        "(paste/type text), pdf_reader (rendered PDF). Use when the user wants to upload, paste, or read.\n"
+        "- interactive_graph: draw or update a diagram. Each diagram has a `name` you choose (e.g. \"steps\", "
+        "\"protocol\"); same name = update existing, different name = add a second diagram alongside. Mermaid "
+        "syntax — flowcharts, sequence diagrams, classes (UML), mindmaps, charts (bar/line/pie), gantt, sankey, "
+        "timelines. Use this for ANY relational visual: \"step 1 → step 2\", \"class A inherits B\", \"compare "
+        "options as a tree\". Diagrams are EPHEMERAL — they appear, illustrate, disappear on reload.\n"
+        "- request_new_block: ONLY for novel *interactive widgets* — sliders, custom inputs, simulations. "
+        "DO NOT use for diagrams (those go to interactive_graph). DO NOT use to display text or a passage "
+        "(those go to mount_template). Slow because the engineer LLM has to write JavaScript.\n"
+        "- push_block_content: send a value to a topic an existing surface listens on. Use to drive live "
+        "data (counter, list, text update) into something already up — no remount.\n"
+        "- block_action: draw the user's attention to an existing surface — 'highlight' (flash glow), "
+        "'focus' (keyboard focus), 'scroll_to'.\n"
+        "- point_arrow: draw an arrow between two surfaces with an optional label, to visually link two "
+        "ideas. Pass both ids empty to clear.\n"
+        "- speak: synthesize speech on the user's connected speakers. Use only when audio is genuinely "
+        "better than text (short cues, alerts, hands-busy moments) and the user hasn't opted out.\n"
         "\n"
         "When deciding whether to use a tool:\n"
         "- DEFAULT TO ACTING. If the user's message implies an interface they need (upload, paste, view, annotate, "
@@ -176,8 +322,8 @@ def build_answer_prompt(
         "- For known templates, prefer mount_template (fast, deterministic). For flows, sequences, comparisons, "
         "hierarchies, charts, or any structural diagram — reach for interactive_graph (also fast, deterministic). "
         "Only fall back to request_new_block when neither fits.\n"
-        "- If the user is referring to a block that already exists, prefer push_block_content or block_action over "
-        "mounting a new one.\n"
+        "- If the user is referring to a surface that's already up (check CURRENTLY ON CANVAS), update it in "
+        "place — push_block_content for new content, block_action to draw attention. Don't mount a duplicate.\n"
         "- After tool calls land, finish with a normal answer (it must follow the OUTPUT FORMAT below).\n"
     )
 
@@ -275,6 +421,10 @@ def build_answer_prompt(
 
     # ---- DYNAMIC USER (not cached) ----------------------------------------
     dynamic_parts: list[str] = []
+
+    canvas_section = _format_canvas_state(canvas_state)
+    if canvas_section:
+        dynamic_parts.append(canvas_section)
 
     if graph_context:
         dynamic_parts.append(graph_context)
