@@ -92,10 +92,9 @@ export default function App() {
     return <GoalPlanner onBack={() => setGoalMode(false)} />;
   }
 
-  // Canvas IS the reader. Inline render at "/", below the root NavBar.
-  // No /canvas route, no chromeless wrapper, no redirects.
+  // Canvas IS the reader. Full-bleed at "/", no chrome above it.
   return (
-    <div className="relative flex-1 bg-[#0a0a0a]">
+    <div className="relative flex-1 bg-[var(--bw-void)]">
       <DynamicSurface mode="fullscreen" />
       <CanvasCommandBar />
     </div>
