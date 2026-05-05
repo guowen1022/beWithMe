@@ -198,12 +198,29 @@ async def dynamic_stream(
                     yield ": keepalive\n\n"
         finally:
             queues = _subscribers.get(uid_s, {}).get(did_s)
+            last_queue_for_device = False
             if queues is not None:
                 queues.discard(queue)
                 if not queues:
+                    last_queue_for_device = True
                     _subscribers[uid_s].pop(did_s, None)
                     if not _subscribers[uid_s]:
                         _subscribers.pop(uid_s, None)
+            # When the device's last SSE connection closes, the browser
+            # has nothing on screen anymore (page closed/reloaded; the
+            # next page load starts with an empty canvas because
+            # templates are ephemeral). Clear our mount tracker for
+            # that device so the perception cache doesn't keep
+            # hallucinating blocks from a previous session.
+            if last_queue_for_device:
+                stale_blocks = list(_mounted_blocks.get(uid_s, {}).get(did_s, set()))
+                for stale_bid in stale_blocks:
+                    _record_unmount_local(uid_s, did_s, stale_bid)
+                # Also forget per-block content state so read_media stops
+                # returning ghost entries for unmounted blocks.
+                from infra.perception import forget_block as _forget_block
+                for stale_bid in stale_blocks:
+                    _forget_block(user_id=user_id, block_id=stale_bid)
             # Don't await the DB write here — uvicorn cancels this task on
             # client disconnect, and an in-flight asyncpg call inside a
             # cancelled task leaves the pooled connection in a broken state.
