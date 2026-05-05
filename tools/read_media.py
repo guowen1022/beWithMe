@@ -19,9 +19,6 @@ from datetime import datetime
 from typing import Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import select
-
-from infra.db import async_session
 from infra.devices import registry as device_registry
 from infra.perception import (
     BlockSummary,
@@ -30,7 +27,7 @@ from infra.perception import (
     VoicePerception,
     read_for_user,
 )
-from silicon_brain.models.canvas_layout import CanvasLayout
+from services.persona.routers.dynamic import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
 
@@ -53,15 +50,10 @@ async def read_media(
         b.id: _title_from_design_doc(b.design_doc) for b in sources
     }
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(CanvasLayout).where(CanvasLayout.user_id == user_id)
-        )
-        layout_rows = list(result.scalars().all())
-
-    blocks_by_device: dict[str, list[str]] = {}
-    for row in layout_rows:
-        blocks_by_device.setdefault(str(row.device_id), []).append(row.block_id)
+    # Authoritative lifecycle source: in-memory mount tracker, flipped
+    # synchronously on every UIUpdate fan-out. No DB query, no race
+    # against the perception cache.
+    blocks_by_device: dict[str, list[str]] = mounted_block_ids(user_id)
 
     perc = read_for_user(user_id)
     state_by_device = perc["block_state"]    # {did: {bid: (state, ts)}}

@@ -16,17 +16,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
-
 from infra.contracts.devices import (
     Canvas,
     CanvasBlockSummary,
     MediaInventory,
     Voice,
 )
-from infra.db import async_session
 from infra.devices import registry as device_registry
-from silicon_brain.models.canvas_layout import CanvasLayout
+from services.persona.routers.dynamic import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
 
@@ -52,16 +49,10 @@ async def list_media(user_id: UUID) -> MediaInventory:
         b.id: _title_from_design_doc(b.design_doc) for b in sources
     }
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(CanvasLayout).where(CanvasLayout.user_id == user_id)
-        )
-        layout_rows = list(result.scalars().all())
-
-    # device_id (str) → list of block_ids
-    blocks_by_device: dict[str, list[str]] = {}
-    for row in layout_rows:
-        blocks_by_device.setdefault(str(row.device_id), []).append(row.block_id)
+    # device_id (str) → list of block_ids — read from the in-memory
+    # mount tracker maintained by services.persona.routers.dynamic on
+    # every UIUpdate fan-out. No DB query.
+    blocks_by_device: dict[str, list[str]] = mounted_block_ids(user_id)
 
     canvases: list[Canvas] = []
     voices: list[Voice] = []

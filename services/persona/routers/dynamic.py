@@ -49,6 +49,56 @@ router = APIRouter()
 _subscribers: dict[str, dict[str, Set[asyncio.Queue]]] = defaultdict(lambda: defaultdict(set))
 
 
+# user_id (str) → device_id (str) → set of block_ids currently mounted.
+# Authoritative lifecycle source — flipped synchronously on every UIUpdate
+# fan-out, BEFORE serialisation. The perception cache (`infra.perception`)
+# holds per-block CONTENT; this holds the fact that a block exists on
+# the canvas at all. read_media reads BOTH and unions them, so the
+# teacher knows a block is on screen the instant the server fans out
+# the mount event — no waiting for the block to self-report.
+_mounted_blocks: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+
+
+def _record_mount_local(user_id_s: str, device_id_s: str, block_id: str) -> None:
+    _mounted_blocks[user_id_s][device_id_s].add(block_id)
+
+
+def _record_unmount_local(user_id_s: str, device_id_s: str, block_id: str) -> None:
+    bucket = _mounted_blocks.get(user_id_s, {}).get(device_id_s)
+    if not bucket:
+        return
+    bucket.discard(block_id)
+    if not bucket:
+        _mounted_blocks[user_id_s].pop(device_id_s, None)
+        if not _mounted_blocks.get(user_id_s):
+            _mounted_blocks.pop(user_id_s, None)
+
+
+def mounted_block_ids(user_id: UUID) -> dict[str, list[str]]:
+    """Snapshot of currently-mounted block ids per device (string keys).
+
+    Called by tools.read_media / tools.list_media to compute which
+    blocks are present on the user's canvases right now.
+    """
+    bucket = _mounted_blocks.get(str(user_id), {})
+    return {did: sorted(blocks) for did, blocks in bucket.items() if blocks}
+
+
+def _track_uiupdate(user_id_s: str, device_ids_s: list[str], event: BaseModel) -> None:
+    """If the event is a UIUpdate, update the mount tracker for the listed
+    devices. No-op for other event types.
+    """
+    if not isinstance(event, UIUpdate):
+        return
+    bid = event.block.id
+    action = event.action
+    for did_s in device_ids_s:
+        if action == "mount":
+            _record_mount_local(user_id_s, did_s, bid)
+        elif action == "unmount":
+            _record_unmount_local(user_id_s, did_s, bid)
+
+
 def _serialize(event: BaseModel) -> str:
     return f"data: {event.model_dump_json()}\n\n"
 
@@ -56,9 +106,12 @@ def _serialize(event: BaseModel) -> str:
 async def enqueue_for_user(user_id: UUID, event: BaseModel) -> int:
     """Fan an event out to every queue for this user across all devices."""
     key = str(user_id)
+    by_device = _subscribers.get(key, {})
+    # Track mount/unmount BEFORE serialise/enqueue so a follow-up read
+    # sees the new state even if the SSE delivery is still in flight.
+    _track_uiupdate(key, list(by_device.keys()), event)
     payload = _serialize(event)
     delivered = 0
-    by_device = _subscribers.get(key, {})
     for queues in list(by_device.values()):
         for q in list(queues):
             await q.put(payload)
@@ -68,6 +121,7 @@ async def enqueue_for_user(user_id: UUID, event: BaseModel) -> int:
 
 async def enqueue_for_device(user_id: UUID, device_id: UUID, event: BaseModel) -> int:
     """Fan an event out to every queue for one device of this user."""
+    _track_uiupdate(str(user_id), [str(device_id)], event)
     payload = _serialize(event)
     delivered = 0
     queues = _subscribers.get(str(user_id), {}).get(str(device_id), set())

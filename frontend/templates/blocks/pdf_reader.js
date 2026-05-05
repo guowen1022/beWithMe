@@ -349,17 +349,25 @@
     });
     cleanup(function () { unsub(); });
 
-    // Report `kind:"pdf"` state on mount, even before a document loads.
-    // The teacher's read_media uses perception state as the source of
-    // truth for "what's on the canvas"; without an initial report, an
-    // idle pdf_reader is invisible to the teacher (the user can be
-    // looking at a rendered PDF and the teacher would still think no
-    // surface is mounted). When a doc actually loads, reportVisiblePage
-    // overwrites this with the full page+title+viewport_text payload.
-    report({
-      kind: 'pdf',
-      content: '(awaiting document)',
-      extra: { document_id: null, document_title: null, page: null, total_pages: 0 },
-    });
+    // Mount-time report — but DEFERRED. If a document is already in
+    // flight (sticky pub/sub replays the documents.uploaded topic the
+    // moment subscribe() runs), `renderDoc` will set currentDocId
+    // synchronously and we'll skip the idle report. Without this
+    // deferral, a re-mounted pdf-reader briefly stamps the perception
+    // cache with `idle / NO DOCUMENT LOADED` before the doc handler
+    // catches up — and a teacher turn that lands in that window
+    // wrongly concludes there's no PDF and re-mounts upload_file.
+    //
+    // 300ms is enough for sticky replay + renderDoc's first sync state
+    // post; not so long that a genuinely-empty reader stays invisible.
+    var idleReportTimer = setTimeout(function () {
+      if (currentDocId) return;  // a doc loaded — no idle report needed
+      report({
+        kind: 'pdf',
+        content: '(awaiting document)',
+        extra: { document_id: null, document_title: null, page: null, total_pages: 0 },
+      });
+    }, 300);
+    cleanup(function () { clearTimeout(idleReportTimer); });
   },
 })

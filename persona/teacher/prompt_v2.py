@@ -122,6 +122,24 @@ def _format_block_line(block) -> str:
     bid = block.id
     age = getattr(block, "last_updated_s_ago", None)
 
+    # The mount tracker may have a block on canvas before the block has
+    # had a chance to fire reportState. Render an explicit "mounted, no
+    # state yet" line in that window so the teacher knows the block is
+    # there and doesn't conclude "nothing on canvas, mount it again."
+    if state is None:
+        if bid == "pdf-reader":
+            return "- PDF reader: mounted (state report pending — a document may be loading)"
+        if bid == "upload-file":
+            return "- upload widget: mounted (state report pending)"
+        if bid == "passage-reader":
+            return "- text panel: mounted (state report pending)"
+        if bid == "inputs-launcher":
+            return "- launcher: mounted (state report pending)"
+        if bid == _GRAPH_BLOCK_PREFIX or bid.startswith(_GRAPH_BLOCK_PREFIX + "-"):
+            name = _diagram_name_from_block_id(bid)
+            return f'- diagram "{name}": mounted (state report pending)'
+        return f"- {title or bid}: mounted (state report pending)"
+
     # Diagram surface (interactive-graph instances): describe by name + kind.
     if bid == _GRAPH_BLOCK_PREFIX or bid.startswith(_GRAPH_BLOCK_PREFIX + "-"):
         name = _diagram_name_from_block_id(bid)
@@ -145,10 +163,11 @@ def _format_block_line(block) -> str:
         if state is None or state.kind in ("snapshot", None):
             return ""
 
-    # Other surfaces: dispatch on state.kind. Prefer the runtime-reported
-    # document/page title over the block's design_doc title — the latter
-    # describes the *template purpose* ("Use this template when…"), not
-    # the actual content the user is looking at.
+    # State is non-None at this point (the early-return above handles
+    # the no-state case). Dispatch on state.kind. Prefer the runtime-
+    # reported document/page title over the block's design_doc title —
+    # the latter describes the *template purpose* ("Use this template
+    # when…"), not the actual content the user is looking at.
     head = None
     if state is not None:
         kind = state.kind
