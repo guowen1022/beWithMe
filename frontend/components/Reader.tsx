@@ -9,6 +9,7 @@ import ParentCard from "./ParentCard";
 import DebugPanel from "./DebugPanel";
 import ExplorationTreePanel from "./ExplorationTreePanel";
 import { askStream, endSession, recordSignal, type DebugEvent } from "@/lib/api";
+import { postBlockState } from "@/lib/blockState";
 import type { Direction } from "./LogicBlock";
 import { parsePassageOutline, type OutlineSection } from "@/lib/passageOutline";
 import BrowserSlot from "./BrowserSlot";
@@ -76,6 +77,41 @@ export default function Reader({ onGoalPlan }: { onGoalPlan?: () => void }) {
   // Key: nodeLocalId, Value: { collapsed: Set<blockId>, reviewLater: Set<blockId> }
   const blockStatesRef = useRef<Map<string, { collapsed: Set<string>; reviewLater: Set<string> }>>(new Map());
   const [pdfScrollTarget, setPdfScrollTarget] = useState<string | null>(null);
+
+  // The legacy reading area (PDF / passage / browser) lives outside the
+  // dynamic canvas, so the teacher can't see it via read_media unless we
+  // explicitly report into the perception cache. We synthesize a single
+  // "main-reader" block id whose state reflects whatever's currently up.
+  useEffect(() => {
+    if (pdfFile) {
+      postBlockState("main-reader", {
+        kind: "pdf",
+        content: pdfFile.name,
+        focus: "active",
+        extra: { filename: pdfFile.name, size_bytes: pdfFile.size },
+      });
+    } else if (browserMode && browserUrl) {
+      postBlockState("main-reader", {
+        kind: "browser",
+        content: browserUrl,
+        focus: "active",
+      });
+    } else if (content) {
+      const preview = content.slice(0, 200).replace(/\s+/g, " ").trim();
+      postBlockState("main-reader", {
+        kind: "passage",
+        content: preview,
+        focus: "active",
+        extra: { length_chars: content.length },
+      });
+    } else {
+      postBlockState("main-reader", {
+        kind: "snapshot",
+        content: "(empty — no PDF, passage, or page loaded)",
+        focus: "background",
+      });
+    }
+  }, [pdfFile, browserMode, browserUrl, content]);
 
   const activeNode = questionStack.length > 0 ? questionStack[questionStack.length - 1] : null;
   const parentNode = questionStack.length >= 2 ? questionStack[questionStack.length - 2] : null;

@@ -120,6 +120,12 @@ def _format_block_line(block) -> str:
             return " ".join(bits)
         return f'- diagram "{name}" (empty)'
 
+    # Main reading area (Reader.tsx's PDF / passage / browser surface).
+    # Suppress the empty placeholder state — no value to the teacher.
+    if bid == "main-reader":
+        if state is None or state.kind in ("snapshot", None):
+            return ""
+
     # Other surfaces: dispatch on state.kind.
     head = None
     if state is not None:
