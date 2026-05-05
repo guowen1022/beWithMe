@@ -157,18 +157,28 @@ def _format_block_line(block) -> str:
         if len(content) > 70:
             content = content[:67] + "…"
         if kind == "pdf":
-            doc_title = extra.get("document_title") or title or "open document"
+            doc_title = extra.get("document_title")
+            doc_id = extra.get("document_id")
             page = extra.get("page")
             total = extra.get("total_pages")
             viewport = extra.get("viewport_text") or ""
-            page_str = f"page {page} of {total}" if page and total else "open"
-            preview = ""
-            if viewport:
-                v = viewport.strip().replace("\n", " ")
-                if len(v) > 60:
-                    v = v[:57] + "…"
-                preview = f' — "{v}"'
-            head = f'- PDF reader: "{doc_title}" ({page_str}){preview}'
+            if not doc_id:
+                # pdf-reader is mounted but has no document yet. Be
+                # unambiguous so the teacher doesn't read this as a
+                # loaded PDF and try to read its abstract.
+                head = "- PDF reader: idle (NO DOCUMENT LOADED — user must upload)"
+            else:
+                page_str = (
+                    f"page {page} of {total}" if page and total
+                    else "loading"
+                )
+                preview = ""
+                if viewport:
+                    v = viewport.strip().replace("\n", " ")
+                    if len(v) > 60:
+                        v = v[:57] + "…"
+                    preview = f' — "{v}"'
+                head = f'- PDF reader: "{doc_title or doc_id}" ({page_str}){preview}'
         elif kind == "passage":
             label = extra.get("title") or content or title or "(empty)"
             head = f'- text panel: "{label}"'
@@ -176,11 +186,15 @@ def _format_block_line(block) -> str:
             head = f"- browser: {content or '(loading)'}"
         elif kind == "upload":
             # upload_file template state — completed flag tells us if the
-            # user has actually uploaded yet.
+            # user has actually uploaded yet. completed=true with a
+            # document_id means the file finished uploading; the widget
+            # should normally have unmounted itself by now (deterministic
+            # swap to pdf_reader). If you still see it, treat the upload
+            # as DONE — do not ask the user to upload again.
             if state.completed:
-                head = f'- upload widget: ready ({content})'
+                head = f"- upload widget: FILE UPLOADED ({content}) — upload step is DONE; do not ask user to upload again"
             else:
-                head = "- upload widget: waiting for file"
+                head = "- upload widget: empty (NO FILE CHOSEN YET — user must click Choose File)"
         elif kind == "launcher":
             head = "- launcher: awaiting user's choice (Upload PDF / Paste Passage)"
         elif kind == "snapshot":
