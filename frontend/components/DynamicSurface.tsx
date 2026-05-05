@@ -42,11 +42,12 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
     loadPdfjs().catch((e) => console.warn("[dynamic-surface] pdf.js load failed", e));
   }, []);
 
-  // Hydrate the registry from the user's per-user-git workspace on mount,
-  // so reloads don't lose their canvas. Overlay mode skips this (the
-  // reader doesn't auto-show every saved block in the corner of the page).
-  // For fullscreen mode, if the workspace is empty we auto-mount the
-  // inputs_launcher so the user has somewhere to start.
+  // Hydrate the registry from the user's per-user-git workspace on
+  // mount. With templates being ephemeral (no workspace writes), the
+  // hydrator only sees engineer-novel widgets the user has explicitly
+  // saved — empty for new users. Nothing else pre-loads. The user
+  // starts on a blank canvas; they bring blocks in by typing in the
+  // command bar (or the teacher mounts something on their behalf).
   useEffect(() => {
     if (mode !== "fullscreen") return;
     let cancelled = false;
@@ -55,16 +56,6 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
         if (cancelled) return;
         for (const b of blocks) {
           sourceRegistry.mount({ id: b.id, source: b.source });
-        }
-        if (blocks.length === 0) {
-          // Empty canvas → seed with the launcher. The mount-template
-          // endpoint writes to the user's git, so subsequent reloads
-          // skip this branch (blocks.length > 0). Errors are
-          // best-effort logged; the user can still type a question
-          // via the command bar.
-          mountTemplate({ template: "inputs_launcher" }).catch((err) => {
-            console.warn("[dynamic-surface] launcher auto-mount failed", err);
-          });
         }
       })
       .catch((err) => console.warn("[dynamic-surface] hydration failed", err));

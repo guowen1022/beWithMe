@@ -18,6 +18,7 @@
   run(root, bus, cleanup, helpers) {
     var report = helpers && helpers.reportState ? helpers.reportState : function () {};
     var backend = helpers && helpers.backend ? helpers.backend : null;
+    var blockId = (helpers && helpers.blockId) || root.getAttribute('data-block-id') || '__BLOCK_ID__';
     // Back-compat fallback when helpers.backend isn't present.
     var userId = (typeof localStorage !== 'undefined' && localStorage.getItem('bewithme_user_id')) || '';
 
@@ -144,6 +145,24 @@
             filename: json.filename,
           },
         });
+        // Deterministically swap to the PDF reader and unmount this
+        // upload widget. Don't leave it on the canvas crowding the user
+        // — the upload step is done and the user shouldn't have to
+        // wait for the teacher's tool loop to clean up. pdf_reader
+        // subscribes to the same documents.uploaded topic; sticky
+        // pub/sub means the value we just published is replayed to it
+        // on subscribe, so no race on doc loading.
+        if (backend && backend.mount_template) {
+          backend.mount_template({
+            template: 'pdf_reader',
+            replace: [blockId],
+          }).catch(function (err) {
+            // Non-fatal: even if the swap fails, the topic publish
+            // above means any pre-existing pdf_reader still gets the
+            // doc. Log and move on.
+            console.warn('[upload_file] mount pdf_reader failed', err);
+          });
+        }
       })
         .catch(function (err) {
           title.textContent = 'Upload failed';

@@ -15,6 +15,12 @@ backend:
     auth: user
     content_type: multipart/form-data
     returns: json
+  mount_template:
+    method: POST
+    path: /api/dynamic/mount-template
+    auth: user
+    content_type: application/json
+    returns: json
 ---
 
 Use this template when the user wants to provide a document to the system.
