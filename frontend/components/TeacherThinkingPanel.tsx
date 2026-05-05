@@ -82,13 +82,12 @@ export default function TeacherThinkingPanel() {
     right: 16,
     bottom: 80,
     maxWidth: 360,
-    fontFamily: "ui-monospace, SFMono-Regular, monospace",
+    fontFamily: "var(--bw-font-mono)",
     fontSize: 11,
-    color: "rgba(229,231,235,0.92)",
-    background: "rgba(15,23,42,0.92)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 10,
-    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+    color: "var(--bw-ink)",
+    background: "var(--bw-surface)",
+    border: "1px solid var(--bw-border)",
+    borderRadius: 0,
     zIndex: 60,
     overflow: "hidden",
   };
@@ -97,8 +96,8 @@ export default function TeacherThinkingPanel() {
     alignItems: "center",
     gap: 8,
     padding: "6px 10px",
-    background: "rgba(30,41,59,0.6)",
-    borderBottom: collapsed ? "none" : "1px solid rgba(255,255,255,0.06)",
+    background: "var(--bw-surface-2)",
+    borderBottom: collapsed ? "none" : "1px solid var(--bw-border)",
     cursor: "pointer",
     userSelect: "none",
   };
@@ -106,8 +105,7 @@ export default function TeacherThinkingPanel() {
     width: 7,
     height: 7,
     borderRadius: "50%",
-    background: latest.done ? "#86efac" : "#fbbf24",
-    boxShadow: latest.done ? "none" : "0 0 6px rgba(251,191,36,0.8)",
+    background: latest.done ? "#7ED4A6" : "var(--bw-accent)",
   };
 
   return (
@@ -131,11 +129,11 @@ export default function TeacherThinkingPanel() {
               key={e.id}
               style={{
                 padding: "8px 10px",
-                borderBottom: "1px solid rgba(255,255,255,0.04)",
+                borderBottom: "1px solid var(--bw-border)",
               }}
             >
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ color: "#94a3b8" }}>{e.trigger}</span>
+                <span style={{ color: "var(--bw-ink-muted)" }}>{e.trigger}</span>
                 <span style={{ marginLeft: "auto", opacity: 0.55, fontSize: 10 }}>
                   {e.done ? "done" : "running…"}
                 </span>
@@ -146,7 +144,7 @@ export default function TeacherThinkingPanel() {
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     margin: "4px 0 0",
-                    color: "#cbd5e1",
+                    color: "var(--bw-ink-muted)",
                     fontSize: 10.5,
                     lineHeight: 1.4,
                   }}
@@ -157,10 +155,10 @@ export default function TeacherThinkingPanel() {
               {e.toolCalls.length > 0 && (
                 <div style={{ marginTop: 6 }}>
                   {e.toolCalls.map((tc, i) => (
-                    <div key={i} style={{ color: "#fbbf24", fontSize: 10.5 }}>
+                    <div key={i} style={{ color: "var(--bw-accent)", fontSize: 10.5 }}>
                       → {tc.name}
                       {tc.arguments && Object.keys(tc.arguments).length > 0 ? (
-                        <span style={{ color: "#94a3b8" }}>
+                        <span style={{ color: "var(--bw-ink-faint)" }}>
                           ({Object.keys(tc.arguments).join(", ")})
                         </span>
                       ) : null}
@@ -172,10 +170,11 @@ export default function TeacherThinkingPanel() {
                 <div
                   style={{
                     marginTop: 6,
-                    color: "#94a3b8",
+                    color: "var(--bw-ink-muted)",
+                    fontFamily: "var(--bw-font-serif)",
                     fontStyle: "italic",
-                    fontSize: 10.5,
-                    lineHeight: 1.4,
+                    fontSize: 11,
+                    lineHeight: 1.5,
                   }}
                 >
                   {e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text}

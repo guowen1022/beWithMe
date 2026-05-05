@@ -41,7 +41,7 @@ function renderDebugLines(text: string) {
   return lines.map((line, i) => {
     const isPrompt = line.startsWith(">");
     return (
-      <div key={i} style={{ color: isPrompt ? "#8aff80" : "#d0d0d0" }}>
+      <div key={i} style={{ color: isPrompt ? "var(--bw-accent)" : "var(--bw-ink)" }}>
         {line || " "}
       </div>
     );
@@ -54,9 +54,9 @@ function selectStyle(isTestMode: boolean): CSSProperties {
     fontSize: 12,
     fontFamily: "inherit",
     background: "transparent",
-    color: isTestMode ? "#fbbf24" : "rgba(220,220,220,0.85)",
-    border: "1px solid rgba(255,255,255,0.1)",
-    borderRadius: 6,
+    color: isTestMode ? "#E5C36F" : "var(--bw-ink-muted)",
+    border: "1px solid var(--bw-border)",
+    borderRadius: 0,
     cursor: "pointer",
     outline: "none",
   };
@@ -160,13 +160,14 @@ export default function CanvasCommandBar() {
       {error && (
         <div
           style={{
-            background: "rgba(160, 40, 40, 0.95)",
-            color: "white",
+            background: "rgba(229,131,124,0.18)",
+            color: "#E5837C",
+            border: "1px solid rgba(229,131,124,0.5)",
             padding: "8px 12px",
             marginBottom: 8,
-            borderRadius: 8,
-            fontFamily: "system-ui, sans-serif",
-            fontSize: 13,
+            borderRadius: 0,
+            fontFamily: "var(--bw-font-mono)",
+            fontSize: 12,
             whiteSpace: "pre-wrap",
           }}
         >
@@ -180,32 +181,34 @@ export default function CanvasCommandBar() {
           marginBottom: debugOpen ? 8 : 0,
           pointerEvents: debugOpen ? "auto" : "none",
           transition: "height 180ms ease, opacity 180ms ease, margin 180ms ease",
-          background: "rgba(10,10,10,0.92)",
-          backdropFilter: "blur(10px)",
-          WebkitBackdropFilter: "blur(10px)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 12,
+          background: "var(--bw-surface)",
+          border: "1px solid var(--bw-border)",
+          borderRadius: 0,
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontFamily: "var(--bw-font-mono)",
           fontSize: 12,
         }}
       >
         <div
           style={{
             padding: "8px 14px",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
-            color: "rgba(180,180,180,0.9)",
+            borderBottom: "1px solid var(--bw-border)",
+            background: "var(--bw-surface-2)",
+            color: "var(--bw-ink-muted)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            fontSize: 10,
           }}
         >
           <span>
             llm thinking {busy ? "• streaming" : ""}
           </span>
-          <span style={{ color: busy ? "#8aff80" : "rgba(180,180,180,0.4)" }}>
+          <span style={{ color: busy ? "var(--bw-accent)" : "var(--bw-ink-faint)" }}>
             {busy ? "●" : "○"}
           </span>
         </div>
@@ -215,15 +218,15 @@ export default function CanvasCommandBar() {
             flex: 1,
             padding: "10px 14px",
             overflowY: "auto",
-            color: "#d0d0d0",
+            color: "var(--bw-ink)",
             whiteSpace: "pre-wrap",
-            lineHeight: 1.45,
+            lineHeight: 1.5,
           }}
         >
           {debugText ? (
             renderDebugLines(debugText)
           ) : (
-            <span style={{ color: "rgba(180,180,180,0.4)" }}>
+            <span style={{ color: "var(--bw-ink-faint)" }}>
               (the LLM&apos;s tokens stream here when you run a command)
             </span>
           )}
@@ -235,12 +238,9 @@ export default function CanvasCommandBar() {
           display: "flex",
           alignItems: "stretch",
           gap: 8,
-          background: "rgba(20,20,20,0.85)",
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
-          borderRadius: 12,
-          border: `1px solid ${isTestMode ? "rgba(245, 158, 11, 0.4)" : "rgba(255,255,255,0.15)"}`,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+          background: "var(--bw-surface)",
+          borderRadius: 0,
+          border: `1px solid ${isTestMode ? "#E5C36F" : "var(--bw-border)"}`,
           padding: 6,
         }}
       >
@@ -252,10 +252,10 @@ export default function CanvasCommandBar() {
             paddingLeft: 8,
             paddingRight: 4,
             fontSize: 11,
-            color: isTestMode ? "#fbbf24" : "rgba(220,220,220,0.6)",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            color: isTestMode ? "#E5C36F" : "var(--bw-ink-muted)",
+            fontFamily: "var(--bw-font-mono)",
             textTransform: "uppercase",
-            letterSpacing: "0.04em",
+            letterSpacing: "0.08em",
           }}
           title="Routing override. user → teacher runs the LLM router. teacher → frontend_engineer bypasses it for testing."
         >
@@ -266,7 +266,7 @@ export default function CanvasCommandBar() {
             style={selectStyle(isTestMode)}
           >
             {FROM_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value} style={{ background: "#0f172a" }}>
+              <option key={o.value} value={o.value} style={{ background: "#12121E" }}>
                 {o.label}
               </option>
             ))}
@@ -279,7 +279,7 @@ export default function CanvasCommandBar() {
             style={selectStyle(isTestMode)}
           >
             {TO_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value} style={{ background: "#0f172a" }}>
+              <option key={o.value} value={o.value} style={{ background: "#12121E" }}>
                 {o.label}
               </option>
             ))}
@@ -300,12 +300,12 @@ export default function CanvasCommandBar() {
           style={{
             flex: 1,
             padding: "10px 14px",
-            fontSize: 16,
-            fontFamily: "system-ui, sans-serif",
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,0.05)",
-            background: "rgba(0,0,0,0.25)",
-            color: "white",
+            fontSize: 14,
+            fontFamily: "var(--bw-font-sans)",
+            borderRadius: 0,
+            border: "1px solid var(--bw-border)",
+            background: "var(--bw-void-2)",
+            color: "var(--bw-ink)",
             outline: "none",
           }}
         />
@@ -315,11 +315,11 @@ export default function CanvasCommandBar() {
           title={debugOpen ? "Hide LLM thinking panel" : "Show LLM thinking panel"}
           style={{
             width: 44,
-            borderRadius: 8,
-            border: "1px solid rgba(255,255,255,0.1)",
-            background: debugOpen ? "rgba(80,180,100,0.2)" : "rgba(0,0,0,0.25)",
-            color: debugOpen ? "#8aff80" : "rgba(220,220,220,0.7)",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            borderRadius: 0,
+            border: "1px solid var(--bw-border)",
+            background: debugOpen ? "var(--bw-accent-soft)" : "transparent",
+            color: debugOpen ? "var(--bw-accent)" : "var(--bw-ink-muted)",
+            fontFamily: "var(--bw-font-mono)",
             fontSize: 16,
             cursor: "pointer",
           }}
