@@ -24,7 +24,9 @@ Topics (per instance):
 """
 from __future__ import annotations
 
+import asyncio
 import re
+from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
@@ -39,6 +41,53 @@ from silicon_brain.models.canvas_layout import CanvasLayout
 
 _DEFAULT_NAME = "main"
 _BASE_BLOCK_ID = "interactive-graph"
+
+# Sandbox validator: a Node script that runs mermaid.parse() against the
+# source the teacher just produced. If parse fails, we return the error
+# to the teacher as the tool result instead of mounting broken syntax on
+# the user's canvas — the teacher's LLM then retries with corrected
+# source in the same turn. ~150ms per call (Node cold start), worth it.
+_VALIDATOR_SCRIPT = (
+    Path(__file__).resolve().parents[3] / "scripts" / "mermaid-validate.mjs"
+)
+_VALIDATOR_TIMEOUT_S = 5.0
+
+
+async def _validate_mermaid(source: str) -> Optional[str]:
+    """Run the Node validator. Returns None on success, error string on
+    failure. On infra failure (Node missing, validator script missing,
+    timeout) we return None — better to let the user see a render error
+    than to falsely block a valid diagram."""
+    if not _VALIDATOR_SCRIPT.exists():
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "node", str(_VALIDATOR_SCRIPT),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError):
+        return None
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(source.encode("utf-8")),
+            timeout=_VALIDATOR_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        return None
+    if proc.returncode == 0:
+        return None
+    msg = stderr.decode("utf-8", errors="replace").strip()
+    if not msg:
+        msg = stdout.decode("utf-8", errors="replace").strip() or (
+            f"validator exited with code {proc.returncode}"
+        )
+    return msg
 
 # `name` must match this — same kebab-case rule the workspace uses for block
 # stems. We re-validate here even though the block isn't going to disk:
@@ -492,6 +541,23 @@ async def interactive_graph(
 
     if mermaid is None and highlight_node is None and not clear:
         return {"error": "no-op: pass mermaid, highlight_node, or clear=True"}
+
+    # Sandbox-validate the mermaid source before mounting. If it fails,
+    # bail out with the parse error as the tool result so the teacher's
+    # LLM retries in the same turn instead of the user seeing a broken
+    # diagram on canvas.
+    if mermaid is not None:
+        validation_error = await _validate_mermaid(mermaid)
+        if validation_error:
+            return {
+                "error": (
+                    f"mermaid syntax error — fix and call again. "
+                    f"Validator said: {validation_error}. "
+                    "Common pitfall: parens, <br/>, or punctuation inside "
+                    "node labels must be wrapped in double quotes — write "
+                    "`A[\"Output (shifted)\"]` not `A[Output (shifted)]`."
+                )
+            }
 
     block = _build_graph_block(name)
     block_id = block.id
