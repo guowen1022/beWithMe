@@ -39,6 +39,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Idempotent restart: sweep anything still listening on our ports from a
+# previous run before starting fresh. Re-running this script (or running
+# it after Ctrl-C left orphans) reliably picks up source changes —
+# Python module-level state (e.g. workshop/canvas/tools/*.py block
+# templates) only updates via process restart.
+echo "[dev-desktop] sweeping any prior services on $FRONTEND_PORT + sidecar ports..."
+FRONTEND_PORT=$FRONTEND_PORT "$ROOT/scripts/dev-services-stop.sh" --all >/dev/null 2>&1 || true
+
 if [[ "$SKIP_BACKEND" != "1" ]]; then
   echo "[dev-desktop] starting backend: $BACKEND_CMD"
   (cd "$ROOT" && exec $BACKEND_CMD) &
