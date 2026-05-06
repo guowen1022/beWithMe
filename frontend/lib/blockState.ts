@@ -17,6 +17,13 @@ import { getCurrentUserId } from "./api";
 
 export type BlockFocus = "active" | "visible" | "background";
 
+export interface BlockGrid {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface BlockStateInput {
   kind?: string;
   content?: string;
@@ -26,6 +33,10 @@ export interface BlockStateInput {
    *  false→true transition and triggers the teacher's tool loop. Never
    *  set for blocks that are continuously updating. */
   completed?: boolean;
+  /** The block's effective grid on the 160×90 canvas — what the user
+   *  actually sees right now. The teacher reads this to decide whether
+   *  to call layout_blocks. */
+  grid?: BlockGrid;
   extra?: Record<string, unknown>;
 }
 
@@ -45,6 +56,37 @@ function flushOne(blockId: string): void {
   void send(blockId, slot.state);
 }
 
+/** Read the block's currently-rendered grid from the DOM. Returns null if
+ * the element isn't in the surface yet, or if computed-style values can't
+ * be parsed back into integer line numbers (e.g. mid-render race).
+ */
+function readGridFromDom(blockId: string): BlockGrid | null {
+  if (typeof document === "undefined") return null;
+  const safe = (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(blockId) : blockId);
+  const el = document.querySelector<HTMLElement>(
+    `[data-dynamic-surface] [data-block-id="${safe}"]`,
+  );
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  const colStart = parseInt(cs.gridColumnStart, 10);
+  const colEnd = parseInt(cs.gridColumnEnd, 10);
+  const rowStart = parseInt(cs.gridRowStart, 10);
+  const rowEnd = parseInt(cs.gridRowEnd, 10);
+  if (
+    !Number.isFinite(colStart) || !Number.isFinite(colEnd) ||
+    !Number.isFinite(rowStart) || !Number.isFinite(rowEnd) ||
+    colEnd <= colStart || rowEnd <= rowStart
+  ) {
+    return null;
+  }
+  return {
+    x: colStart - 1,
+    y: rowStart - 1,
+    w: colEnd - colStart,
+    h: rowEnd - rowStart,
+  };
+}
+
 async function send(blockId: string, state: BlockStateInput): Promise<void> {
   const userId = getCurrentUserId();
   if (!userId) return;   // unauthenticated; nothing to report against
@@ -53,13 +95,18 @@ async function send(blockId: string, state: BlockStateInput): Promise<void> {
     "X-User-Id": userId,
     ...deviceHeaders(),
   };
-  const body = {
+  // Always attach the current grid (as rendered) so the teacher prompt's
+  // CURRENTLY ON CANVAS section can show layout coordinates. Caller-
+  // provided grid wins; otherwise read from the DOM.
+  const grid = state.grid ?? readGridFromDom(blockId) ?? undefined;
+  const body: Record<string, unknown> = {
     kind: state.kind ?? "snapshot",
     content: (state.content ?? "").slice(0, CONTENT_MAX),
     focus: state.focus ?? "visible",
     completed: state.completed ?? false,
     extra: state.extra ?? {},
   };
+  if (grid) body.grid = grid;
   try {
     await fetch(`/api/dynamic/state/${encodeURIComponent(blockId)}`, {
       method: "POST",

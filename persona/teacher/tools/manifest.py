@@ -21,6 +21,7 @@ from infra.model.tools import ToolSpec
 from tools.speak import speak
 from workshop.canvas.tools.block_action import block_action
 from workshop.canvas.tools.interactive_graph import interactive_graph
+from workshop.canvas.tools.layout_blocks import layout_blocks
 from workshop.canvas.tools.list_media import list_media
 from workshop.canvas.tools.mount_template import mount_template
 from workshop.canvas.tools.point_arrow import point_arrow
@@ -302,6 +303,28 @@ def _make_speak(user_id: UUID):
         except ValueError as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"delivered_to": delivered})
+    return executor
+
+
+def _make_layout_blocks(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        layouts = args.get("layouts")
+        if not isinstance(layouts, list) or not layouts:
+            return json.dumps({"error": "layouts must be a non-empty list"})
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        try:
+            result = await layout_blocks(
+                user_id=user_id,
+                layouts=layouts,
+                target_device_id=target_uuid,
+            )
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps(result)
     return executor
 
 
@@ -601,6 +624,55 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_speak(user_id),
+        ),
+        ToolSpec(
+            name="layout_blocks",
+            description=(
+                "Resize and reposition blocks on the canvas to fill empty "
+                "space or arrange blocks side-by-side. The canvas is a "
+                "160-wide × 90-tall grid (cells, not pixels). Pass an array "
+                "of layouts `[{block_id, x, y, w, h}, ...]` and every "
+                "listed block reflows in place — no remount, no reload, "
+                "PDFs stay on the same page. Read the `(at x:.. y:.. w:.. "
+                "h:..)` annotations in CURRENTLY ON CANVAS to know each "
+                "block's starting position. Common layouts: full-bleed "
+                "`{x:0,y:0,w:160,h:90}`; left-half `{x:0,y:0,w:80,h:90}`; "
+                "right-half `{x:80,y:0,w:80,h:90}`; top-third "
+                "`{x:0,y:0,w:160,h:30}`; bottom two-thirds "
+                "`{x:0,y:30,w:160,h:60}`. Use when a block is leaving "
+                "empty space, the user wants two surfaces side-by-side, "
+                "or the user explicitly asks to make something bigger or "
+                "smaller. Constraints: x∈[0,159], y∈[0,89], w≥1, h≥1, "
+                "x+w≤160, y+h≤90."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "layouts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "block_id": {"type": "string"},
+                                "x": {"type": "integer", "minimum": 0, "maximum": 159},
+                                "y": {"type": "integer", "minimum": 0, "maximum": 89},
+                                "w": {"type": "integer", "minimum": 1, "maximum": 160},
+                                "h": {"type": "integer", "minimum": 1, "maximum": 90},
+                            },
+                            "required": ["block_id", "x", "y", "w", "h"],
+                            "additionalProperties": False,
+                        },
+                        "minItems": 1,
+                    },
+                    "target_device_id": {
+                        "type": "string",
+                        "description": "Optional UUID; reflow on this device only.",
+                    },
+                },
+                "required": ["layouts"],
+                "additionalProperties": False,
+            },
+            executor=_make_layout_blocks(user_id),
         ),
         ToolSpec(
             name="block_action",

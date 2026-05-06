@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from infra.contracts.devices import DeviceClass
+from infra.contracts.ui import GridPos
 
 
 _CFG = ConfigDict(from_attributes=True, extra="ignore")
@@ -43,6 +44,11 @@ class BlockState(BaseModel):
     content: str = ""
     focus: FocusState = "visible"
     completed: bool = False
+    # Optional — frontend reports the block's effective grid (what the user
+    # actually sees) so the teacher's prompt can show layout coordinates and
+    # decide whether to call layout_blocks. None until the block has had a
+    # chance to self-report at least once.
+    grid: Optional[GridPos] = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

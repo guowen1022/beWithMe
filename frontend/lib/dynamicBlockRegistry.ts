@@ -6,7 +6,9 @@
 // level and re-render frequently; querying the DOM at action-time is
 // simpler than maintaining a parallel handles map. Keep it stateless.
 
-export type DynamicBlockAction = "highlight" | "focus" | "scroll_to" | "raise";
+import { postBlockState } from "./blockState";
+
+export type DynamicBlockAction = "highlight" | "focus" | "scroll_to" | "raise" | "set_grid";
 
 const FLASH_CLASS = "block-flash";
 const DEFAULT_HIGHLIGHT_MS = 1600;
@@ -97,6 +99,29 @@ export const dynamicBlockRegistry = {
     return true;
   },
 
+  /**
+   * Resize / reposition the block on the 160x90 canvas grid.
+   * Inline `gridColumn` / `gridRow` overrides Block.tsx's static grid
+   * styles, so a teacher-driven layout reflows immediately without
+   * remounting the block (the source eval, bus subscriptions, and any
+   * loaded PDF pages stay intact).
+   */
+  setGrid(blockId: string, opts: { x?: number; y?: number; w?: number; h?: number }): boolean {
+    const el = findElement(blockId);
+    if (!el) return false;
+    const x = Math.max(0, Math.min(159, Math.floor(Number(opts.x ?? 0))));
+    const y = Math.max(0, Math.min(89, Math.floor(Number(opts.y ?? 0))));
+    const w = Math.max(1, Math.min(160 - x, Math.floor(Number(opts.w ?? 1))));
+    const h = Math.max(1, Math.min(90 - y, Math.floor(Number(opts.h ?? 1))));
+    el.style.gridColumn = `${x + 1} / span ${w}`;
+    el.style.gridRow = `${y + 1} / span ${h}`;
+    // Push the new grid to the perception cache right away so the teacher
+    // sees the layout it just asked for on the very next prompt build —
+    // don't wait for the block's next debounced self-report.
+    postBlockState(blockId, { grid: { x, y, w, h } });
+    return true;
+  },
+
   apply(action: DynamicBlockAction, blockId: string, options?: Record<string, unknown>): boolean {
     switch (action) {
       case "scroll_to":
@@ -107,6 +132,8 @@ export const dynamicBlockRegistry = {
         return this.focus(blockId);
       case "raise":
         return this.raise(blockId);
+      case "set_grid":
+        return this.setGrid(blockId, (options ?? {}) as { x?: number; y?: number; w?: number; h?: number });
       default:
         return false;
     }
