@@ -81,3 +81,34 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return [DocumentChunkDTO.model_validate(x) for x in resp.json()]
+
+    async def get_document_structure(
+        self, user_id: UUID, document_id: UUID,
+    ) -> dict:
+        """Return `{title, page_count, outline}` for a document.
+
+        Backfills outline + page_count on the silicon_brain side if the doc
+        was uploaded before per-page chunking. Cheap (one row, no chunks).
+        """
+        resp = await self._http.get(
+            f"/api/documents/{document_id}/structure",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_document_page(
+        self, user_id: UUID, document_id: UUID, page_number: int,
+    ) -> dict:
+        """Return `{page_number, text}` — full text of one page.
+
+        Concatenates page-tagged chunks in chunk_index order. For legacy
+        docs without page_number on chunks, silicon_brain re-extracts
+        from `pdf_data` server-side.
+        """
+        resp = await self._http.get(
+            f"/api/documents/{document_id}/pages/{page_number}",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()

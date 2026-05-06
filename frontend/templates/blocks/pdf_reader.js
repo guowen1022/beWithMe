@@ -27,6 +27,7 @@
     // Per-doc state we report on every visible-page change.
     var currentDocId = null;
     var currentDocTitle = null;
+    var currentOutline = null;   // [{title, page}, ...] from silicon_brain, or null
     var totalPages = 0;
     var lastReportedPage = null;
     // Flips to true on the first reportVisiblePage after a doc loads,
@@ -58,17 +59,19 @@
       if (snippet) content += ': ' + snippet;
       var completed = loadCompletionPending;
       loadCompletionPending = false;  // one-shot edge per doc load
+      var extra = {
+        document_id: currentDocId,
+        document_title: currentDocTitle,
+        page: pageNum,
+        total_pages: totalPages,
+        viewport_text: snippet,
+      };
+      if (currentOutline) extra.outline = currentOutline;
       report({
         kind: 'pdf',
         content: content,
         completed: completed,
-        extra: {
-          document_id: currentDocId,
-          document_title: currentDocTitle,
-          page: pageNum,
-          total_pages: totalPages,
-          viewport_text: snippet,
-        },
+        extra: extra,
       });
       lastReportedPage = pageNum;
     }
@@ -184,6 +187,7 @@
       headerTitle.textContent = title || 'PDF reader';
       currentDocId = id;
       currentDocTitle = title || null;
+      currentOutline = null;
       // Arm the completion edge — the first reportVisiblePage after the
       // doc renders will carry `completed: true`, waking the teacher.
       loadCompletionPending = true;
@@ -192,6 +196,25 @@
         content: 'loading: ' + (title || id),
         extra: { document_id: id, document_title: title || null },
       });
+      // Fetch the doc's structure (outline + page_count) from silicon_brain
+      // in parallel with the PDF bytes — no need to block PDF rendering on
+      // it. When it lands, stash on currentOutline so the next per-page
+      // state report carries it. silicon_brain extracts the outline from
+      // pypdf at upload time (or backfills from pdf_data on first read).
+      fetch('/api/documents/' + encodeURIComponent(id) + '/structure', {
+        headers: userId ? { 'X-User-Id': userId } : {},
+      })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (data) {
+          if (data && Array.isArray(data.outline) && data.outline.length > 0) {
+            currentOutline = data.outline;
+            // Push a fresh state report so the teacher sees the outline
+            // even before the user scrolls (which would trigger the next
+            // reportVisiblePage). Page-aware reports below replace this.
+            if (lastReportedPage != null) reportVisiblePage(lastReportedPage);
+          }
+        })
+        .catch(function () { /* outline is best-effort — silent on error */ });
       fetch('/api/documents/' + encodeURIComponent(id) + '/pdf', {
         headers: userId ? { 'X-User-Id': userId } : {},
       })

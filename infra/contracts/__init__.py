@@ -77,6 +77,7 @@ class DocumentChunkDTO(BaseModel):
     document_id: UUID
     chunk_index: int
     text: str
+    page_number: Optional[int] = None
 
 
 class SummaryDTO(BaseModel):

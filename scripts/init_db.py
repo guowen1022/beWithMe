@@ -58,6 +58,11 @@ ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS parent_interaction_i
 ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);
 CREATE INDEX IF NOT EXISTS idx_interactions_parent ON interactions(parent_interaction_id);
 
+-- PDF structure: outline + page_count on documents, page_number on chunks.
+ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS outline JSONB;
+ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS page_count INTEGER;
+ALTER TABLE IF EXISTS document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER;
+
 -- Default user (used by some legacy data and tests)
 INSERT INTO users (id, username) VALUES ('00000000-0000-0000-0000-000000000000', 'default')
     ON CONFLICT (username) DO NOTHING;

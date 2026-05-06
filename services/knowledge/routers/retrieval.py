@@ -34,7 +34,7 @@ async def retrieve_document_chunks(
     user_id: UUID = Depends(parse_user_id),
 ):
     stmt = text("""
-        SELECT id, document_id, chunk_index, text
+        SELECT id, document_id, chunk_index, text, page_number
         FROM document_chunks
         WHERE document_id = :doc_id AND embedding IS NOT NULL
         ORDER BY embedding <=> :embedding
@@ -47,6 +47,8 @@ async def retrieve_document_chunks(
     })
     rows = result.fetchall()
     return [
-        DocumentChunkDTO(id=r[0], document_id=r[1], chunk_index=r[2], text=r[3])
+        DocumentChunkDTO(
+            id=r[0], document_id=r[1], chunk_index=r[2], text=r[3], page_number=r[4],
+        )
         for r in rows
     ]
