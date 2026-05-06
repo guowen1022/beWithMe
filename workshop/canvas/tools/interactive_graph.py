@@ -68,11 +68,13 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
     fontFamily: 'var(--bw-font-sans)',
     border: '1px solid var(--bw-border)',
     borderRadius: '0',
-    padding: '12px',
-    overflow: 'auto',
+    // Tight chrome — every wasted pixel makes the diagram look smaller
+    // than the block size suggests.
+    padding: '4px',
+    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
+    gap: '0',
   },
   // Topics are namespaced per instance so multiple diagrams don't collide.
   subscribes: [
@@ -99,8 +101,16 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
     var status = document.createElement('div');
     status.style.fontSize = '11px';
     status.style.opacity = '0.55';
-    status.style.minHeight = '14px';
-    status.textContent = 'loading mermaid…';
+    // No reserved height — when status is empty (the common case after
+    // first render) the diagram gets 100% of the block's vertical space.
+    status.style.minHeight = '0';
+    status.style.flexShrink = '0';
+    function setStatus(text) {
+      status.textContent = text || '';
+      status.style.display = text ? 'block' : 'none';
+      status.style.marginBottom = text ? '4px' : '0';
+    }
+    setStatus('loading mermaid…');
     root.appendChild(status);
 
     var container = document.createElement('div');
@@ -222,7 +232,7 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
       lastKind = null;
       nodeIds = [];
       selectedNode = null;
-      status.textContent = '';
+      setStatus('');
       pushState();
     }
 
@@ -250,10 +260,10 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
     }
 
     var ready = whenReady().then(function (mermaid) {
-      status.textContent = '';
+      setStatus('');
       return mermaid;
     }).catch(function (err) {
-      status.textContent = 'mermaid failed to load: ' + (err && err.message || err);
+      setStatus('mermaid failed to load: ' + (err && err.message || err));
       try { bus.publish(T_ERROR, { message: String(err && err.message || err) }); } catch (e) {}
       throw err;
     });
@@ -282,6 +292,24 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
       } catch (e) {}
     }
 
+    function tightenViewBox(svg) {
+      // mermaid emits a viewBox sized to its loose internal layout (with
+      // its own diagramPadding). Replace with the actual content's
+      // bounding box so the diagram fills the SVG box without internal
+      // letterboxing — gives a noticeably bigger render at the same
+      // block size. 4px breathing room so text and arrowheads aren't
+      // flush against the SVG edge.
+      try {
+        if (typeof svg.getBBox !== 'function') return;
+        var bbox = svg.getBBox();
+        if (!(bbox && bbox.width > 0 && bbox.height > 0)) return;
+        var pad = 4;
+        svg.setAttribute('viewBox',
+          (bbox.x - pad) + ' ' + (bbox.y - pad) + ' ' +
+          (bbox.width + 2 * pad) + ' ' + (bbox.height + 2 * pad));
+      } catch (e) { /* getBBox can throw if the SVG isn't laid out yet */ }
+    }
+
     function fitSvg(svg) {
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.removeAttribute('width');
@@ -291,6 +319,14 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
       svg.style.maxWidth = '100%';
       svg.style.maxHeight = '100%';
       svg.style.display = 'block';
+      // getBBox needs the element in the layout tree; we're already
+      // inside container.innerHTML = svg, so it's connected. Defer one
+      // frame to be safe across browsers.
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () { tightenViewBox(svg); });
+      } else {
+        tightenViewBox(svg);
+      }
     }
 
     function renderMermaid(source) {
@@ -306,7 +342,7 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
             dropMermaidSandbox(renderId);
             if (seq !== renderSeq) return;
             container.innerHTML = out && out.svg ? out.svg : '';
-            status.textContent = '';
+            setStatus('');
             var svg = container.querySelector('svg');
             if (svg) {
               fitSvg(svg);
@@ -325,7 +361,7 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
             dropMermaidSandbox(renderId);
             if (seq !== renderSeq) return;
             var msg = err && err.message ? err.message : String(err);
-            status.textContent = 'render error: ' + msg;
+            setStatus('render error: ' + msg);
             container.innerHTML = '';
             nodeIds = [];
             try { bus.publish(T_ERROR, { message: msg }); } catch (e) {}
