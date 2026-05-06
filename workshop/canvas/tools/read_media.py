@@ -31,7 +31,7 @@ from services.persona.routers.dynamic import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
 
-from tools.list_media import _title_from_design_doc
+from workshop.canvas.tools.list_media import _title_from_design_doc
 
 
 async def read_media(

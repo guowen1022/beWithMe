@@ -102,8 +102,8 @@ def _record_unmount_local(user_id_s: str, device_id_s: str, block_id: str) -> No
 def mounted_block_ids(user_id: UUID) -> dict[str, list[str]]:
     """Snapshot of currently-mounted block ids per device (string keys).
 
-    Called by tools.read_media / tools.list_media to compute which
-    blocks are present on the user's canvases right now.
+    Called by workshop.canvas.tools.read_media / list_media to compute
+    which blocks are present on the user's canvases right now.
     """
     bucket = _mounted_blocks.get(str(user_id), {})
     return {did: sorted(blocks) for did, blocks in bucket.items() if blocks}
@@ -202,6 +202,26 @@ async def dynamic_stream(
 
     queue: asyncio.Queue = asyncio.Queue()
     uid_s, did_s = str(user_id), str(device_id)
+
+    # On a fresh client SSE channel, any cached state for this device is
+    # stale: a full page reload / Electron restart starts with zero blocks
+    # rendered, but our in-memory mount tracker and perception cache live
+    # for the persona-process lifetime and would otherwise keep telling
+    # the teacher "block X is on canvas" long after the user can no
+    # longer see it. Reset both the moment the channel opens. Mid-session
+    # transient drops also flow through this branch — that's acceptable;
+    # the frontend's next state-report (per-block debounce ~200ms after
+    # any DOM change) repopulates the perception cache, and read_media
+    # unions cache + tracker.
+    if did_s not in _subscribers.get(uid_s, {}):
+        _mounted_blocks.get(uid_s, {}).pop(did_s, None)
+        if uid_s in _mounted_blocks and not _mounted_blocks[uid_s]:
+            _mounted_blocks.pop(uid_s, None)
+        perception.forget_device(user_id=user_id, device_id=device_id)
+        _trace_log(
+            f"[mount-tracker] RESET-ON-OPEN uid={uid_s[:8]} did={did_s[:8]}"
+        )
+
     _subscribers[uid_s][did_s].add(queue)
 
     async def gen():
@@ -307,9 +327,9 @@ async def dynamic_canvas(
     workspaces have leftover template files. Sweep them here so the
     user gets a clean canvas on next reload.
     """
-    # Local import: tools.mount_template imports from this module for
-    # enqueue_for_user. Top-level would create a cycle.
-    from tools.mount_template import _migrate_workspace_if_needed
+    # Local import: workshop.canvas.tools.mount_template imports from this
+    # module for enqueue_for_user. Top-level would create a cycle.
+    from workshop.canvas.tools.mount_template import _migrate_workspace_if_needed
     swept = await _migrate_workspace_if_needed(user_id)
     for stale_id in swept:
         await enqueue_for_user(user_id, UIUpdate(
@@ -338,9 +358,9 @@ async def dynamic_mount_template(
     inputs_launcher's buttons. The persona could also call it as a tool
     (deferred to a follow-up).
     """
-    # Local import: tools.mount_template imports from this router for
-    # enqueue_for_user. Top-level would create a cycle.
-    from tools.mount_template import mount_template
+    # Local import: workshop.canvas.tools.mount_template imports from this
+    # router for enqueue_for_user. Top-level would create a cycle.
+    from workshop.canvas.tools.mount_template import mount_template
 
     try:
         device_uuid = UUID(x_device_id) if x_device_id else None

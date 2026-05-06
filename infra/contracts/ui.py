@@ -98,22 +98,36 @@ class BlockAction(BaseModel):
     model_config = _CFG
     type: Literal["block-action"] = "block-action"
     block_id: str
-    action: Literal["highlight", "focus", "scroll_to", "raise"]
+    action: Literal["highlight", "focus", "scroll_to", "raise", "set_grid"]
     options: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TeacherThinking(BaseModel):
-    """SSE event: 'the teacher just woke up to react to something' — for
-    the dev "llm thinking" panel, not the chat. Carries a summary of the
-    trigger that fired, the tool calls the teacher made, and any text it
-    emitted (capped). The frontend treats it as transient debug info."""
+    """SSE event: 'the teacher (or any persona) just ran an LLM call' —
+    for the dev "llm thinking" panel, not the chat. Carries a summary of
+    what fired, the tool calls made, and any text emitted (capped).
+    The frontend treats it as transient debug info.
+
+    `trigger` carries the scenario name ("answer", "reflect", "router",
+    "recommender", "distiller", "goal-planner", "session-summarizer",
+    "delegate-engineer", "block-completed", "canvas-changed", "voice").
+    The `model` / `provider` / `*_tokens` / `latency_ms` fields are
+    populated by the LLM facade wrap and are absent for events emitted
+    outside an LLM call.
+    """
     model_config = _CFG
     type: Literal["teacher-thinking"] = "teacher-thinking"
     phase: Literal["start", "end"]
-    trigger: str                            # e.g. "block-completed"
-    summary: str = ""                       # one-line description of what fired
-    text: Optional[str] = None              # teacher's text output (end phase)
+    trigger: str                            # scenario or trigger name
+    summary: str = ""                       # one-line description
+    text: Optional[str] = None              # teacher's text output (end)
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    # Populated by the LLM facade observability wrap:
+    model: Optional[str] = None             # e.g. "deepseek-v4-pro"
+    provider: Optional[str] = None          # e.g. "deepseek"
+    prompt_tokens: Optional[int] = None     # input + cache_read
+    completion_tokens: Optional[int] = None
+    latency_ms: Optional[int] = None        # total wall-clock
 
 
 class VoicePlay(BaseModel):

@@ -233,7 +233,7 @@ export type DynamicEvent =
   | { type: "block-error"; block_id: string; error: string }
   | { type: "block-action"; block_id: string; action: "highlight" | "focus" | "scroll_to"; options?: Record<string, unknown> }
   | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null }
-  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string; text?: string | null; tool_calls?: { name?: string; arguments?: Record<string, unknown> }[] };
+  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string; text?: string | null; tool_calls?: { name?: string; arguments?: Record<string, unknown> }[]; model?: string | null; provider?: string | null; prompt_tokens?: number | null; completion_tokens?: number | null; latency_ms?: number | null };
 
 export async function subscribeToDynamicStream(
   onEvent: (event: DynamicEvent) => void,

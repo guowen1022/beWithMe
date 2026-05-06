@@ -6,7 +6,7 @@ does. Uses LLM_PROVIDER=fake (set by conftest) so no real LLM is hit.
 
 What's covered:
   * POST /api/dynamic/state/{block_id} → stored under (user, device, block).
-  * tools.read_media returns the cached state (default + filtered modes).
+  * workshop.canvas.tools.read_media returns the cached state (default + filtered modes).
   * Multi-device: states keyed independently per device.
   * Speak via the tool → voice utterance lands in the per-device log.
   * Block with no state report yet → state is None, last_updated_s_ago None.

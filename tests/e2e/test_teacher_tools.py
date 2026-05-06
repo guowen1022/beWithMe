@@ -88,7 +88,6 @@ def test_teacher_tool_block_action_emits_sse_event(
             json={
                 "question": "please block_action highlight block=hello",
                 "session_id": str(uuid.uuid4()),
-                "prompt_version": "v2",
             },
             timeout=30.0,
         )
@@ -143,7 +142,6 @@ def test_teacher_tool_request_new_block_mounts_block(
             json={
                 "question": "please request_new_block for a hello widget",
                 "session_id": str(uuid.uuid4()),
-                "prompt_version": "v2",
             },
             timeout=30.0,
         )
@@ -184,7 +182,6 @@ def test_teacher_tool_speak_emits_voice_play_event(
             json={
                 "question": "please speak something to me",
                 "session_id": str(uuid.uuid4()),
-                "prompt_version": "v2",
             },
             timeout=30.0,
         )
@@ -231,7 +228,6 @@ def test_teacher_tool_point_arrow_mounts_overlay_and_publishes(
             json={
                 "question": "please point_arrow from hello to world",
                 "session_id": str(uuid.uuid4()),
-                "prompt_version": "v2",
             },
             timeout=30.0,
         )
@@ -272,7 +268,6 @@ def test_teacher_no_tool_keyword_just_answers(
     body = {
         "question": "what is mitochondrial DNA?",
         "session_id": str(uuid.uuid4()),
-        "prompt_version": "v2",
     }
     with http.stream(
         "POST", "/api/ask/stream",

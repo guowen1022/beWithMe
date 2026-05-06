@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional
+from uuid import UUID
 
 from infra.model.llm import stream_with_tools
 from infra.model.tools import ToolSpec
@@ -85,6 +86,8 @@ async def run(
     prior_messages: Optional[List[Dict[str, Any]]],
     tools: List[ToolSpec],
     max_tokens: int = 4096,
+    purpose: Optional[str] = None,
+    user_id: Optional[UUID] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
@@ -134,6 +137,8 @@ async def run(
             prior_messages=history,
             tools=tools,
             max_tokens=max_tokens,
+            purpose=purpose,
+            user_id=user_id,
         ):
             kind = evt.get("kind")
             if kind == "delta":

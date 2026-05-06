@@ -1,4 +1,4 @@
-"""Debug HTTP wrapper around `tools.list_media.list_media`.
+"""Debug HTTP wrapper around `workshop.canvas.tools.list_media.list_media`.
 
 The tool itself is callable from Python (and from a future LLM tool loop).
 This route exists so a developer can curl/browse the inventory without
@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from infra.auth import parse_user_id as get_current_user_id
 from infra.contracts.devices import MediaInventory
 
-from tools.list_media import list_media
+from workshop.canvas.tools.list_media import list_media
 
 router = APIRouter()
 

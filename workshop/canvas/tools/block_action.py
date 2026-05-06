@@ -16,7 +16,7 @@ from infra.contracts.ui import BlockAction
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 
 
-_ALLOWED_ACTIONS = ("highlight", "focus", "scroll_to", "raise")
+_ALLOWED_ACTIONS = ("highlight", "focus", "scroll_to", "raise", "set_grid")
 
 
 async def block_action(

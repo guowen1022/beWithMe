@@ -17,9 +17,42 @@ interface ThinkingEntry {
   text?: string | null;
   toolCalls: { name?: string; arguments?: Record<string, unknown> }[];
   done: boolean;
+  model?: string | null;
+  provider?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  latencyMs?: number | null;
 }
 
-const MAX_ENTRIES = 5;
+const MAX_ENTRIES = 12;
+
+// Color map per scenario — keeps the panel scannable when many call sites
+// fire in quick succession.
+const TRIGGER_COLOR: Record<string, string> = {
+  answer: "var(--bw-accent)",
+  reflect: "var(--bw-ink-muted)",
+  "block-completed": "var(--bw-accent)",
+  "canvas-changed": "var(--bw-ink-muted)",
+  voice: "var(--bw-ink-muted)",
+  router: "#7AA2F7",
+  recommender: "#9D7CD8",
+  distiller: "#9D7CD8",
+  "goal-planner": "#7AA2F7",
+  "session-summarizer": "#9D7CD8",
+  "delegate-engineer": "#E0AF68",
+};
+
+function fmtTokens(n: number | null | undefined): string {
+  if (n == null) return "";
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k tok`;
+  return `${n} tok`;
+}
+
+function fmtLatency(ms: number | null | undefined): string {
+  if (ms == null) return "";
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
 
 export default function TeacherThinkingPanel() {
   const [entries, setEntries] = useState<ThinkingEntry[]>([]);
@@ -39,6 +72,8 @@ export default function TeacherThinkingPanel() {
             summary: event.summary || "",
             toolCalls: [],
             done: false,
+            model: event.model ?? null,
+            provider: event.provider ?? null,
           };
           return [head, ...prev].slice(0, MAX_ENTRIES);
         }
@@ -54,6 +89,11 @@ export default function TeacherThinkingPanel() {
             text: event.text ?? null,
             toolCalls: event.tool_calls ?? [],
             done: true,
+            model: event.model ?? null,
+            provider: event.provider ?? null,
+            promptTokens: event.prompt_tokens ?? null,
+            completionTokens: event.completion_tokens ?? null,
+            latencyMs: event.latency_ms ?? null,
           };
           return [head, ...prev].slice(0, MAX_ENTRIES);
         }
@@ -63,6 +103,11 @@ export default function TeacherThinkingPanel() {
           text: event.text ?? null,
           toolCalls: event.tool_calls ?? [],
           done: true,
+          model: event.model ?? merged[idx].model ?? null,
+          provider: event.provider ?? merged[idx].provider ?? null,
+          promptTokens: event.prompt_tokens ?? null,
+          completionTokens: event.completion_tokens ?? null,
+          latencyMs: event.latency_ms ?? null,
         };
         return merged;
       });
@@ -133,7 +178,10 @@ export default function TeacherThinkingPanel() {
               }}
             >
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ color: "var(--bw-ink-muted)" }}>{e.trigger}</span>
+                <span style={{
+                  color: TRIGGER_COLOR[e.trigger] || "var(--bw-ink-muted)",
+                  fontWeight: 600,
+                }}>{e.trigger}</span>
                 <span style={{ marginLeft: "auto", opacity: 0.55, fontSize: 10 }}>
                   {e.done ? "done" : "running…"}
                 </span>
@@ -178,6 +226,21 @@ export default function TeacherThinkingPanel() {
                   }}
                 >
                   {e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text}
+                </div>
+              )}
+              {(e.model || e.promptTokens != null || e.latencyMs != null) && (
+                <div style={{
+                  marginTop: 6,
+                  color: "var(--bw-ink-faint)",
+                  fontSize: 10,
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}>
+                  {e.model && <span>{e.provider}/{e.model}</span>}
+                  {e.promptTokens != null && <span>· {fmtTokens(e.promptTokens)} in</span>}
+                  {e.completionTokens != null && <span>· {fmtTokens(e.completionTokens)} out</span>}
+                  {e.latencyMs != null && <span>· {fmtLatency(e.latencyMs)}</span>}
                 </div>
               )}
             </div>

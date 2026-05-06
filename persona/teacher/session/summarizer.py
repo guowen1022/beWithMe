@@ -26,9 +26,8 @@ from infra.model.llm import generate
 
 from persona.teacher.models.learning_session import LearningSession
 from persona.teacher.session.transcriber import DATA_DIR
+from workshop import load_skill
 
-
-_SKILL_PROMPT_PATH = Path(__file__).resolve().parent.parent / "skills" / "summarize_session.md"
 
 # Local Ollama embedding client.
 _embed_client: Optional[httpx.AsyncClient] = None
@@ -50,22 +49,28 @@ async def _embed_text(text_input: str) -> List[float]:
     return resp.json()["embeddings"][0]
 
 
-def load_skill_prompt() -> str:
-    return _SKILL_PROMPT_PATH.read_text(encoding="utf-8")
-
-
 # -------- Layer 1: pure LLM call --------
 
-async def summarize_transcript(transcript_text: str) -> str:
-    skill_prompt = load_skill_prompt()
-    return await generate(transcript_text, system=skill_prompt, max_tokens=4096)
+async def summarize_transcript(
+    transcript_text: str,
+    user_id: Optional[uuid.UUID] = None,
+) -> str:
+    skill_prompt = load_skill("teacher/summarize_session")
+    return await generate(
+        transcript_text, system=skill_prompt, max_tokens=4096,
+        purpose="session-summarizer", user_id=user_id,
+    )
 
 
 # -------- Layer 2: file operation --------
 
-async def summarize_file(transcript_path: Path, summary_path: Path) -> str:
+async def summarize_file(
+    transcript_path: Path,
+    summary_path: Path,
+    user_id: Optional[uuid.UUID] = None,
+) -> str:
     transcript_text = transcript_path.read_text(encoding="utf-8")
-    summary_text = await summarize_transcript(transcript_text)
+    summary_text = await summarize_transcript(transcript_text, user_id=user_id)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(summary_text, encoding="utf-8")
     return summary_text
@@ -144,7 +149,7 @@ async def process_unsummarized(user_id: uuid.UUID) -> list[str]:
             continue
 
         try:
-            await summarize_file(t_path, s_path)
+            await summarize_file(t_path, s_path, user_id=user_id)
             async with async_session() as db:
                 await index_summary(db, user_id, session_id, s_path)
             summarized.append(str(session_id))

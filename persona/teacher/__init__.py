@@ -7,8 +7,9 @@ The teacher:
   4. Feeds learnings back to the brain builder
 """
 
-from persona.teacher.agent import assemble_context, TeacherContext
-from persona.teacher.prompt import PromptParts, build_answer_prompt, parse_title
+from persona.teacher.agent import TeacherContext, assemble_context
+from persona.teacher.prompts.answer import build as build_answer_prompt
+from persona.teacher.prompts.parts import PromptParts, parse_title
 
 __all__ = [
     "assemble_context",

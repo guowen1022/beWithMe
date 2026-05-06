@@ -32,7 +32,7 @@ async def create_goal(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """Create a new learning goal and generate initial prerequisite DAG."""
-    result = await plan_initial(body.title)
+    result = await plan_initial(body.title, user_id=user_id)
 
     goal = LearningGoal(
         user_id=user_id,
@@ -71,7 +71,7 @@ async def expand_node(
         raise HTTPException(status_code=404, detail="Goal not found")
 
     node_label = next((n["label"] for n in goal.dag["nodes"] if n["id"] == body.node_id), body.node_id)
-    plan_result = await plan_expand(body.node_id, goal.dag, goal.transcript)
+    plan_result = await plan_expand(body.node_id, goal.dag, goal.transcript, user_id=user_id)
 
     goal.dag = plan_result["dag"]
     transcript = list(goal.transcript)

@@ -16,7 +16,7 @@ from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
-from tools.request_ui_block import request_ui_block
+from workshop.canvas.tools.request_ui_block import request_ui_block
 
 router = APIRouter()
 
@@ -147,6 +147,8 @@ async def ask_stream(
                 dynamic_user=ctx.parts.dynamic_user,
                 prior_messages=ctx.prior_messages,
                 tools=teacher_tools,
+                purpose="answer",
+                user_id=user_id,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]

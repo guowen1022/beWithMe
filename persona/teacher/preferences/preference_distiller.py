@@ -75,7 +75,7 @@ async def distill_preferences(
     interactions_text = "\n---\n".join(formatted)
     prompt = DISTILL_PROMPT.format(interactions=interactions_text)
 
-    raw = await generate(prompt)
+    raw = await generate(prompt, purpose="distiller", user_id=user_id)
 
     try:
         json_match = raw

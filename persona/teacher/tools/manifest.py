@@ -18,15 +18,15 @@ from uuid import UUID
 from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
 
-from tools.block_action import block_action
-from tools.interactive_graph import interactive_graph
-from tools.list_media import list_media
-from tools.mount_template import mount_template
-from tools.point_arrow import point_arrow
-from tools.push_block_content import push_block_content
-from tools.read_media import read_media
-from tools.request_ui_block import request_ui_block
 from tools.speak import speak
+from workshop.canvas.tools.block_action import block_action
+from workshop.canvas.tools.interactive_graph import interactive_graph
+from workshop.canvas.tools.list_media import list_media
+from workshop.canvas.tools.mount_template import mount_template
+from workshop.canvas.tools.point_arrow import point_arrow
+from workshop.canvas.tools.push_block_content import push_block_content
+from workshop.canvas.tools.read_media import read_media
+from workshop.canvas.tools.request_ui_block import request_ui_block
 
 
 def _make_list_media(user_id: UUID):

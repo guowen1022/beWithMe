@@ -62,7 +62,6 @@ def test_ask_stream_writes_interaction(http: httpx.Client, auth: dict, test_user
         "question": "What is mitochondrial DNA?",
         "passage_text": "",
         "session_id": str(uuid.uuid4()),
-        "prompt_version": "v2",
     }
 
     # Establish baseline: no interactions for this user yet.
@@ -104,7 +103,6 @@ def test_ask_non_streaming_writes_interaction(http: httpx.Client, auth: dict, te
         "question": "What's the role of ATP synthase?",
         "passage_text": "",
         "session_id": str(uuid.uuid4()),
-        "prompt_version": "v2",
     }
     resp = http.post(
         "/api/ask",

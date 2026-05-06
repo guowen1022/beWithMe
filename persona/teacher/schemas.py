@@ -12,7 +12,6 @@ class AskRequest(BaseModel):
     document_id: Optional[UUID] = None
     session_id: UUID = Field(default_factory=uuid4)
     parent_interaction_id: Optional[UUID] = None
-    prompt_version: Literal["v1", "v2"] = "v2"
     # Test-mode addressee. Default 'teacher' — message goes through the
     # teacher's intent router. 'frontend_engineer' bypasses the router and
     # forwards the message straight to the engineer (for E2E debugging

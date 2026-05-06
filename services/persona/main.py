@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from infra.observability import register_emit
 from infra.topology import service_port
 from persona.teacher import triggers as teacher_triggers
 from persona.teacher.silicon_brain_client import SiliconBrainClient
@@ -44,6 +45,10 @@ async def lifespan(app: FastAPI):
     # Subscribe the event-driven teacher triggers to the perception cache.
     # Idempotent — install() returns immediately if already wired.
     teacher_triggers.install()
+    # Wire LLM-call observability to the SSE fan-out so every LLM call
+    # surfaces in the developer debug panel.
+    from services.persona.routers.dynamic import enqueue_for_user
+    register_emit(enqueue_for_user)
     try:
         yield
     finally:

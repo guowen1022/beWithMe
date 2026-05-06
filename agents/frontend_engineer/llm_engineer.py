@@ -502,12 +502,16 @@ async def respond(
         static_user_passage = static_user_passage + "\n\n---\n\n" + routed
     dynamic_user = f"User command:\n\n{command.strip()}\n\nRespond now."
 
+    user_uuid = UUID(user_id) if isinstance(user_id, str) else user_id
+
     if on_delta is None:
         text, _usage = await generate_cached(
             static_system,
             static_user_passage,
             dynamic_user,
             prior_messages=None,
+            purpose="delegate-engineer",
+            user_id=user_uuid,
         )
     else:
         chunks: list[str] = []
@@ -516,6 +520,8 @@ async def respond(
             static_user_passage,
             dynamic_user,
             prior_messages=None,
+            purpose="delegate-engineer",
+            user_id=user_uuid,
         ):
             if evt["kind"] == "delta":
                 chunks.append(evt["text"])

@@ -87,11 +87,12 @@ def test_orchestrator_fires_idle_immediately(monkeypatch, test_user_id: str):
 
     # Replace _execute_turn with a recorder so we don't actually run the
     # teacher LLM (this test pins the orchestrator's logic, not the LLM
-    # path; that's the next test).
+    # path; that's the next test). The events list contains
+    # PerceptionEventSummary objects.
     fired: list = []
 
-    async def fake_execute_turn(user_id, events):
-        fired.append([(e.block_id, e.state.completed) for e in events])
+    async def fake_execute_turn(user_id, bucket, events):
+        fired.append((bucket, [(e.block_id, e.event_type) for e in events]))
 
     monkeypatch.setattr(triggers, "_execute_turn", fake_execute_turn)
 
@@ -109,11 +110,16 @@ def test_orchestrator_fires_idle_immediately(monkeypatch, test_user_id: str):
             triggers.uninstall()
 
     asyncio.run(drive())
-    assert fired == [[("upload-file", True)]]
+    # Both a change event (state recorded) AND a completed edge fire here.
+    # We assert the completion fired with the right shape; the change event
+    # may or may not fire depending on event ordering — it's fine either way.
+    completed_fires = [f for f in fired if f[0] == "completed"]
+    assert completed_fires == [("completed", [("upload-file", "completed")])], fired
 
 
 def test_orchestrator_coalesces_during_cooldown(monkeypatch, test_user_id: str):
-    """Three completions within the cooldown window → 2 fires:
+    """Three completions within the cooldown window → 2 fires on the
+    `completed` bucket:
        (a) the immediate one for the first event,
        (b) one trailing fire at cooldown-end carrying events 2 + 3.
     """
@@ -123,16 +129,22 @@ def test_orchestrator_coalesces_during_cooldown(monkeypatch, test_user_id: str):
 
     perc_cache._reset_for_tests()
     triggers._reset_for_tests()
-    # Tighten the cooldown to keep the test fast.
-    monkeypatch.setattr(triggers, "COOLDOWN_S", 0.5)
+    # Tighten the cooldown to keep the test fast. The orchestrator now
+    # uses per-event-type budgets; rebind the completed-bucket budget.
+    monkeypatch.setitem(
+        triggers._BUDGETS,
+        "completed",
+        triggers._Budget(cooldown_s=0.5, max_tokens=1500, trigger_label="block-completed"),
+    )
 
     user_uuid = uuid.UUID(test_user_id)
     device_uuid = uuid.uuid4()
 
     fired: list = []
 
-    async def fake_execute_turn(user_id, events):
-        fired.append([(e.block_id, e.state.content) for e in events])
+    async def fake_execute_turn(user_id, bucket, events):
+        if bucket == "completed":
+            fired.append([(e.block_id, e.content) for e in events])
 
     monkeypatch.setattr(triggers, "_execute_turn", fake_execute_turn)
 
@@ -247,21 +259,27 @@ def test_completed_state_post_triggers_teacher_thinking(
         )
         assert r2.status_code == 200, r2.text
 
+        # The orchestrator now wakes for change events too, so a state
+        # write fires both a change-bucket turn AND a completed-bucket turn.
+        # Filter to the completion turn we actually care about here.
         start_evt = _wait_for(
             events,
-            lambda e: e.get("type") == "teacher-thinking" and e.get("phase") == "start",
+            lambda e: (e.get("type") == "teacher-thinking"
+                       and e.get("phase") == "start"
+                       and e.get("trigger") == "block-completed"),
             timeout=10.0,
         )
         assert start_evt is not None, [e.get("type") for e in events]
-        assert start_evt.get("trigger") == "block-completed"
         assert "upload-file" in (start_evt.get("summary") or "")
 
         end_evt = _wait_for(
             events,
-            lambda e: e.get("type") == "teacher-thinking" and e.get("phase") == "end",
+            lambda e: (e.get("type") == "teacher-thinking"
+                       and e.get("phase") == "end"
+                       and e.get("trigger") == "block-completed"),
             timeout=15.0,
         )
-        assert end_evt is not None, "no teacher-thinking end seen"
+        assert end_evt is not None, "no teacher-thinking end seen for block-completed"
         # tool_calls is a list (possibly empty for the fake provider)
         assert isinstance(end_evt.get("tool_calls"), list)
     finally:

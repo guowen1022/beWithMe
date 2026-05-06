@@ -2,14 +2,11 @@
 
 import json
 import re
-from pathlib import Path
+from typing import Optional
+from uuid import UUID
+
 from infra.model.llm import generate
-
-_SKILL_PROMPT_PATH = Path(__file__).resolve().parent.parent / "skills" / "goal_planning.md"
-
-
-def _load_skill_prompt() -> str:
-    return _SKILL_PROMPT_PATH.read_text(encoding="utf-8")
+from workshop import load_skill
 
 
 def _next_node_id(dag: dict) -> str:
@@ -103,12 +100,12 @@ def _build_context(dag: dict, transcript: list) -> str:
     return "\n".join(parts)
 
 
-async def plan_initial(goal_text: str) -> dict:
+async def plan_initial(goal_text: str, user_id: Optional[UUID] = None) -> dict:
     """First call: decompose a goal into initial prerequisites.
 
     Returns {text, dag} where dag has the goal node + prerequisites.
     """
-    skill_prompt = _load_skill_prompt()
+    skill_prompt = load_skill("teacher/goal_planning")
     user_msg = (
         f"The user's learning goal is: \"{goal_text}\"\n\n"
         f"Break this down into 4-6 high-level prerequisites. "
@@ -117,7 +114,10 @@ async def plan_initial(goal_text: str) -> dict:
         f"Respond with JSON only."
     )
 
-    raw = await generate(user_msg, system=skill_prompt, max_tokens=2048)
+    raw = await generate(
+        user_msg, system=skill_prompt, max_tokens=2048,
+        purpose="goal-planner", user_id=user_id,
+    )
     update = _parse_llm_response(raw)
 
     # Build initial DAG
@@ -133,7 +133,7 @@ async def plan_initial(goal_text: str) -> dict:
     }
 
 
-async def plan_expand(node_id: str, dag: dict, transcript: list) -> dict:
+async def plan_expand(node_id: str, dag: dict, transcript: list, user_id: Optional[UUID] = None) -> dict:
     """Expand a node into sub-prerequisites.
 
     Returns {text, dag} with updated DAG.
@@ -142,7 +142,7 @@ async def plan_expand(node_id: str, dag: dict, transcript: list) -> dict:
     if not node:
         return {"text": f"Node {node_id} not found.", "dag": dag}
 
-    skill_prompt = _load_skill_prompt()
+    skill_prompt = load_skill("teacher/goal_planning")
     context = _build_context(dag, transcript)
     start_id = int(_next_node_id(dag)[1:])
 
@@ -158,7 +158,10 @@ async def plan_expand(node_id: str, dag: dict, transcript: list) -> dict:
         f"Respond with JSON only."
     )
 
-    raw = await generate(user_msg, system=skill_prompt, max_tokens=2048)
+    raw = await generate(
+        user_msg, system=skill_prompt, max_tokens=2048,
+        purpose="goal-planner", user_id=user_id,
+    )
     update = _parse_llm_response(raw)
     new_dag = _apply_update(dag, update, start_id=start_id)
 

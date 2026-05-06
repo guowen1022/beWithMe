@@ -173,7 +173,10 @@ async def generate_llm_recommendations(
     snapshot = _build_learner_snapshot(self_description, profile, concept_masteries, graph_context)
     prompt = f"Here is the learner's current state:\n\n{snapshot}\n\nGenerate recommendations."
 
-    raw = await llm.generate(prompt, system=RECOMMEND_SYSTEM_PROMPT, max_tokens=2048)
+    raw = await llm.generate(
+        prompt, system=RECOMMEND_SYSTEM_PROMPT, max_tokens=2048,
+        purpose="recommender", user_id=user_id,
+    )
     try:
         items = json.loads(_strip_code_fence(raw))
     except json.JSONDecodeError:
