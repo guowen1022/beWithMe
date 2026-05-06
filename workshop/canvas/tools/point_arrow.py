@@ -38,7 +38,8 @@ _ARROW_TOPIC = "arrow"
 _ARROW_BLOCK_JS = """\
 ({
   id: 'arrow-overlay',
-  grid: { x: 0, y: 0, w: 160, h: 90 },
+  // Full-bleed overlay in DESKTOP coords (12×9); frontend rescales per device.
+  grid: { x: 0, y: 0, w: 12, h: 9 },
   layer: 'overlay',
   z: 50,
   style: {

@@ -58,7 +58,8 @@ def _topic(block_id: str, suffix: str) -> str:
 _GRAPH_BLOCK_JS_TEMPLATE = """\
 ({
   id: '__BLOCK_ID__',
-  grid: { x: 30, y: 10, w: 100, h: 70 },
+  // Grid is in DESKTOP coords (12×9); the frontend rescales for tablet/phone.
+  grid: { x: 2, y: 1, w: 8, h: 7 },
   // Block reports its own structured state below; skip the DOM-text fallback.
   autosnapshot: false,
   style: {

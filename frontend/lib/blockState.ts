@@ -33,9 +33,10 @@ export interface BlockStateInput {
    *  false→true transition and triggers the teacher's tool loop. Never
    *  set for blocks that are continuously updating. */
   completed?: boolean;
-  /** The block's effective grid on the 160×90 canvas — what the user
-   *  actually sees right now. The teacher reads this to decide whether
-   *  to call layout_blocks. */
+  /** The block's effective grid on the active device's canvas (12×9
+   *  desktop / 8×9 tablet / 4×9 phone) — what the user actually sees
+   *  right now. The teacher reads this to decide whether to call
+   *  layout_blocks. */
   grid?: BlockGrid;
   extra?: Record<string, unknown>;
 }

@@ -57,12 +57,13 @@ Examples (study these — the right column is the *only* acceptable shape):
              mermaid: "xychart-beta\n  title \"Q1 sales\"\n  x-axis [Jan, Feb, Mar]\n  bar [10, 25, 40]"}).
 
   user: "put the PDF on the left half so I can see the diagram next to it"
-    RIGHT: layout_blocks({layouts: [
-             {block_id: "pdf-reader", x:0, y:0, w:80, h:90},
-             {block_id: "interactive-graph-steps", x:80, y:0, w:80, h:90}]}).
+    RIGHT: layout_blocks({device_class: "desktop", layouts: [
+             {block_id: "pdf-reader", x:0, y:0, w:6, h:9},
+             {block_id: "interactive-graph-steps", x:6, y:0, w:6, h:9}]}).
 
   user: "maximize the PDF"
-    RIGHT: layout_blocks({layouts: [{block_id: "pdf-reader", x:0, y:0, w:160, h:90}]}).
+    RIGHT: layout_blocks({device_class: "desktop",
+             layouts: [{block_id: "pdf-reader", x:0, y:0, w:12, h:9}]}).
 
 DECISION RULES:
 
@@ -89,10 +90,12 @@ DECISION RULES:
 - FILL THE CANVAS. After every mount, scan CURRENTLY ON CANVAS for blocks
   that together leave a dead zone (e.g. PDF at full-bleed plus a small
   diagram squeezed in a corner). If the user is engaged with multiple
-  surfaces, call `layout_blocks` to give each one a real share of the screen
-  (typically halves: left `{x:0,y:0,w:80,h:90}` + right `{x:80,y:0,w:80,h:90}`).
-  Skip when one surface is the sole focus — full-bleed `{x:0,y:0,w:160,h:90}`
-  is right then.
+  surfaces, call `layout_blocks` to give each one a real share of the screen.
+  Coords are in the active device's grid — see `workshop/canvas/skills/grid.md`
+  for per-device sizes. On DESKTOP (12×9), typical halves are
+  left `{x:0,y:0,w:6,h:9}` + right `{x:6,y:0,w:6,h:9}`. Skip when one surface
+  is the sole focus — full-bleed `{x:0,y:0,w:12,h:9}` is right then. Pass
+  `device_class` so the server validates against the right grid.
 
 Anything that touches the surface the user sees — you do it via a tool.
 Workarounds, instructions, "you can paste here" — never. We are not

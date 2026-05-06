@@ -44,32 +44,37 @@ only the protocol shape changes.
 
 ## Grid rules (the canvas)
 
-The canvas is a fixed **160 columns × 90 rows** CSS grid.
+Author block grids in **DESKTOP coords (12 columns × 9 rows)**. The
+frontend rescales for tablet (8 cols) and phone (4 cols) on render —
+you don't need to think about smaller breakpoints when emitting the
+block source.
 
 - `x`, `y` are 0-indexed (top-left corner).
-- `w`, `h` are span counts; `x + w ≤ 160`, `y + h ≤ 90`.
-- The grid is roughly 16:9 — each cell is wider than tall in pixels.
-  A square-looking block has `w ≈ 1.78 × h`.
+- `w`, `h` are span counts; on desktop `x + w ≤ 12`, `y + h ≤ 9`.
+- Cells are non-square (1.78:1 on a 16:9 canvas). A square-looking
+  block has `w ≈ 0.56 × h` (e.g. 4 cols × 7 rows).
 - Blocks must not overlap unless one is `layer: 'overlay'` (overlay
   always renders above canvas blocks regardless of z-index).
 
 ### Layout rules
 
-- ≥4 cells of margin from each canvas edge — the surface has rounded
-  corners and shadows that look bad against the edge.
-- Don't crowd. If two blocks touch, separate them by ≥2 cells.
-- Wide content (PDFs, tables, code): `w ≥ 100`. Narrow controls
-  (buttons, inputs): `w ≤ 60`.
-- Tall content (long lists, scrollable panels): `h ≥ 40`. Status chips
-  and toolbars: `h ≤ 14`.
+- Don't pin everything to the very edge — leave a column of margin
+  when content is narrow enough.
+- Don't crowd. If two blocks touch, leave a single empty cell of
+  separation when there's room.
+- Wide content (PDFs, tables, code): `w ≥ 8`. Narrow controls
+  (buttons, inputs): `w ≤ 6`.
+- Tall content (long lists, scrollable panels): `h ≥ 5`. Status chips
+  and toolbars: `h ≤ 2`.
 
-### Canonical placements
+### Canonical placements (desktop coords)
 
 For the most common composites — use these instead of inventing:
 
-- **Upload bar (top center)**: `{ x: 50, y: 6, w: 60, h: 12 }`
-- **PDF reader (below)**: `{ x: 20, y: 22, w: 120, h: 60 }`
-- **Single centered block**: `{ x: 40, y: 28, w: 80, h: 30 }`
+- **Upload bar (top center)**: `{ x: 3, y: 1, w: 6, h: 1 }`
+- **PDF reader (full bleed)**: `{ x: 0, y: 0, w: 12, h: 9 }`
+- **Side-by-side halves**: `{ x: 0, y: 0, w: 6, h: 9 }` + `{ x: 6, y: 0, w: 6, h: 9 }`
+- **Single centered block**: `{ x: 2, y: 2, w: 8, h: 5 }`
 
 ### Layer
 

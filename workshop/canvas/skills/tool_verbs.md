@@ -1,7 +1,8 @@
 # Canvas tool verbs
 
 The verbs available for driving the canvas. Each operates on the
-160×90 grid and the block lifecycle described in the sibling skills.
+device-class grid (12×9 desktop / 8×9 tablet / 4×9 phone — see
+`grid.md`) and the block lifecycle described in the sibling skills.
 
 - **`read_media`** — read what the user currently sees: every canvas's
   mounted blocks (each block's id, title, current state, focus, grid
@@ -41,10 +42,12 @@ The verbs available for driving the canvas. Each operates on the
   `highlight` (flash a glow), `focus` (move keyboard focus),
   `scroll_to` (scroll into view), `raise` (bring to front of stack).
 
-- **`layout_blocks`** — reflow N blocks at once on the 160×90 grid.
-  Pass `[{block_id, x, y, w, h}, ...]`. Use to fill empty space, place
-  surfaces side-by-side, or honor an explicit resize request. No
-  remount, PDFs stay on the same page.
+- **`layout_blocks`** — reflow N blocks at once on the active grid.
+  Pass `[{block_id, x, y, w, h}, ...]` plus `device_class` so the
+  server validates against the right bounds (12×9 desktop, 8×9 tablet,
+  4×9 phone — see `grid.md`). Use to fill empty space, place surfaces
+  side-by-side, or honor an explicit resize request. No remount, PDFs
+  stay on the same page.
 
 - **`point_arrow`** — draw a labeled arrow from one block to another.
   Pass both ids empty to clear a previously-drawn arrow.
