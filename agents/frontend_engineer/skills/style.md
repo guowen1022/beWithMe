@@ -151,10 +151,12 @@ scale transforms on inner elements.
 
 ## Internal layout (when a block hosts sub-cells)
 
-The outer canvas is a **160×90** grid (see `new_block.md` schema —
-`grid: { x: 0..159, y: 0..89 }`); blocks claim chunks of it. *Inside* a
-block, treat the body as a fresh 12-col grid with a 14px gap when laying
-out sub-content:
+The outer canvas is a Bootstrap-style grid: **12×9** on desktop, 8×9 on
+tablet, 4×9 on phone (see `new_block.md` and `workshop/canvas/skills/grid.md`).
+Author your block's `grid: { x, y, w, h }` in **desktop coords** — the
+frontend rescales for tablet/phone automatically. *Inside* a block, treat
+the body as a fresh 12-col grid with a 14px gap when laying out
+sub-content:
 
 ```css
 display: grid;

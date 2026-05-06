@@ -2,10 +2,10 @@
 keywords: input, launcher, start, choose, upload, paste, passage
 purpose: Two-button starter block on an empty canvas. Lets the user pick a reading modality (upload PDF or paste passage). Each button mounts the corresponding reader template and unmounts the launcher.
 grid:
-  x: 50
-  y: 35
-  w: 60
-  h: 20
+  x: 4
+  y: 4
+  w: 4
+  h: 2
 backend:
   mount_template:
     method: POST

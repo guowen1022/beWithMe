@@ -59,8 +59,8 @@ the schema is the contract, and the runtime is unforgiving.
 ```js
 ({
   id: 'kebab-id',                       // unique among the user's blocks
-  grid: { x: 0..159, y: 0..89,          // top-left corner
-          w: 1..160,  h: 1..90 },        // size; x+w ≤ 160, y+h ≤ 90
+  grid: { x: 0..11, y: 0..8,            // top-left corner (DESKTOP coords;
+          w: 1..12,  h: 1..9 },          //  scaled to tablet/phone on render)
   content: 'static text shown on mount', // can be empty string
   style: { /* React-shaped CSS, camelCase */ },
   layer:    'canvas' | 'overlay',       // optional; default 'canvas'

@@ -36,10 +36,12 @@ from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_use
 from silicon_brain.models.canvas_layout import CanvasLayout
 
 
-# Sane default grid bounds. Each template's frontmatter overrides via the
-# `grid:` block in the .md frontmatter; `_DEFAULT_GRID` is the conservative
-# fallback when neither caller nor manifest specifies.
-_DEFAULT_GRID = {"x": 30, "y": 30, "w": 100, "h": 30}
+# Sane default grid in desktop coordinates (12×9). Each template's
+# frontmatter overrides via the `grid:` block; `_DEFAULT_GRID` is the
+# conservative fallback when neither caller nor manifest specifies.
+# The frontend rescales these to the active device class on render
+# (see frontend/lib/gridConfig.ts scaleGridForDevice).
+_DEFAULT_GRID = {"x": 2, "y": 2, "w": 8, "h": 5}
 
 
 @dataclass

@@ -7,6 +7,7 @@
 // simpler than maintaining a parallel handles map. Keep it stateless.
 
 import { postBlockState } from "./blockState";
+import { readGridSizeFromDom } from "./gridConfig";
 
 export type DynamicBlockAction = "highlight" | "focus" | "scroll_to" | "raise" | "set_grid";
 
@@ -100,19 +101,22 @@ export const dynamicBlockRegistry = {
   },
 
   /**
-   * Resize / reposition the block on the 160x90 canvas grid.
-   * Inline `gridColumn` / `gridRow` overrides Block.tsx's static grid
-   * styles, so a teacher-driven layout reflows immediately without
+   * Resize / reposition the block on the active device-class grid.
+   * Bounds come from gridConfig via the surface's `data-device` attribute,
+   * so the same call clamps to 12x9 on desktop, 8x9 on tablet, 4x9 on
+   * phone. Inline `gridColumn` / `gridRow` overrides Block.tsx's static
+   * grid styles, so a teacher-driven layout reflows immediately without
    * remounting the block (the source eval, bus subscriptions, and any
    * loaded PDF pages stay intact).
    */
   setGrid(blockId: string, opts: { x?: number; y?: number; w?: number; h?: number }): boolean {
     const el = findElement(blockId);
     if (!el) return false;
-    const x = Math.max(0, Math.min(159, Math.floor(Number(opts.x ?? 0))));
-    const y = Math.max(0, Math.min(89, Math.floor(Number(opts.y ?? 0))));
-    const w = Math.max(1, Math.min(160 - x, Math.floor(Number(opts.w ?? 1))));
-    const h = Math.max(1, Math.min(90 - y, Math.floor(Number(opts.h ?? 1))));
+    const { cols, rows } = readGridSizeFromDom();
+    const x = Math.max(0, Math.min(cols - 1, Math.floor(Number(opts.x ?? 0))));
+    const y = Math.max(0, Math.min(rows - 1, Math.floor(Number(opts.y ?? 0))));
+    const w = Math.max(1, Math.min(cols - x, Math.floor(Number(opts.w ?? 1))));
+    const h = Math.max(1, Math.min(rows - y, Math.floor(Number(opts.h ?? 1))));
     el.style.gridColumn = `${x + 1} / span ${w}`;
     el.style.gridRow = `${y + 1} / span ${h}`;
     // Push the new grid to the perception cache right away so the teacher

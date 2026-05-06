@@ -4,10 +4,10 @@ purpose: Lets the user paste or type a passage of text. The passage stays in the
 publishes:
   - __SELECTION_TOPIC__
 grid:
-  x: 10
-  y: 5
-  w: 140
-  h: 75
+  x: 1
+  y: 1
+  w: 10
+  h: 8
 ---
 
 Use this template when the user wants to discuss text they have on hand

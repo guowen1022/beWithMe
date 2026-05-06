@@ -4,10 +4,10 @@ purpose: Lets the user pick a PDF and uploads it to the backend.
 publishes:
   - __DOC_TOPIC__
 grid:
-  x: 40
-  y: 38
-  w: 80
-  h: 10
+  x: 3
+  y: 4
+  w: 6
+  h: 1
 backend:
   upload:
     method: POST

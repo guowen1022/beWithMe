@@ -5,6 +5,7 @@ import { Block } from "./Block";
 import { bus } from "@/lib/bus";
 import { sourceRegistry, type SourceEntry } from "@/lib/dynamic";
 import { useDeviceClass } from "@/lib/device";
+import { GRID_SIZES } from "@/lib/gridConfig";
 import { fetchCanvas, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
@@ -112,21 +113,25 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
 
   if (mode === "overlay" && entries.length === 0) return null;
 
+  const { cols, rows } = GRID_SIZES[device];
+  const gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  const gridTemplateRows = `repeat(${rows}, 1fr)`;
+
   const surfaceStyle: React.CSSProperties = mode === "fullscreen"
     ? {
         position: "absolute",
         inset: 0,
         display: "grid",
-        gridTemplateColumns: "repeat(160, 1fr)",
-        gridTemplateRows: "repeat(90, 1fr)",
+        gridTemplateColumns,
+        gridTemplateRows,
         background: "var(--bw-void)",
       }
     : {
         position: "fixed",
         inset: 0,
         display: "grid",
-        gridTemplateColumns: "repeat(160, 1fr)",
-        gridTemplateRows: "repeat(90, 1fr)",
+        gridTemplateColumns,
+        gridTemplateRows,
         pointerEvents: "none",
         zIndex: 25,
       };

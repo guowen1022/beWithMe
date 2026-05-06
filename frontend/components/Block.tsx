@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef } from "react";
 import { bus } from "@/lib/bus";
 import { evalBlockSource, normalizeStyle, reportBlockError } from "@/lib/dynamic";
 import { postBlockState, type BlockStateInput, type BlockFocus } from "@/lib/blockState";
+import { useDeviceClass } from "@/lib/device";
+import { scaleGridForDevice } from "@/lib/gridConfig";
 import { focusTracker } from "@/lib/focusTracker";
 import {
   buildBackendHelpers,
@@ -20,6 +22,7 @@ const SNAPSHOT_MAX_CHARS = 1000;
 export function Block({ id, source }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const result = useMemo(() => evalBlockSource(source), [source]);
+  const device = useDeviceClass();
 
   useEffect(() => {
     if (!result.ok) {
@@ -168,9 +171,13 @@ export function Block({ id, source }: Props) {
   const block = result.block;
   const isOverlay = block.layer === "overlay";
   const userZ = typeof block.z === "number" ? block.z : 0;
+  // Block sources declare their grid in desktop coords (12×9). Scale to
+  // the active device class so the same source works on phone (4×9) and
+  // tablet (8×9) without per-device rendering.
+  const scaled = scaleGridForDevice(block.grid, device);
   const gridStyle: React.CSSProperties = {
-    gridColumn: `${block.grid.x + 1} / span ${block.grid.w}`,
-    gridRow: `${block.grid.y + 1} / span ${block.grid.h}`,
+    gridColumn: `${scaled.x + 1} / span ${scaled.w}`,
+    gridRow: `${scaled.y + 1} / span ${scaled.h}`,
     overflow: "hidden",
     position: "relative",
     zIndex: (isOverlay ? 100 : 0) + userZ,

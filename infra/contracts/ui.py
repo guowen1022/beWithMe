@@ -11,7 +11,7 @@ loop and these contracts agree on what a block looks like.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,12 +20,43 @@ from pydantic import BaseModel, ConfigDict, Field
 _CFG = ConfigDict(extra="ignore")
 
 
+# Per-device-class grid bounds. Mirrors frontend/lib/gridConfig.ts so the
+# server validates against the same dimensions the frontend renders. 12 cols
+# on desktop is the Bootstrap convention — strong LLM prior for col-6/4/3
+# layouts; 4→8→12 cascade scales cleanly to tablet and phone. Rows stay at
+# 9 so vertical reasoning is uniform across breakpoints.
+DeviceClass = Literal["phone", "tablet", "desktop"]
+
+DEVICE_GRID_BOUNDS: Dict[str, Tuple[int, int]] = {
+    "phone":   (4,  9),
+    "tablet":  (8,  9),
+    "desktop": (12, 9),
+}
+
+
+def grid_bounds_for(device_class: Optional[str]) -> Tuple[int, int]:
+    """Return `(cols, rows)` for the given device class.
+
+    Falls back to desktop when the class is unknown or None — desktop is
+    the largest grid and the safest default for ambiguous cases.
+    """
+    if device_class is None:
+        return DEVICE_GRID_BOUNDS["desktop"]
+    return DEVICE_GRID_BOUNDS.get(device_class, DEVICE_GRID_BOUNDS["desktop"])
+
+
 class GridPos(BaseModel):
+    """A block's position on the device-class grid.
+
+    Bounds are intentionally permissive at the schema level (just `ge=0`/
+    `ge=1`); device-aware upper bounds are enforced by tool call sites
+    that know the target device, via `grid_bounds_for(device_class)`.
+    """
     model_config = _CFG
-    x: int = Field(ge=0, le=159)
-    y: int = Field(ge=0, le=89)
-    w: int = Field(ge=1, le=160)
-    h: int = Field(ge=1, le=90)
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(ge=1)
+    h: int = Field(ge=1)
 
 
 class BlockSpec(BaseModel):
@@ -147,6 +178,9 @@ class VoicePlay(BaseModel):
 
 
 __all__ = [
+    "DeviceClass",
+    "DEVICE_GRID_BOUNDS",
+    "grid_bounds_for",
     "GridPos",
     "BlockSpec",
     "BlockSource",

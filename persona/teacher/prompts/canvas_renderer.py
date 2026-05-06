@@ -40,32 +40,37 @@ def format_canvas_state(perc: object) -> str:
 
     # Same block id can appear under multiple devices. Pick the most
     # informative view per block: prefer the device whose entry has
-    # structured state, then the most recent update.
+    # structured state, then the most recent update. Track the source
+    # canvas's device_class alongside each block so grid coords can be
+    # rendered with the device they belong to (the teacher needs this
+    # to call layout_blocks with the correct device_class).
     best_by_id: dict = {}
     for canvas in canvases:
         if not getattr(canvas, "online", False):
             continue
+        canvas_dc = getattr(canvas, "device_class", None)
         for block in getattr(canvas, "blocks", []) or []:
             bid = block.id
             cur = best_by_id.get(bid)
             if cur is None:
-                best_by_id[bid] = block
+                best_by_id[bid] = (block, canvas_dc)
                 continue
-            cur_has_state = getattr(cur, "state", None) is not None
+            cur_block, _ = cur
+            cur_has_state = getattr(cur_block, "state", None) is not None
             new_has_state = getattr(block, "state", None) is not None
             if new_has_state and not cur_has_state:
-                best_by_id[bid] = block
+                best_by_id[bid] = (block, canvas_dc)
                 continue
             if cur_has_state and not new_has_state:
                 continue
-            cur_age = getattr(cur, "last_updated_s_ago", None)
+            cur_age = getattr(cur_block, "last_updated_s_ago", None)
             new_age = getattr(block, "last_updated_s_ago", None)
             if new_age is not None and (cur_age is None or new_age < cur_age):
-                best_by_id[bid] = block
+                best_by_id[bid] = (block, canvas_dc)
 
     lines: list[str] = []
-    for block in best_by_id.values():
-        line = _format_block_line(block)
+    for block, device_class in best_by_id.values():
+        line = _format_block_line(block, device_class)
         if line:
             lines.append(line)
 
@@ -85,14 +90,44 @@ def format_canvas_state(perc: object) -> str:
     if not lines and not voice_lines:
         return ""
 
+    # Header line summarising connected canvases by device class. Lets the
+    # teacher know which grid sizes are available before reading per-block
+    # coords. Each device shows its grid as `(cols×rows)`.
+    device_summaries: list[str] = []
+    seen: set = set()
+    for canvas in canvases:
+        if not getattr(canvas, "online", False):
+            continue
+        dc = getattr(canvas, "device_class", None) or "desktop"
+        if dc in seen:
+            continue
+        seen.add(dc)
+        cols, rows = _GRID_BOUNDS.get(dc, _GRID_BOUNDS["desktop"])
+        device_summaries.append(f"{dc} ({cols}×{rows})")
+
     parts = ["=== CURRENTLY ON CANVAS ==="]
+    if device_summaries:
+        parts.append("active: " + " · ".join(device_summaries))
     parts.extend(lines)
     parts.extend(voice_lines)
     return "\n".join(parts)
 
 
-def _format_block_line(block) -> str:
-    """One line per surface, in the teacher's vocabulary (never expose block id)."""
+# Mirrors infra/contracts/ui.DEVICE_GRID_BOUNDS — kept inline here so this
+# pure-render module doesn't grow a backend dependency. Keep these in sync.
+_GRID_BOUNDS = {
+    "phone":   (4, 9),
+    "tablet":  (8, 9),
+    "desktop": (12, 9),
+}
+
+
+def _format_block_line(block, device_class=None) -> str:
+    """One line per surface, in the teacher's vocabulary (never expose block id).
+
+    `device_class` is the source canvas's class; appended to the grid tail
+    so the teacher knows which grid the coords are in.
+    """
     state = getattr(block, "state", None)
     title = getattr(block, "title", None)
     bid = block.id
@@ -126,7 +161,7 @@ def _format_block_line(block) -> str:
             bits = [f'- diagram "{name}": {kind}, {n_nodes} nodes']
             if sel:
                 bits.append(f'(selected: "{sel}")')
-            grid = _format_grid_tail(state)
+            grid = _format_grid_tail(state, device_class)
             if grid:
                 bits.append(grid)
             tail = _format_focus_tail(state, age)
@@ -188,7 +223,7 @@ def _format_block_line(block) -> str:
         head = f'- {title or bid} (no state yet)'
 
     tail = _format_focus_tail(state, age) if state is not None else ""
-    grid = _format_grid_tail(state) if state is not None else ""
+    grid = _format_grid_tail(state, device_class) if state is not None else ""
     suffix = " ".join(p for p in (grid, tail) if p)
     line = head + (f" {suffix}" if suffix else "")
 
@@ -231,12 +266,18 @@ def _format_outline_line(state) -> str:
     return "    outline: " + " · ".join(parts)
 
 
-def _format_grid_tail(state) -> str:
-    """e.g. '(at x:0 y:0 w:160 h:90)'. Empty when grid is missing."""
+def _format_grid_tail(state, device_class=None) -> str:
+    """e.g. '(at x:0 y:0 w:12 h:9 [desktop])'. Empty when grid is missing.
+
+    `device_class` is appended in brackets so the teacher can tell which
+    grid the coords are in (12×9 desktop, 8×9 tablet, 4×9 phone) when it
+    calls layout_blocks.
+    """
     g = getattr(state, "grid", None) if state is not None else None
     if g is None:
         return ""
-    return f"(at x:{g.x} y:{g.y} w:{g.w} h:{g.h})"
+    suffix = f" [{device_class}]" if device_class else ""
+    return f"(at x:{g.x} y:{g.y} w:{g.w} h:{g.h}{suffix})"
 
 
 def _format_focus_tail(state, age) -> str:

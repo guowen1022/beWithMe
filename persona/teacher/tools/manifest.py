@@ -348,11 +348,15 @@ def _make_layout_blocks(user_id: UUID):
             target_uuid = UUID(target_device_id) if target_device_id else None
         except (ValueError, TypeError):
             return json.dumps({"error": "invalid target_device_id"})
+        device_class = args.get("device_class")
+        if device_class is not None and device_class not in ("phone", "tablet", "desktop"):
+            return json.dumps({"error": "device_class must be 'phone', 'tablet', or 'desktop'"})
         try:
             result = await layout_blocks(
                 user_id=user_id,
                 layouts=layouts,
                 target_device_id=target_uuid,
+                device_class=device_class,
             )
         except ValueError as e:
             return json.dumps({"error": str(e)})
@@ -720,20 +724,26 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
             description=(
                 "Resize and reposition blocks on the canvas to fill empty "
                 "space or arrange blocks side-by-side. The canvas is a "
-                "160-wide × 90-tall grid (cells, not pixels). Pass an array "
-                "of layouts `[{block_id, x, y, w, h}, ...]` and every "
-                "listed block reflows in place — no remount, no reload, "
-                "PDFs stay on the same page. Read the `(at x:.. y:.. w:.. "
-                "h:..)` annotations in CURRENTLY ON CANVAS to know each "
-                "block's starting position. Common layouts: full-bleed "
-                "`{x:0,y:0,w:160,h:90}`; left-half `{x:0,y:0,w:80,h:90}`; "
-                "right-half `{x:80,y:0,w:80,h:90}`; top-third "
-                "`{x:0,y:0,w:160,h:30}`; bottom two-thirds "
-                "`{x:0,y:30,w:160,h:60}`. Use when a block is leaving "
-                "empty space, the user wants two surfaces side-by-side, "
-                "or the user explicitly asks to make something bigger or "
-                "smaller. Constraints: x∈[0,159], y∈[0,89], w≥1, h≥1, "
-                "x+w≤160, y+h≤90."
+                "Bootstrap-style grid whose width depends on the device: "
+                "12 cols on desktop, 8 cols on tablet, 4 cols on phone. "
+                "Rows are always 9. Pass an array of layouts "
+                "`[{block_id, x, y, w, h}, ...]` and every listed block "
+                "reflows in place — no remount, no reload, PDFs stay on "
+                "the same page. Read the `(at x:.. y:.. w:.. h:..)` "
+                "annotations in CURRENTLY ON CANVAS to know each block's "
+                "starting position. Common layouts on DESKTOP (12×9): "
+                "full-bleed `{x:0,y:0,w:12,h:9}`; left-half "
+                "`{x:0,y:0,w:6,h:9}`; right-half `{x:6,y:0,w:6,h:9}`; "
+                "top-third `{x:0,y:0,w:12,h:3}`; bottom two-thirds "
+                "`{x:0,y:3,w:12,h:6}`; thirds "
+                "`{x:0,y:0,w:4,h:9} | {x:4,y:0,w:4,h:9} | {x:8,y:0,w:4,h:9}`. "
+                "On TABLET (8×9) halve the desktop col counts; on PHONE "
+                "(4×9) quarter them. Pass `device_class` to validate "
+                "against the right grid — when omitted, validation uses "
+                "the desktop bounds. Use this tool when a block is "
+                "leaving empty space, the user wants two surfaces "
+                "side-by-side, or the user explicitly asks to make "
+                "something bigger or smaller."
             ),
             params_schema={
                 "type": "object",
@@ -744,10 +754,10 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                             "type": "object",
                             "properties": {
                                 "block_id": {"type": "string"},
-                                "x": {"type": "integer", "minimum": 0, "maximum": 159},
-                                "y": {"type": "integer", "minimum": 0, "maximum": 89},
-                                "w": {"type": "integer", "minimum": 1, "maximum": 160},
-                                "h": {"type": "integer", "minimum": 1, "maximum": 90},
+                                "x": {"type": "integer", "minimum": 0, "maximum": 11},
+                                "y": {"type": "integer", "minimum": 0, "maximum": 8},
+                                "w": {"type": "integer", "minimum": 1, "maximum": 12},
+                                "h": {"type": "integer", "minimum": 1, "maximum": 9},
                             },
                             "required": ["block_id", "x", "y", "w", "h"],
                             "additionalProperties": False,
@@ -757,6 +767,16 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
                     "target_device_id": {
                         "type": "string",
                         "description": "Optional UUID; reflow on this device only.",
+                    },
+                    "device_class": {
+                        "type": "string",
+                        "enum": ["phone", "tablet", "desktop"],
+                        "description": (
+                            "Which grid the layouts target. Read the "
+                            "device_class of the canvas in CURRENTLY ON "
+                            "CANVAS and pass it here. Omit to validate "
+                            "against the desktop grid (12×9)."
+                        ),
                     },
                 },
                 "required": ["layouts"],
