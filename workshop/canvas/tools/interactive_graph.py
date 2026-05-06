@@ -329,16 +329,24 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
       }
     }
 
+    // Serialised render queue. mermaid.render() mutates global state via
+    // processAndSetConfigs(text), so two renders in flight at once corrupt
+    // each other — one ends up with `root.select('#dmermaid-foo-N').node()`
+    // returning null, throwing "Cannot read properties of null (reading
+    // 'firstChild')". Chain every render onto pendingRender so only one is
+    // ever active in mermaid; supersede stale ones via the seq guard.
+    var pendingRender = Promise.resolve();
+
     function renderMermaid(source) {
       var seq = ++renderSeq;
       lastSource = String(source || '');
       lastKind = detectKind(lastSource);
-      ready.then(function (mermaid) {
-        if (seq !== renderSeq) return;
-        var renderId = 'mermaid-' + blockId + '-' + seq;
-        Promise.resolve()
-          .then(function () { return mermaid.render(renderId, lastSource); })
-          .then(function (out) {
+      pendingRender = pendingRender.then(function () {
+        if (seq !== renderSeq) return;   // a newer render superseded us
+        return ready.then(function (mermaid) {
+          if (seq !== renderSeq) return;
+          var renderId = 'mermaid-' + blockId + '-' + seq;
+          return mermaid.render(renderId, lastSource).then(function (out) {
             dropMermaidSandbox(renderId);
             if (seq !== renderSeq) return;
             container.innerHTML = out && out.svg ? out.svg : '';
@@ -356,8 +364,7 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
             }
             if (selectedNode && nodeIds.indexOf(selectedNode) < 0) selectedNode = null;
             pushState();
-          })
-          .catch(function (err) {
+          }).catch(function (err) {
             dropMermaidSandbox(renderId);
             if (seq !== renderSeq) return;
             var msg = err && err.message ? err.message : String(err);
@@ -367,7 +374,8 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
             try { bus.publish(T_ERROR, { message: msg }); } catch (e) {}
             pushState({ error: msg });
           });
-      });
+        });
+      }).catch(function () { /* swallow so the chain stays alive for the next render */ });
     }
 
     var unsubMermaid = bus.subscribe(T_MERMAID, function (value) {
