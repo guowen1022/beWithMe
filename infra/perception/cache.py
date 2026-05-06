@@ -227,6 +227,25 @@ def record_block_state(
         ))
 
 
+def forget_device(*, user_id: UUID, device_id: UUID) -> None:
+    """Drop all cached block state for one (user, device) pair.
+
+    Called when a fresh client SSE channel opens for the device — a fresh
+    client (e.g. Electron restart, full page reload) has zero blocks
+    rendered, so any state cached from the previous client session is
+    stale and must not be returned to the persona. Idempotent. Fires no
+    events: removals are not "changes on live blocks."
+    """
+    uid_s, did_s = str(user_id), str(device_id)
+    by_device = _block_state.get(uid_s)
+    if by_device and did_s in by_device:
+        for bid in list(by_device[did_s].keys()):
+            _block_state_at.pop((uid_s, did_s, bid), None)
+        del by_device[did_s]
+        if not by_device:
+            _block_state.pop(uid_s, None)
+
+
 def forget_block(*, user_id: UUID, block_id: str) -> None:
     """Drop the cached state for a block id across every device.
 
