@@ -26,8 +26,23 @@ from agents.frontend_engineer.build import build as engineer_build, engineer_tur
 from infra.contracts.ui import BlockSource, BlockSpec, UIUpdate
 from infra.db import async_session
 from infra.devices import registry as device_registry
+from infra.sandbox import validate_block_source
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
+
+
+async def _ensure_valid(blocks: list[BlockSource]) -> None:
+    """Sandbox-validate every block source before SSE-fanout. Raises
+    ValueError on the first invalid block so the caller can surface the
+    error to the LLM (engineer or teacher) and retry, instead of mounting
+    a broken block on the user's canvas. Validator infra failures (Node
+    missing, etc.) silently fall through — see infra.sandbox."""
+    for block in blocks:
+        err = await validate_block_source(block.source)
+        if err:
+            raise ValueError(
+                f"engineer produced invalid block source for {block.id!r}: {err}"
+            )
 
 
 async def _online_device_ids(user_id: UUID) -> list[UUID]:
@@ -108,10 +123,15 @@ async def request_ui_block(
             # the smoke path (`/block hello` with the fake LLM) still
             # mounts something visible.
             blocks = await engineer_build(spec_with_user)
+            await _ensure_valid(blocks)
             for block in blocks:
                 await _send(UIUpdate(action="mount", block=block))
                 await _record_mount(user_id, block.id, mount_targets)
             return blocks
+        # Validate the engineer's output before fanning out. Any invalid
+        # block aborts the whole batch — partial mounts of a multi-block
+        # change leave the canvas in an inconsistent state.
+        await _ensure_valid(result.changed)
         for bid in result.deleted:
             await _send(UIUpdate(action="unmount", block=BlockSource(id=bid, source="")))
             await _record_unmount(user_id, bid, unmount_targets)
@@ -122,6 +142,7 @@ async def request_ui_block(
 
     # Fallback path: the hello stub, no engineer turn.
     blocks = await engineer_build(spec_with_user)
+    await _ensure_valid(blocks)
     for block in blocks:
         await _send(UIUpdate(action="mount", block=block))
         await _record_mount(user_id, block.id, mount_targets)

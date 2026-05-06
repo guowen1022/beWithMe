@@ -186,7 +186,13 @@ def _make_request_new_block(user_id: UUID):
         except (ValueError, TypeError):
             return json.dumps({"error": "invalid target_device_id"})
         spec = BlockSpec(description=description)
-        blocks = await request_ui_block(spec, user_id, target_device_id=target_uuid)
+        try:
+            blocks = await request_ui_block(spec, user_id, target_device_id=target_uuid)
+        except ValueError as e:
+            # Sandbox validation rejected the engineer's output. Surface
+            # the message so the teacher's LLM can refine the description
+            # (or the engineer agent rewrites on the next call).
+            return json.dumps({"error": str(e)})
         return json.dumps({"mounted_block_ids": [b.id for b in blocks]})
     return executor
 
@@ -287,6 +293,11 @@ def _make_speak(user_id: UUID):
         text = (args.get("text") or "").strip()
         if not text:
             return json.dumps({"error": "text is required"})
+        channel = (args.get("channel") or "").strip()
+        if channel not in ("voice", "text", "both"):
+            return json.dumps({
+                "error": "channel must be 'voice', 'text', or 'both'"
+            })
         target_device_id = args.get("target_device_id")
         try:
             target_uuid = UUID(target_device_id) if target_device_id else None
@@ -296,6 +307,7 @@ def _make_speak(user_id: UUID):
             delivered = await speak(
                 user_id=user_id,
                 text=text,
+                channel=channel,
                 voice=args.get("voice"),
                 speed=args.get("speed"),
                 lang=args.get("lang"),
@@ -303,7 +315,7 @@ def _make_speak(user_id: UUID):
             )
         except ValueError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps({"delivered_to": delivered})
+        return json.dumps(delivered)
     return executor
 
 
@@ -687,34 +699,43 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
         ToolSpec(
             name="speak",
             description=(
-                "Speak text aloud through the user's connected speakers. "
-                "Use sparingly — only when the user has agreed to voice output, "
-                "or when the visual surface is occupied and audio is the right "
-                "channel. Voice / speed / lang default to the user's saved "
-                "preferences; override only if the request is explicit."
+                "Deliver an utterance to the user via voice (Kokoro audio), "
+                "an on-screen caption (a borderless, always-on-top floating "
+                "strip near the bottom of the screen, like YouTube CC, that "
+                "reveals left-to-right at reading speed and auto-fades), or "
+                "both. Pick `channel` based on TALK PREFERENCE in the "
+                "system context plus the active device class (see "
+                "CURRENTLY ON CANVAS). Voice / speed / lang default to the "
+                "user's saved preferences; override only if the user is "
+                "explicit."
             ),
             params_schema={
                 "type": "object",
                 "properties": {
                     "text": {
                         "type": "string",
-                        "description": "What to speak. 1-3 sentences works best for live audio.",
+                        "description": "What to say. 1-3 sentences works best for both audio latency and an on-screen line that is readable at a glance.",
+                    },
+                    "channel": {
+                        "type": "string",
+                        "enum": ["voice", "text", "both"],
+                        "description": "How to deliver this utterance. 'voice' plays audio only; 'text' shows it in the teacher-speech block only; 'both' does both.",
                     },
                     "voice": {
                         "type": "string",
-                        "description": "Optional kokoro voice id (e.g., 'af_heart').",
+                        "description": "Optional kokoro voice id (e.g., 'af_heart'). Only used when channel includes voice.",
                     },
                     "speed": {
                         "type": "number",
-                        "description": "Optional 0.5-2.0 multiplier on speaking rate.",
+                        "description": "Optional 0.5-2.0 multiplier on speaking rate. Only used when channel includes voice.",
                     },
                     "lang": {
                         "type": "string",
-                        "description": "Optional language tag (e.g., 'en-us').",
+                        "description": "Optional language tag (e.g., 'en-us'). Only used when channel includes voice.",
                     },
                     "target_device_id": {"type": "string"},
                 },
-                "required": ["text"],
+                "required": ["text", "channel"],
                 "additionalProperties": False,
             },
             executor=_make_speak(user_id),

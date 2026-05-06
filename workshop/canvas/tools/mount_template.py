@@ -31,6 +31,7 @@ from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockSource, UIUpdate
 from infra.db import async_session
 from infra.perception import forget_block
+from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
@@ -161,6 +162,16 @@ async def mount_template(
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
 
     rendered = _render_block_source(template, bid, g)
+
+    # Sandbox-validate the rendered source before SSE-fanout. A broken
+    # template (placeholder substitution gone wrong, drifted manifest,
+    # editor that mangled the JS) would otherwise show up as a fallback
+    # error chip on the user's canvas. We surface the issue here as a
+    # tool error so the caller can fix or fall back gracefully.
+    err = await validate_block_source(rendered)
+    if err:
+        raise ValueError(f"template {template_name!r} produced invalid block source: {err}")
+
     md_doc = template.md or f"Mounted from template `{template_name}`."
     block_source = BlockSource(id=bid, source=rendered, design_doc=md_doc)
 
