@@ -261,14 +261,24 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
     function dropMermaidSandbox(renderId) {
       // mermaid.render appends a 'd<renderId>' div to <body> for layout
       // measurement and is supposed to clean it up — but in practice it
-      // leaks. Sweep any sandbox div whose id begins with our prefix.
+      // leaks. Per-render cleanup must touch ONLY this render's div: a
+      // prefix-sweep here would wipe a concurrent render's sandbox while
+      // mermaid is still using it (root.select(#dmermaid-foo-2).node()
+      // → null → "Cannot read properties of null (reading 'firstChild')").
+      // Block-teardown cleanup uses dropAllMermaidSandboxes() instead.
+      if (!renderId) return;
+      try {
+        var direct = document.getElementById('d' + renderId);
+        if (direct) direct.remove();
+      } catch (e) {}
+    }
+
+    function dropAllMermaidSandboxes() {
+      // Block is unmounting — safe to sweep everything we may have
+      // leaked. Only call on teardown, never per-render.
       try {
         var sandboxes = document.body.querySelectorAll('[id^="dmermaid-' + blockId + '-"]');
         for (var i = 0; i < sandboxes.length; i++) sandboxes[i].remove();
-        if (renderId) {
-          var direct = document.getElementById('d' + renderId);
-          if (direct) direct.remove();
-        }
       } catch (e) {}
     }
 
@@ -354,7 +364,7 @@ _GRAPH_BLOCK_JS_TEMPLATE = """\
     });
     cleanup(unsubClear);
 
-    cleanup(function () { dropMermaidSandbox(null); });
+    cleanup(function () { dropAllMermaidSandboxes(); });
     pushState();
   },
 })
