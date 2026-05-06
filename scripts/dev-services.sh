@@ -42,7 +42,7 @@ if [[ "$RELOAD" == "1" ]]; then
   # frontend/node_modules/, data/sessions/, etc. — six watchers chewing 75%+
   # CPU each. Restricting to the dirs that actually contain runtime code
   # drops idle CPU near zero.
-  reload_flag="--reload --reload-dir services --reload-dir persona --reload-dir silicon_brain --reload-dir infra --reload-dir tools --reload-dir agents"
+  reload_flag="--reload --reload-dir services --reload-dir persona --reload-dir silicon_brain --reload-dir infra --reload-dir tools --reload-dir agents --reload-dir workshop"
 fi
 
 pids=()
