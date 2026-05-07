@@ -1,0 +1,90 @@
+"""POST /api/perception/utterance — ambient mic block → perception cache.
+
+Receives the transcript of one user phrase from the ambient_mic block on
+the canvas. Records the utterance into the in-memory perception cache,
+which fires a UserSpeechEvent that each persona's trigger orchestrator
+can subscribe to (filtered by `target_persona`).
+
+No DB writes. Talk is cheap; the utterance lives only as long as the
+persona sidecar process.
+"""
+from __future__ import annotations
+
+from typing import Literal, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
+
+from infra.auth import parse_user_id as get_current_user_id
+from infra.contracts.ui import TeacherThinking
+from infra.perception import record_user_speech
+from services.persona.routers.dynamic import enqueue_for_user
+
+
+router = APIRouter()
+
+
+class UtteranceRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    language: Optional[str] = None
+    audio_duration_s: Optional[float] = None
+    # Routing key — which persona should react. Filtered server-side by
+    # each persona's trigger orchestrator. Defaults to teacher (the only
+    # persona today). Future personas plug in by registering their own
+    # filter on this field.
+    target_persona: str = "teacher"
+
+
+class UtteranceResponse(BaseModel):
+    recorded: Literal[True] = True
+
+
+@router.post("/perception/utterance", response_model=UtteranceResponse, status_code=202)
+async def post_utterance(
+    body: UtteranceRequest,
+    user_id: UUID = Depends(get_current_user_id),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
+) -> UtteranceResponse:
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text cannot be empty")
+
+    device_id: Optional[UUID] = None
+    if x_device_id:
+        try:
+            device_id = UUID(x_device_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="X-Device-Id not a valid UUID")
+
+    record_user_speech(
+        user_id=user_id,
+        text=text,
+        language=body.language,
+        audio_duration_s=body.audio_duration_s,
+        target_persona=body.target_persona,
+        device_id=device_id,
+    )
+
+    # Surface every heard phrase in the existing teacher-thinking debug
+    # panel. Decoupled from the trigger filter — even if the targeted
+    # persona stays silent (or the event is filtered out for not being
+    # this persona's), the user still gets visible confirmation that the
+    # mic + transcribe path works end-to-end.
+    short = text if len(text) <= 200 else (text[:197] + "…")
+    summary_bits = [f"→ {body.target_persona}"]
+    if body.language:
+        summary_bits.append(f"[{body.language}]")
+    if body.audio_duration_s:
+        summary_bits.append(f"{body.audio_duration_s:.1f}s")
+    try:
+        await enqueue_for_user(user_id, TeacherThinking(
+            phase="end",
+            trigger="ambient-mic",
+            summary=" ".join(summary_bits),
+            text=short,
+        ))
+    except Exception as e:
+        print(f"[perception_utterance] debug enqueue failed: {e}", flush=True)
+
+    return UtteranceResponse()

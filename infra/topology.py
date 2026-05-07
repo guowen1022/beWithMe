@@ -63,6 +63,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "concepts":        "persona",   # teacher's mastery model (ConceptNode)
     "graph":           "persona",   # teacher's concept graph data
     "dynamic":         "persona",   # dynamic UI back-channel (SSE stream + push/error)
+    "perception":      "persona",   # ambient_mic block → /api/perception/utterance
     # Stateless infra
     "transcribe": "transcribe",
     "speak":      "speak",

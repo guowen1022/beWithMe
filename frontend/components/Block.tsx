@@ -13,6 +13,9 @@ import {
   type BackendResult,
   type TemplateManifest,
 } from "@/lib/templateManifest";
+import { transcribeAudio } from "@/lib/api";
+import { createMicVad, type MicVadHandle } from "@/lib/vad";
+import * as micArbiter from "@/lib/micArbiter";
 
 type Props = { id: string; source: string };
 
@@ -49,11 +52,138 @@ export function Block({ id, source }: Props) {
     const manifest = (block as { manifest?: TemplateManifest }).manifest;
     const backend = buildBackendHelpers(manifest);
 
+    interface AudioVadOpts {
+      onPhrase: (wav: Blob, phraseId: number) => void | Promise<void>;
+      onInterim?: (wav: Blob, phraseId: number) => void;
+      onSpeechStart?: (phraseId: number) => void;
+      onError?: (err: unknown) => void;
+    }
+    interface AudioVadHandle {
+      stop(): void;
+      paused(): boolean;
+      /** Tear down the VAD + release the mic. The OS-level mic indicator
+       * (orange dot on macOS) only goes off once the underlying stream
+       * is closed, so a "mute" UI must call this — not just gate phrases. */
+      pause(): void;
+      /** Re-acquire the mic arbiter and rebuild the VAD. No-op if not
+       * currently paused or if QuestionBar holds the mic (the subscription
+       * will resume us automatically when it releases). */
+      resume(): void;
+    }
     interface BlockHelpers {
       reportState(state: BlockStateInput): void;
       backend: Record<string, (args?: BackendArgs) => Promise<BackendResult>>;
       blockId: string;
+      audio: {
+        startVad(opts: AudioVadOpts): Promise<AudioVadHandle>;
+        transcribe(blob: Blob, language?: string): Promise<{
+          text: string;
+          duration_seconds: number;
+        }>;
+      };
     }
+
+    // Audio helpers — gated through the mic arbiter so push-to-talk in
+    // QuestionBar can preempt an always-on block VAD without two
+    // getUserMedia tracks fighting each other.
+    const audio: BlockHelpers["audio"] = {
+      async startVad(opts) {
+        let vad: MicVadHandle | null = null;
+        // Two flags: `userPaused` = block called `pause()` (e.g. mute),
+        // `arbiterPaused` = QuestionBar (or another holder) is using the
+        // mic. We resume only when BOTH are false.
+        let userPaused = false;
+        let arbiterPaused = false;
+        let stopped = false;
+
+        const ensureRunning = async () => {
+          if (vad || stopped) return;
+          if (userPaused || arbiterPaused) return;
+          vad = await createMicVad({
+            onSpeechStart: opts.onSpeechStart,
+            onInterim: opts.onInterim,
+            onPhrase: (wav, phraseId) => { void opts.onPhrase(wav, phraseId); },
+            onError: opts.onError,
+          });
+          vad.start();
+        };
+
+        const tearDown = () => {
+          if (!vad) return;
+          try { vad.destroy(); } catch { /* noop */ }
+          vad = null;
+        };
+
+        // Initial acquire — block waits its turn if QuestionBar already
+        // holds the mic; the subscription below resumes us when it releases.
+        // Re-raise getUserMedia / VAD init failures to the caller so the
+        // block can show "mic init failed: <msg>" instead of looking like
+        // it started listening. A non-grant from the arbiter is *not* an
+        // error (QuestionBar is intentionally holding the mic) — that
+        // path resolves with arbiterPaused=true and resumes via the
+        // subscription.
+        const granted = micArbiter.acquire("block");
+        if (granted) {
+          await ensureRunning();
+        } else {
+          arbiterPaused = true;
+        }
+
+        const unsub = micArbiter.subscribe((holder) => {
+          if (holder === "block" || holder === null) {
+            if (holder === null) {
+              if (!micArbiter.acquire("block")) return;
+            }
+            arbiterPaused = false;
+            void ensureRunning().catch((err) => opts.onError?.(err));
+          } else {
+            arbiterPaused = true;
+            tearDown();
+          }
+        });
+
+        return {
+          stop() {
+            stopped = true;
+            unsub();
+            tearDown();
+            micArbiter.release("block");
+          },
+          paused() { return userPaused || arbiterPaused; },
+          pause() {
+            if (userPaused) return;
+            userPaused = true;
+            // Closing the underlying VAD also closes the mic track —
+            // that's what turns the OS indicator off.
+            tearDown();
+            // Hand the mic back so QuestionBar (or anyone else) can pick
+            // it up while we're muted. resume() will re-acquire.
+            micArbiter.release("block");
+          },
+          resume() {
+            if (!userPaused) return;
+            userPaused = false;
+            if (stopped) return;
+            // Re-acquire the arbiter slot. If QuestionBar holds it now,
+            // the arbiter subscription will resume us when they release.
+            const got = micArbiter.acquire("block");
+            if (got) {
+              arbiterPaused = false;
+              void ensureRunning().catch((err) => opts.onError?.(err));
+            } else {
+              arbiterPaused = true;
+            }
+          },
+        };
+      },
+      async transcribe(blob, language) {
+        const { text, duration_seconds } = await transcribeAudio(
+          blob, language ?? "auto", "",
+        );
+        return { text, duration_seconds };
+      },
+    };
+
     const helpers: BlockHelpers = {
       reportState(state: BlockStateInput) {
         lastRichReportAt = Date.now();
@@ -65,6 +195,7 @@ export function Block({ id, source }: Props) {
       },
       backend,
       blockId: id,
+      audio,
     };
 
     try {

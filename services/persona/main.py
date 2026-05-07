@@ -33,6 +33,7 @@ from services.persona.routers import (
     dynamic as dynamic_router,
     goals as goals_router,
     interactions as interactions_router,
+    perception_utterance as perception_utterance_router,
     recommender as recommender_router,
     sessions as sessions_router,
     teacher_media as teacher_media_router,
@@ -65,6 +66,7 @@ app.include_router(sessions_router.router, prefix="/api")
 app.include_router(concepts_router.router, prefix="/api")
 app.include_router(dynamic_router.router, prefix="/api")
 app.include_router(teacher_media_router.router, prefix="/api")
+app.include_router(perception_utterance_router.router, prefix="/api")
 
 
 def main() -> None:

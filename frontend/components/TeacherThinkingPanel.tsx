@@ -34,6 +34,8 @@ const TRIGGER_COLOR: Record<string, string> = {
   "block-completed": "var(--bw-accent)",
   "canvas-changed": "var(--bw-ink-muted)",
   voice: "var(--bw-ink-muted)",
+  "ambient-mic": "#7AA2F7",
+  "user-speech": "#7AA2F7",
   router: "#7AA2F7",
   recommender: "#9D7CD8",
   distiller: "#9D7CD8",
@@ -214,7 +216,7 @@ export default function TeacherThinkingPanel() {
                   ))}
                 </div>
               )}
-              {e.text && (
+              {e.text ? (
                 <div
                   style={{
                     marginTop: 6,
@@ -227,7 +229,25 @@ export default function TeacherThinkingPanel() {
                 >
                   {e.text.length > 200 ? e.text.slice(0, 200) + "…" : e.text}
                 </div>
-              )}
+              ) : (e.done && e.toolCalls.length === 0) ? (
+                // Reception confirmed, no text, no tool calls — the persona
+                // ran the turn and chose to stay silent (the default for
+                // user_speech per skills/respond_to_speech.md). Render an
+                // explicit marker so the user can read this as a deliberate
+                // decision rather than an empty/broken entry.
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "var(--bw-ink-faint)",
+                    fontFamily: "var(--bw-font-serif)",
+                    fontStyle: "italic",
+                    fontSize: 11,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  (silent — no response)
+                </div>
+              ) : null}
               {(e.model || e.promptTokens != null || e.latencyMs != null) && (
                 <div style={{
                   marginTop: 6,

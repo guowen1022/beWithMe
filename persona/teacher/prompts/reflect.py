@@ -24,6 +24,7 @@ from persona.teacher.prompts.skills import load_skill
 if TYPE_CHECKING:
     from persona.teacher.preferences.state import UserProfileState
     from persona.teacher.knowledge.models import ConceptNode
+    from infra.perception.contracts import UserUtterance
 
 
 _CANVAS_SKILLS = (
@@ -70,6 +71,21 @@ def _format_events(events: Iterable[PerceptionEventSummary]) -> str:
     return "\n".join(lines)
 
 
+def _format_recent_user_speech(
+    utterances: Iterable["UserUtterance"],
+) -> str:
+    """One line per utterance, oldest first. Compact and prompt-cheap."""
+    lines: List[str] = []
+    for u in utterances:
+        ts = u.captured_at.strftime("%H:%M:%S") if u.captured_at else "??:??:??"
+        text = (u.text or "").strip().replace("\n", " ")
+        if len(text) > 120:
+            text = text[:117] + "…"
+        lang = f" [{u.language}]" if u.language else ""
+        lines.append(f"- {ts}{lang} {text!r}")
+    return "\n".join(lines)
+
+
 def build(
     events: List[PerceptionEventSummary],
     canvas_state: object = None,
@@ -77,6 +93,7 @@ def build(
     concept_nodes: Optional[List["ConceptNode"]] = None,
     self_description: str = "",
     talk_preference: dict | None = None,
+    recent_user_speech: Optional[List["UserUtterance"]] = None,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
 
@@ -109,6 +126,11 @@ def build(
         system_parts.append(reflect_policy)
         system_parts.append("")
 
+    respond_to_speech = load_skill("teacher/respond_to_speech")
+    if respond_to_speech:
+        system_parts.append(respond_to_speech)
+        system_parts.append("")
+
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 
@@ -127,6 +149,14 @@ def build(
     canvas_section = format_canvas_state(canvas_state)
     if canvas_section:
         dynamic_parts.append(canvas_section)
+
+    if recent_user_speech:
+        speech_section = _format_recent_user_speech(recent_user_speech)
+        if speech_section:
+            dynamic_parts.append(
+                "=== RECENT SPOKEN UTTERANCES (in-memory, this session) ===\n"
+                f"{speech_section}"
+            )
 
     events_section = _format_events(events)
     if events_section:

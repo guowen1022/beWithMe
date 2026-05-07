@@ -64,10 +64,42 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
     lastInterimAt = 0;
   };
 
+  // Hold our own reference to the MediaStream so we can force-stop tracks
+  // regardless of MicVAD's internal state machine. The library's
+  // `destroy()` only calls `pauseStream(stream)` when `listening === true`
+  // (real-time-vad.js:301-315). If the caller destroys mid-init or before
+  // any speech, the library skips track.stop() and the OS-level mic
+  // indicator (orange dot on macOS) stays on. We override `getStream` /
+  // `pauseStream` to capture + stop the stream ourselves, then on
+  // destroy we re-stop unconditionally (track.stop is idempotent).
+  let ownStream: MediaStream | null = null;
+
+  const stopOwnStream = () => {
+    if (!ownStream) return;
+    for (const track of ownStream.getTracks()) {
+      try { track.stop(); } catch { /* noop */ }
+    }
+    ownStream = null;
+  };
+
   const vad: MicVAD = await mod.MicVAD.new({
     ...VAD_TUNING,
     baseAssetPath: ASSET_BASE,
     onnxWASMBasePath: ASSET_BASE,
+    getStream: async () => {
+      ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      return ownStream;
+    },
+    pauseStream: async (s: MediaStream) => {
+      for (const track of s.getTracks()) {
+        try { track.stop(); } catch { /* noop */ }
+      }
+      if (ownStream === s) ownStream = null;
+    },
+    resumeStream: async () => {
+      ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      return ownStream;
+    },
 
     onSpeechStart: () => {
       phraseId += 1;
@@ -112,7 +144,15 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
   return {
     start: () => vad.start(),
     pause: () => vad.pause(),
-    destroy: () => vad.destroy(),
+    destroy: () => {
+      // Best-effort library teardown first so it can release ONNX/audio
+      // resources cleanly. We don't await — `vad.destroy()` returns a
+      // Promise that may resolve later, but we want the mic indicator
+      // off NOW. Then unconditionally stop our captured tracks. Both
+      // calls are idempotent.
+      try { void vad.destroy(); } catch { /* noop */ }
+      stopOwnStream();
+    },
   };
 }
 

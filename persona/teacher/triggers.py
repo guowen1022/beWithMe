@@ -9,12 +9,16 @@ gets a fresh reflect-scenario turn:
   scroll, viewport refresh). Low-signal; the teacher mostly observes.
 - VoiceEvent          → a voice utterance played on the user's speakers.
   Mid-signal; sometimes worth a reaction.
+- UserSpeechEvent     → ambient mic captured a user phrase (target_persona
+  must equal "teacher" or the event is dropped). Mid-signal; the teacher
+  mostly stays silent (see skills/respond_to_speech.md).
 
 Per-event-type runtime budgets keep cost in line:
 
-    completion → 10s cooldown, 1500 max_tokens
-    change     → 30s cooldown,  600 max_tokens (heavily coalesced)
-    voice      →  5s cooldown,  800 max_tokens
+    completion   → 10s cooldown, 1500 max_tokens
+    change       → 30s cooldown,  600 max_tokens (heavily coalesced)
+    voice        →  5s cooldown,  800 max_tokens
+    user_speech  → 12s cooldown,  700 max_tokens (silence-by-default)
 
 All event types feed the same `prompts.reflect.build` — there is no
 per-prompt distinction. The events list carries the type so the LLM
@@ -44,10 +48,18 @@ from uuid import UUID
 from infra.perception import (
     BlockChangeEvent,
     BlockCompletedEvent,
+    UserSpeechEvent,
     VoiceEvent,
     subscribe,
     unsubscribe,
 )
+
+
+# This persona's name. UserSpeechEvents whose `target_persona` doesn't
+# match are dropped at classify-time so they never burn the teacher's
+# cooldown budget. Future personas register their own orchestrator with
+# its own name.
+_PERSONA_NAME = "teacher"
 
 
 # ---- per-event-type runtime budgets --------------------------------------
@@ -62,9 +74,10 @@ class _Budget:
 
 
 _BUDGETS: Dict[str, _Budget] = {
-    "completed": _Budget(cooldown_s=10.0, max_tokens=1500, trigger_label="block-completed"),
-    "change":    _Budget(cooldown_s=30.0, max_tokens=600,  trigger_label="canvas-changed"),
-    "voice":     _Budget(cooldown_s=5.0,  max_tokens=800,  trigger_label="voice"),
+    "completed":   _Budget(cooldown_s=10.0, max_tokens=1500, trigger_label="block-completed"),
+    "change":      _Budget(cooldown_s=30.0, max_tokens=600,  trigger_label="canvas-changed"),
+    "voice":       _Budget(cooldown_s=5.0,  max_tokens=800,  trigger_label="voice"),
+    "user_speech": _Budget(cooldown_s=12.0, max_tokens=700,  trigger_label="user-speech"),
 }
 
 
@@ -83,9 +96,10 @@ class _BucketState:
 @dataclass
 class _UserState:
     buckets: Dict[str, _BucketState] = field(default_factory=lambda: {
-        "completed": _BucketState(),
-        "change":    _BucketState(),
-        "voice":     _BucketState(),
+        "completed":   _BucketState(),
+        "change":      _BucketState(),
+        "voice":       _BucketState(),
+        "user_speech": _BucketState(),
     })
 
 
@@ -127,7 +141,10 @@ def uninstall() -> None:
     _unsubscribe_handle = None
 
 
-def _classify(event: Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent]) -> Optional[str]:
+_AnyEvent = Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent, UserSpeechEvent]
+
+
+def _classify(event: _AnyEvent) -> Optional[str]:
     """Map an event to its bucket key, or None to drop it."""
     if isinstance(event, BlockCompletedEvent):
         return "completed"
@@ -135,11 +152,17 @@ def _classify(event: Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent]) -
         return "change"
     if isinstance(event, VoiceEvent):
         return "voice"
+    if isinstance(event, UserSpeechEvent):
+        # Persona-dispatch filter: only react to events targeted at us.
+        # Future personas drop the events that aren't theirs at this seam.
+        if event.target_persona != _PERSONA_NAME:
+            return None
+        return "user_speech"
     return None
 
 
 def _summarise_event(
-    event: Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent],
+    event: _AnyEvent,
     bucket: str,
 ) -> Any:
     """Convert a cache event to a `PerceptionEventSummary` for the
@@ -156,6 +179,21 @@ def _summarise_event(
             extra=None,
         )
 
+    if bucket == "user_speech":
+        u = event.utterance
+        extra: Dict[str, Any] = {}
+        if u.language:
+            extra["language"] = u.language
+        if u.audio_duration_s is not None:
+            extra["duration_s"] = round(u.audio_duration_s, 2)
+        return PerceptionEventSummary(
+            event_type="user_speech",
+            block_id=None,
+            state_kind=None,
+            content=u.text,
+            extra=extra or None,
+        )
+
     state = event.state
     return PerceptionEventSummary(
         event_type=bucket,  # "completed" or "change"
@@ -167,7 +205,7 @@ def _summarise_event(
 
 
 async def _on_perception_event(
-    event: Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent],
+    event: _AnyEvent,
 ) -> None:
     """Cache-listener entry point. Routes by event type to the right bucket."""
     bucket = _classify(event)
@@ -334,6 +372,14 @@ async def _execute_turn(
         final_text = "".join(text_chunks).strip()
         if error_text:
             final_text = (final_text + "\n\n[error] " + error_text).strip()
+        elif not final_text and not tool_calls_seen:
+            # Teacher reviewed the perception update and chose to act —
+            # by doing nothing. Surface that explicitly so the debug panel
+            # can distinguish "received and decided silence" from "didn't
+            # run at all" / "error swallowed". Especially relevant for
+            # the user_speech bucket where silence is the policy default
+            # (see persona/teacher/skills/respond_to_speech.md).
+            final_text = "(silent — no response chosen)"
         await enqueue_for_user(user_id, TeacherThinking(
             phase="end",
             trigger=budget.trigger_label,

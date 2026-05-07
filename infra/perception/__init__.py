@@ -10,6 +10,7 @@ via cache.subscribe(...) without changing this module's API.
 from infra.perception.cache import (
     record_block_state,
     record_voice,
+    record_user_speech,
     read_for_user,
     forget_block,
     forget_device,
@@ -19,7 +20,9 @@ from infra.perception.cache import (
 from infra.perception.contracts import (
     BlockState,
     VoiceUtterance,
+    UserUtterance,
     VoiceEvent,
+    UserSpeechEvent,
     BlockChangeEvent,
     BlockCompletedEvent,
     BlockSummary,
@@ -31,6 +34,7 @@ from infra.perception.contracts import (
 __all__ = [
     "record_block_state",
     "record_voice",
+    "record_user_speech",
     "read_for_user",
     "forget_block",
     "forget_device",
@@ -38,7 +42,9 @@ __all__ = [
     "unsubscribe",
     "BlockState",
     "VoiceUtterance",
+    "UserUtterance",
     "VoiceEvent",
+    "UserSpeechEvent",
     "BlockChangeEvent",
     "BlockCompletedEvent",
     "BlockSummary",

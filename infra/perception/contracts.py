@@ -61,6 +61,22 @@ class VoiceUtterance(BaseModel):
     played_at: datetime
 
 
+class UserUtterance(BaseModel):
+    """One spoken utterance from the user, captured by the ambient_mic block.
+
+    Ephemeral. Lives only in the perception cache deque; never written to
+    silicon_brain. `target_persona` is the routing key — each persona's
+    trigger orchestrator filters on this.
+    """
+    model_config = _CFG
+    text: str
+    language: Optional[str] = None
+    audio_duration_s: Optional[float] = None
+    device_id: Optional[UUID] = None
+    captured_at: datetime
+    target_persona: str = "teacher"
+
+
 # ---------- change-listener event payloads (P6 hook) ----------
 
 
@@ -95,7 +111,21 @@ class VoiceEvent(BaseModel):
     utterance: VoiceUtterance
 
 
-PerceptionEvent = Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent]
+class UserSpeechEvent(BaseModel):
+    """Fired by cache.record_user_speech when the user speaks.
+
+    Distinct from VoiceEvent (which is the persona's own speech).
+    `target_persona` is duplicated on the event so listeners can filter
+    cheaply without inspecting the utterance payload.
+    """
+    model_config = _CFG
+    type: Literal["user-speech"] = "user-speech"
+    user_id: UUID
+    utterance: UserUtterance
+    target_persona: str
+
+
+PerceptionEvent = Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent, UserSpeechEvent]
 
 
 # ---------- read_media() return shape ----------
@@ -140,8 +170,11 @@ __all__ = [
     "FocusState",
     "BlockState",
     "VoiceUtterance",
+    "UserUtterance",
     "BlockChangeEvent",
+    "BlockCompletedEvent",
     "VoiceEvent",
+    "UserSpeechEvent",
     "PerceptionEvent",
     "BlockSummary",
     "CanvasPerception",

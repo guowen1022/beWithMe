@@ -1,0 +1,276 @@
+({
+  id: '__BLOCK_ID__',
+  grid: { x: __GRID_X__, y: __GRID_Y__, w: __GRID_W__, h: __GRID_H__ },
+  // The block's content is three controls — the teacher reading "MIC ON" via
+  // read_media adds nothing. Skip the auto-snapshot reporter; we still call
+  // helpers.reportState once on mount so the teacher knows the block exists.
+  autosnapshot: false,
+  style: {
+    background: 'var(--bw-surface)',
+    color: 'var(--bw-ink)',
+    fontFamily: 'var(--bw-font-sans)',
+    borderRadius: '0',
+    border: '1px solid var(--bw-border)',
+    padding: '0',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  publishes: ['ambient_mic.muted', 'ambient_mic.speak_to'],
+  run: function (root, bus, cleanup, helpers) {
+    var backend = helpers && helpers.backend ? helpers.backend : null;
+    var audio = helpers && helpers.audio ? helpers.audio : null;
+    var report = helpers && helpers.reportState ? helpers.reportState : function () {};
+
+    var LS_KEY = 'ambient_mic.speak_to';
+    var muted = false;
+    var speakTo = 'teacher';
+    try {
+      if (typeof localStorage !== 'undefined') {
+        var stored = localStorage.getItem(LS_KEY);
+        if (stored) speakTo = stored;
+      }
+    } catch (_) { /* localStorage may be denied; fall through */ }
+
+    // ── Header strip ────────────────────────────────────
+    var header = document.createElement('div');
+    header.style.cssText =
+      'display:flex; align-items:center; gap:10px;' +
+      'padding:9px 12px;' +
+      'background:var(--bw-surface-2);' +
+      'border-bottom:1px solid var(--bw-border);' +
+      'flex-shrink:0;';
+
+    var idChip = document.createElement('span');
+    idChip.textContent = 'MIC';
+    idChip.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:9.5px;' +
+      'color:var(--bw-accent); background:var(--bw-accent-soft);' +
+      'padding:3px 8px; letter-spacing:.08em; text-transform:uppercase;';
+
+    var dot = document.createElement('span');
+    dot.style.cssText =
+      'width:8px; height:8px; border-radius:50%;' +
+      'background:var(--bw-ink-faint); display:inline-block;' +
+      'transition:background-color 0.15s ease, transform 0.2s ease;';
+
+    var status = document.createElement('span');
+    status.textContent = 'listening';
+    status.style.cssText =
+      'flex:1; font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-muted); text-transform:uppercase;' +
+      'letter-spacing:.1em;';
+
+    var counterEl = document.createElement('span');
+    counterEl.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:10px;' +
+      'color:var(--bw-ink-faint); flex-shrink:0;';
+
+    header.appendChild(idChip);
+    header.appendChild(dot);
+    header.appendChild(status);
+    header.appendChild(counterEl);
+    root.appendChild(header);
+
+    // ── Controls row ────────────────────────────────────
+    var controls = document.createElement('div');
+    controls.style.cssText =
+      'padding:10px 12px; display:flex; align-items:center; gap:10px;' +
+      'border-bottom:1px solid var(--bw-border); flex-shrink:0;';
+    root.appendChild(controls);
+
+    var sel = document.createElement('select');
+    sel.style.cssText =
+      'flex:1; min-width:0; padding:6px 8px;' +
+      'font-family:inherit; font-size:11.5px;' +
+      'color:var(--bw-ink); background:var(--bw-surface-2);' +
+      'border:1px solid var(--bw-border); border-radius:0;' +
+      'cursor:pointer;';
+    var opt = document.createElement('option');
+    opt.value = 'teacher';
+    opt.textContent = 'Speak to: Teacher';
+    sel.appendChild(opt);
+    sel.value = speakTo;
+    controls.appendChild(sel);
+
+    var muteBtn = document.createElement('button');
+    muteBtn.type = 'button';
+    muteBtn.textContent = 'Mute';
+    muteBtn.style.cssText =
+      'padding:6px 10px; font-family:inherit; font-size:11px;' +
+      'color:var(--bw-ink); background:var(--bw-surface-2);' +
+      'border:1px solid var(--bw-border); border-radius:0;' +
+      'cursor:pointer; flex-shrink:0;';
+    controls.appendChild(muteBtn);
+
+    // ── Caption row (last-heard transcript) ─────────────
+    var heard = document.createElement('div');
+    heard.style.cssText =
+      'flex:1; padding:10px 12px;' +
+      'font-family:var(--bw-font-mono); font-size:11px;' +
+      'color:var(--bw-ink-muted); line-height:1.45;' +
+      'white-space:pre-wrap; word-break:break-word;' +
+      'overflow:auto;';
+    heard.textContent = 'Waiting for mic to initialize…';
+    root.appendChild(heard);
+
+    // ── State helpers ───────────────────────────────────
+    var startCount = 0;
+    var phraseCount = 0;
+    function refreshCounter() {
+      counterEl.textContent =
+        'speech:' + startCount + '  phrase:' + phraseCount;
+    }
+    refreshCounter();
+
+    function setDot(state) {
+      if (state === 'speaking') {
+        dot.style.background = '#ef4444';
+        dot.style.transform = 'scale(1.4)';
+      } else if (state === 'muted' || state === 'paused') {
+        dot.style.background = 'var(--bw-ink-faint)';
+        dot.style.transform = 'scale(1)';
+      } else {
+        dot.style.background = 'var(--bw-accent)';
+        dot.style.transform = 'scale(1)';
+      }
+    }
+    setDot('paused');
+
+    function setStatus(text) { status.textContent = text; }
+
+    // Persona dropdown
+    var onSelChange = function () {
+      speakTo = sel.value;
+      try { if (typeof localStorage !== 'undefined') localStorage.setItem(LS_KEY, speakTo); }
+      catch (_) { /* noop */ }
+      try { bus.publish('ambient_mic.speak_to', speakTo); } catch (_) { /* noop */ }
+    };
+    sel.addEventListener('change', onSelChange);
+    cleanup(function () { sel.removeEventListener('change', onSelChange); });
+
+    // Will be wired after audio.startVad resolves.
+    var handleRef = { current: null };
+
+    // Mute toggle — actually closes the mic track. Without calling
+    // handle.pause(), the OS-level mic indicator (orange dot on macOS)
+    // stays on; we have to release the underlying getUserMedia stream.
+    var onMuteClick = function () {
+      muted = !muted;
+      muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+      var h = handleRef.current;
+      if (muted) {
+        if (h && h.pause) { try { h.pause(); } catch (e) { console.warn(e); } }
+        setDot('muted');
+        setStatus('muted');
+        heard.textContent = 'Muted — mic is closed.';
+      } else {
+        if (h && h.resume) { try { h.resume(); } catch (e) { console.warn(e); } }
+        setDot('idle');
+        setStatus('listening');
+        heard.textContent = 'Listening for speech…';
+      }
+      try { bus.publish('ambient_mic.muted', muted); } catch (_) { /* noop */ }
+    };
+    muteBtn.addEventListener('click', onMuteClick);
+    cleanup(function () { muteBtn.removeEventListener('click', onMuteClick); });
+
+    if (!audio || !audio.startVad || !backend || !backend.recordUtterance) {
+      setStatus('helpers missing');
+      setDot('paused');
+      heard.textContent =
+        'Block mounted but the audio/backend helpers are unavailable. ' +
+        'Verify Block.tsx exposes helpers.audio.';
+      report({
+        kind: 'ambient_mic',
+        content: 'Mic block mounted, but audio/backend helpers unavailable.',
+        extra: { listening: false, speak_to: speakTo },
+      });
+      return;
+    }
+
+    report({
+      kind: 'ambient_mic',
+      content: 'Ambient mic listening — speaking to ' + speakTo + '.',
+      extra: { listening: true, speak_to: speakTo },
+    });
+
+    var phraseInFlight = 0;
+
+    function onSpeechStart() {
+      startCount++;
+      refreshCounter();
+      console.log('[ambient_mic] onSpeechStart', startCount);
+      if (!muted) {
+        setDot('speaking');
+        setStatus('hearing…');
+      }
+    }
+
+    function onPhrase(wav, phraseId) {
+      phraseCount++;
+      refreshCounter();
+      console.log('[ambient_mic] onPhrase id=', phraseId, 'bytes=', wav && wav.size);
+      if (muted) return Promise.resolve();
+      phraseInFlight++;
+      setDot('speaking');
+      setStatus('transcribing…');
+      return audio.transcribe(wav, 'auto').then(function (out) {
+        var text = (out && out.text ? out.text : '').trim();
+        if (!text) {
+          heard.textContent = '(no speech detected in phrase #' + phraseCount + ')';
+          return null;
+        }
+        // Echo the transcript inline so the user can verify capture before
+        // (or independently of) any teacher reaction.
+        heard.textContent = '“' + text + '”';
+        return backend.recordUtterance({
+          text: text,
+          language: out.language || null,
+          audio_duration_s: out.duration_seconds || null,
+          target_persona: speakTo,
+        });
+      }).catch(function (err) {
+        console.warn('[ambient_mic] phrase failed', err);
+        heard.textContent = 'transcribe error: ' + ((err && err.message) || err);
+      }).then(function () {
+        phraseInFlight = Math.max(0, phraseInFlight - 1);
+        if (phraseInFlight === 0) {
+          setDot(muted ? 'muted' : 'idle');
+          setStatus(muted ? 'muted' : 'listening');
+        }
+      });
+    }
+
+    setStatus('starting mic…');
+    heard.textContent = 'Requesting mic permission…';
+    audio.startVad({
+      onSpeechStart: onSpeechStart,
+      onPhrase: onPhrase,
+      onError: function (err) {
+        console.warn('[ambient_mic] vad error', err);
+        heard.textContent = 'vad error: ' + ((err && err.message) || err);
+      },
+    }).then(function (handle) {
+      handleRef.current = handle;
+      console.log('[ambient_mic] mic ready');
+      setStatus(muted ? 'muted' : 'listening');
+      setDot(muted ? 'muted' : 'idle');
+      if (!muted) heard.textContent = 'Listening for speech…';
+    }).catch(function (err) {
+      console.warn('[ambient_mic] startVad failed', err);
+      var msg = (err && err.message) || String(err);
+      setStatus('mic unavailable');
+      setDot('paused');
+      heard.textContent = 'mic init failed: ' + msg;
+    });
+
+    cleanup(function () {
+      var h = handleRef.current;
+      handleRef.current = null;
+      if (h && h.stop) {
+        try { h.stop(); } catch (_) { /* noop */ }
+      }
+    });
+  },
+})

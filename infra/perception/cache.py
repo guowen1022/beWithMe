@@ -36,6 +36,8 @@ from infra.perception.contracts import (
     BlockCompletedEvent,
     BlockState,
     PerceptionEvent,
+    UserSpeechEvent,
+    UserUtterance,
     VoiceEvent,
     VoiceUtterance,
 )
@@ -45,6 +47,7 @@ from infra.perception.contracts import (
 
 CONTENT_MAX_CHARS = 1000
 VOICE_LOG_MAX = 50
+USER_SPEECH_LOG_MAX = 50
 COALESCE_WINDOW_MS = 500
 
 
@@ -60,6 +63,13 @@ _block_state_at: Dict[tuple, datetime] = {}
 # user_id (str) -> deque[VoiceUtterance]
 _voice_log: Dict[str, Deque[VoiceUtterance]] = defaultdict(
     lambda: deque(maxlen=VOICE_LOG_MAX)
+)
+
+# user_id (str) -> deque[UserUtterance]
+# Ambient speech captured by the ambient_mic block. In-memory only —
+# resets on persona-sidecar restart. Talk is cheap; not promoted to disk.
+_user_speech_log: Dict[str, Deque[UserUtterance]] = defaultdict(
+    lambda: deque(maxlen=USER_SPEECH_LOG_MAX)
 )
 
 Listener = Callable[[PerceptionEvent], Awaitable[None]]
@@ -291,6 +301,33 @@ def record_voice(
     _schedule_fire(VoiceEvent(user_id=user_id, utterance=utt))
 
 
+def record_user_speech(
+    *,
+    user_id: UUID,
+    text: str,
+    language: Optional[str] = None,
+    audio_duration_s: Optional[float] = None,
+    target_persona: str = "teacher",
+    device_id: Optional[UUID] = None,
+) -> None:
+    """Append a user-speech utterance to the in-memory log + fire a
+    UserSpeechEvent. No DB writes. Cheap-talk: persists only as long as
+    the persona sidecar process lives.
+    """
+    utt = UserUtterance(
+        text=text,
+        language=language,
+        audio_duration_s=audio_duration_s,
+        device_id=device_id,
+        captured_at=datetime.utcnow(),
+        target_persona=target_persona,
+    )
+    _user_speech_log[str(user_id)].append(utt)
+    _schedule_fire(UserSpeechEvent(
+        user_id=user_id, utterance=utt, target_persona=target_persona,
+    ))
+
+
 # ---------- reading ----------
 
 
@@ -301,6 +338,7 @@ def read_for_user(user_id: UUID) -> dict:
       {
         "block_state": {device_id_str: {block_id: (BlockState, datetime)}},
         "voice_log": [VoiceUtterance, ...],
+        "user_speech_log": [UserUtterance, ...],
       }
     """
     uid_s = str(user_id)
@@ -312,7 +350,12 @@ def read_for_user(user_id: UUID) -> dict:
             ts = _block_state_at.get((uid_s, did_s, bid))
             state_view[did_s][bid] = (bstate, ts or datetime.utcnow())
     voice = list(_voice_log.get(uid_s, ()))
-    return {"block_state": state_view, "voice_log": voice}
+    user_speech = list(_user_speech_log.get(uid_s, ()))
+    return {
+        "block_state": state_view,
+        "voice_log": voice,
+        "user_speech_log": user_speech,
+    }
 
 
 # ---------- test hooks ----------
@@ -323,6 +366,7 @@ def _reset_for_tests() -> None:
     _block_state.clear()
     _block_state_at.clear()
     _voice_log.clear()
+    _user_speech_log.clear()
     for task in list(_pending_focus_fires.values()):
         if not task.done():
             task.cancel()

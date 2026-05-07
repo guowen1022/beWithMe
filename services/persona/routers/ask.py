@@ -17,6 +17,8 @@ from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from workshop.canvas.tools.request_ui_block import request_ui_block
+from workshop.canvas.tools.mount_template import mount_template
+from infra.templates import list_templates, load_template
 
 router = APIRouter()
 
@@ -24,6 +26,49 @@ router = APIRouter()
 # request_ui_block tool, skipping the LLM router. Useful for testing and
 # for users who know exactly what they want.
 _BLOCK_TRIGGER = re.compile(r"^\s*/block(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+
+
+def _match_template(description: str) -> str | None:
+    """If the user's `/block <description>` names an existing template
+    (by filename, kebab id, or first-word keyword match), return the
+    template name to mount directly. Skips the engineer LLM round-trip
+    for known-good widgets like ambient_mic and pdf_reader.
+    """
+    if not description:
+        return None
+    norm = description.strip().lower().replace("-", " ").replace("_", " ")
+    norm_compact = norm.replace(" ", "")
+    available = list_templates()
+    # Exact name / kebab match first.
+    for name in available:
+        candidates = {
+            name.lower(),
+            name.lower().replace("_", " "),
+            name.lower().replace("_", "-"),
+            name.lower().replace("_", ""),
+        }
+        if norm in candidates or norm_compact in candidates:
+            return name
+    # Substring match: every space-separated token in the description must
+    # appear in the template name OR in its declared keywords. Avoids
+    # matching "I want to upload a file" → upload_file unintentionally,
+    # but lets "ambient mic" → ambient_mic.
+    user_tokens = [t for t in norm.split() if t]
+    if not user_tokens:
+        return None
+    for name in available:
+        try:
+            tpl = load_template(name)
+        except Exception:
+            continue
+        haystack = (
+            name.lower().replace("_", " ")
+            + " "
+            + " ".join(k.lower() for k in tpl.manifest.keywords)
+        )
+        if all(tok in haystack for tok in user_tokens):
+            return name
+    return None
 
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
@@ -46,9 +91,43 @@ async def _block_trigger_stream(description: str, user_id: UUID):
     thinking live. No Interaction is stored — this is a tool invocation,
     not a Q&A turn. The teacher's tree picks up nothing here; the visible
     effect is the block(s) appearing on the canvas.
+
+    Fast path: if `description` names a known template (e.g. "ambient mic"
+    → ambient_mic.{md,js}), call `mount_template` directly and skip the
+    engineer LLM. Saves the round-trip and guarantees the canonical block
+    source instead of an LLM rewrite.
     """
     def fmt(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
+
+    template_name = _match_template(description)
+    if template_name:
+        yield fmt({
+            "type": "status", "status": "thinking",
+            "detail": f"mounting template '{template_name}'",
+        })
+        try:
+            result = await mount_template(user_id=user_id, template_name=template_name)
+            message = f"Mounted '{result.block_id}' from template {template_name}."
+            yield fmt({"type": "title", "title": f"Block: {result.block_id}"})
+            yield fmt({"type": "token", "text": message})
+            yield fmt({
+                "type": "answer",
+                "answer": message,
+                "title": f"Block: {result.block_id}",
+                "related_interaction_ids": [],
+            })
+        except Exception as e:
+            err = f"failed to mount template {template_name}: {e}"
+            print(f"[ask/block-trigger] {err}", flush=True)
+            yield fmt({"type": "token", "text": err})
+            yield fmt({
+                "type": "answer",
+                "answer": err,
+                "title": "Block: error",
+                "related_interaction_ids": [],
+            })
+        return
 
     # Bridge the engineer's async-callback stream through an asyncio.Queue
     # so we can interleave its deltas into our SSE generator.

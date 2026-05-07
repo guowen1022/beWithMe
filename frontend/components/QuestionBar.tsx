@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, type MicVadHandle } from "@/lib/vad";
+import * as micArbiter from "@/lib/micArbiter";
 
 export default function QuestionBar({
   selectedText,
@@ -128,11 +129,17 @@ export default function QuestionBar({
     if (vad) {
       try { vad.destroy(); } catch { /* noop */ }
     }
+    // Hand the mic back so the ambient_mic block (if mounted) can resume.
+    micArbiter.release("questionbar");
   }, []);
 
   const startListening = useCallback(async () => {
     if (!speechSupported || vadRef.current) return;
     try {
+      // Preempt the ambient_mic block (if any) — push-to-talk is an
+      // explicit user gesture and always wins.
+      micArbiter.acquire("questionbar");
+
       committedRef.current = "";
       interimRef.current = "";
       activePhraseRef.current = 0;

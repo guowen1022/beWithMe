@@ -24,6 +24,7 @@ from persona.teacher.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
 
 from infra.db import async_session
+from infra.perception import read_for_user as read_perception
 
 
 async def assemble(
@@ -73,7 +74,18 @@ async def assemble(
         except Exception:
             pass
 
-    # 4. Build the prompt.
+    # 4. Recent user-speech utterances — in-memory only, this session.
+    #    Cap to the last 10 to keep the prompt cheap; talk is cheap and
+    #    older context isn't worth the tokens.
+    recent_user_speech = []
+    try:
+        snapshot = read_perception(user_id)
+        log = snapshot.get("user_speech_log") or []
+        recent_user_speech = list(log)[-10:]
+    except Exception as e:
+        print(f"[teacher.reflect] read user_speech_log error: {e}", flush=True)
+
+    # 5. Build the prompt.
     parts = build_reflect_prompt(
         events=events,
         canvas_state=canvas_state,
@@ -81,6 +93,7 @@ async def assemble(
         concept_nodes=concept_nodes,
         self_description=self_description,
         talk_preference=talk_preference,
+        recent_user_speech=recent_user_speech,
     )
 
     # Reflect turns have no chat history — they are not user-initiated.

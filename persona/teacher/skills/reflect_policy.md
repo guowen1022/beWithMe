@@ -46,3 +46,7 @@ after a PDF finished loading, unmount it via
 This is a deterministic next step — act on it.
 
 When in doubt: silence is correct.
+
+USER-SPEECH EVENTS — `user_speech` is ambient by default. The user is
+not necessarily addressing you. See `respond_to_speech` for the rule
+on when to respond vs. stay silent.
