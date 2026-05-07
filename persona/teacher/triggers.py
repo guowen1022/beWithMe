@@ -18,7 +18,8 @@ Per-event-type runtime budgets keep cost in line:
     completion   → 10s cooldown, 1500 max_tokens
     change       → 30s cooldown,  600 max_tokens (heavily coalesced)
     voice        →  5s cooldown,  800 max_tokens
-    user_speech  → 12s cooldown,  700 max_tokens (silence-by-default)
+    user_speech  →  2s cooldown,  700 max_tokens (silence-by-default,
+                                                  dedupe identical text)
 
 All event types feed the same `prompts.reflect.build` — there is no
 per-prompt distinction. The events list carries the type so the LLM
@@ -77,7 +78,7 @@ _BUDGETS: Dict[str, _Budget] = {
     "completed":   _Budget(cooldown_s=10.0, max_tokens=1500, trigger_label="block-completed"),
     "change":      _Budget(cooldown_s=30.0, max_tokens=600,  trigger_label="canvas-changed"),
     "voice":       _Budget(cooldown_s=5.0,  max_tokens=800,  trigger_label="voice"),
-    "user_speech": _Budget(cooldown_s=12.0, max_tokens=700,  trigger_label="user-speech"),
+    "user_speech": _Budget(cooldown_s=2.0,  max_tokens=700,  trigger_label="user-speech"),
 }
 
 
@@ -274,6 +275,17 @@ async def _run_turn(user_id: UUID, bucket: str) -> None:
     bucket_state = state.buckets[bucket]
     events = list(bucket_state.queue)
     bucket_state.queue.clear()
+    # For user_speech, the user often repeats themselves while waiting on
+    # a response ("hello hello hello"). Collapsing duplicates keeps the
+    # batched turn focused on the latest unique phrase rather than
+    # responding to a stack of the same utterance.
+    if bucket == "user_speech" and len(events) > 1:
+        seen: dict[str, int] = {}
+        for i, e in enumerate(events):
+            key = (e.content or "").strip().lower()
+            if key:
+                seen[key] = i
+        events = [events[i] for i in sorted(seen.values())]
     try:
         await _execute_turn(user_id, bucket, events)
     except Exception as e:

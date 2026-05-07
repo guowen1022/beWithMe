@@ -161,6 +161,9 @@
       var h = handleRef.current;
       if (muted) {
         if (h && h.pause) { try { h.pause(); } catch (e) { console.warn(e); } }
+        // Belt-and-suspenders: even if pause() somehow missed (stale code,
+        // race with init), nuke any leaked mic stream this module opened.
+        if (audio && audio.stopAll) { try { audio.stopAll(); } catch (e) { console.warn(e); } }
         setDot('muted');
         setStatus('muted');
         heard.textContent = 'Muted — mic is closed.';
@@ -270,6 +273,12 @@
       handleRef.current = null;
       if (h && h.stop) {
         try { h.stop(); } catch (_) { /* noop */ }
+      }
+      // Belt-and-suspenders: nuke any leaked mic stream this module
+      // opened in case a previous instance's cleanup didn't run after
+      // an HMR swap.
+      if (audio && audio.stopAll) {
+        try { audio.stopAll(); } catch (_) { /* noop */ }
       }
     });
   },

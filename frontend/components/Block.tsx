@@ -14,7 +14,7 @@ import {
   type TemplateManifest,
 } from "@/lib/templateManifest";
 import { transcribeAudio } from "@/lib/api";
-import { createMicVad, type MicVadHandle } from "@/lib/vad";
+import { createMicVad, stopAllMicStreams, type MicVadHandle } from "@/lib/vad";
 import * as micArbiter from "@/lib/micArbiter";
 
 type Props = { id: string; source: string };
@@ -80,6 +80,10 @@ export function Block({ id, source }: Props) {
           text: string;
           duration_seconds: number;
         }>;
+        /** Defensive: stop every mic track this module ever opened.
+         * Used by the ambient_mic block as belt-and-suspenders during
+         * mute/cleanup, in case a previous instance leaked. */
+        stopAll(): void;
       };
     }
 
@@ -182,6 +186,7 @@ export function Block({ id, source }: Props) {
         );
         return { text, duration_seconds };
       },
+      stopAll() { stopAllMicStreams(); },
     };
 
     const helpers: BlockHelpers = {

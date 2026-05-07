@@ -49,6 +49,26 @@ const INTERIM_STRIDE_SAMPLES = Math.floor(SAMPLE_RATE * 0.5);
 // (which serves from a local dev server or file://) works the same as web.
 const ASSET_BASE = "/vad/";
 
+// Module-level registry of every MediaStream this module has acquired.
+// Belt-and-suspenders: even if a `MicVadHandle.destroy()` was missed
+// somehow (e.g. a previous block instance whose React cleanup didn't
+// fire after an HMR swap), `stopAllMicStreams()` enumerates and stops
+// every track this module ever opened. ambient_mic.js calls it on
+// mute/cleanup.
+const _liveStreams: Set<MediaStream> = new Set();
+
+export function stopAllMicStreams(): void {
+  if (_liveStreams.size === 0) return;
+  let total = 0;
+  for (const s of Array.from(_liveStreams)) {
+    for (const t of s.getTracks()) {
+      try { t.stop(); total++; } catch { /* noop */ }
+    }
+    _liveStreams.delete(s);
+  }
+  console.log(`[vad.stopAll] stopped ${total} mic track(s)`);
+}
+
 export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
   const mod = await import("@ricky0123/vad-web");
 
@@ -75,11 +95,17 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
   let ownStream: MediaStream | null = null;
 
   const stopOwnStream = () => {
-    if (!ownStream) return;
+    if (!ownStream) {
+      console.log("[vad.destroy] no ownStream to stop");
+      return;
+    }
+    const n = ownStream.getTracks().length;
     for (const track of ownStream.getTracks()) {
       try { track.stop(); } catch { /* noop */ }
     }
+    _liveStreams.delete(ownStream);
     ownStream = null;
+    console.log(`[vad.destroy] stopped ${n} mic track(s)`);
   };
 
   const vad: MicVAD = await mod.MicVAD.new({
@@ -88,16 +114,19 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
     onnxWASMBasePath: ASSET_BASE,
     getStream: async () => {
       ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      _liveStreams.add(ownStream);
       return ownStream;
     },
     pauseStream: async (s: MediaStream) => {
       for (const track of s.getTracks()) {
         try { track.stop(); } catch { /* noop */ }
       }
+      _liveStreams.delete(s);
       if (ownStream === s) ownStream = null;
     },
     resumeStream: async () => {
       ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      _liveStreams.add(ownStream);
       return ownStream;
     },
 
