@@ -121,23 +121,34 @@ export default function TeacherThinkingPanel() {
     return () => ctrl.abort();
   }, []);
 
-  if (entries.length === 0) return null;
-
-  const latest = entries[0];
+  // No entries yet → render an empty placeholder so the cell stays in the
+  // grid without taking visible space. The persona can `unmount` the
+  // system block via SSE if it wants the slot freed.
+  const empty = entries.length === 0;
   const wrapStyle: React.CSSProperties = {
-    position: "fixed",
-    right: 16,
-    bottom: 80,
-    maxWidth: 360,
+    position: "absolute",
+    inset: 0,
     fontFamily: "var(--bw-font-mono)",
     fontSize: 11,
     color: "var(--bw-ink)",
-    background: "var(--bw-surface)",
-    border: "1px solid var(--bw-border)",
+    background: empty ? "transparent" : "var(--bw-surface)",
+    border: empty ? "1px dashed var(--bw-border)" : "1px solid var(--bw-border)",
     borderRadius: 0,
-    zIndex: 60,
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    opacity: empty ? 0.5 : 1,
   };
+  if (empty) {
+    return (
+      <div style={wrapStyle} data-teacher-thinking="">
+        <div style={{ padding: "6px 10px", color: "var(--bw-ink-muted)" }}>
+          teacher thinking ○ idle
+        </div>
+      </div>
+    );
+  }
+  const latest = entries[0];
   const headerStyle: React.CSSProperties = {
     display: "flex",
     alignItems: "center",

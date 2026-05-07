@@ -149,12 +149,14 @@ export default function CanvasCommandBar() {
   return (
     <div
       style={{
-        position: "fixed",
-        bottom: 24,
-        left: "50%",
-        transform: "translateX(-50%)",
-        width: "min(720px, 90vw)",
-        zIndex: 1100, // above the (chromeless) layout's z:1000 backdrop
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "flex-end",
+        padding: "0 16px 12px",
+        // Form/debug stack pushes against the bottom of the cell. The
+        // shell handles grid placement; here we only do internal layout.
       }}
     >
       {error && (

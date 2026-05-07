@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { bus } from "@/lib/bus";
 import { evalBlockSource, normalizeStyle, reportBlockError } from "@/lib/dynamic";
 import { postBlockState, type BlockStateInput, type BlockFocus } from "@/lib/blockState";
 import { useDeviceClass } from "@/lib/device";
-import { scaleGridForDevice } from "@/lib/gridConfig";
+import { scaleGridForDevice, type GridCoords } from "@/lib/gridConfig";
+import { blockLayout } from "@/lib/blockLayout";
+import { startBlockDrag } from "@/lib/blockDrag";
 import { focusTracker } from "@/lib/focusTracker";
 import {
   buildBackendHelpers,
@@ -24,8 +26,18 @@ const SNAPSHOT_MAX_CHARS = 1000;
 
 export function Block({ id, source }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const result = useMemo(() => evalBlockSource(source), [source]);
   const device = useDeviceClass();
+
+  // Subscribe to layout overrides so a dragged-and-dropped position survives
+  // re-renders. Stable reference per id when unchanged.
+  const subscribeLayout = useCallback(
+    (l: () => void) => blockLayout.subscribe(l),
+    [],
+  );
+  const getLayout = useCallback(() => blockLayout.get(id), [id]);
+  const layoutOverride = useSyncExternalStore(subscribeLayout, getLayout, getLayout);
 
   useEffect(() => {
     if (!result.ok) {
@@ -307,10 +319,12 @@ export function Block({ id, source }: Props) {
   const block = result.block;
   const isOverlay = block.layer === "overlay";
   const userZ = typeof block.z === "number" ? block.z : 0;
-  // Block sources declare their grid in desktop coords (12×9). Scale to
-  // the active device class so the same source works on phone (4×9) and
-  // tablet (8×9) without per-device rendering.
-  const scaled = scaleGridForDevice(block.grid, device);
+  // Block sources declare their grid in desktop coords (12×9). The user
+  // may have dragged this block to a new cell; that override wins over
+  // the source's declared grid. Scale the effective desktop coords to
+  // the active device class so one source works across breakpoints.
+  const baseGrid: GridCoords = layoutOverride ?? block.grid;
+  const scaled = scaleGridForDevice(baseGrid, device);
   const gridStyle: React.CSSProperties = {
     gridColumn: `${scaled.x + 1} / span ${scaled.w}`,
     gridRow: `${scaled.y + 1} / span ${scaled.h}`,
@@ -319,11 +333,60 @@ export function Block({ id, source }: Props) {
     zIndex: (isOverlay ? 100 : 0) + userZ,
   };
 
+  const draggable = !isOverlay && (block as { draggable?: boolean }).draggable !== false;
+
+  const onDragStart = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!draggable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const surface = wrapper.closest<HTMLElement>("[data-dynamic-surface]");
+    if (!surface) return;
+    const startCoords: GridCoords = blockLayout.get(id) ?? block.grid;
+    startBlockDrag({
+      id,
+      wrapper,
+      surface,
+      device,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startCoords,
+    });
+  };
+
   return (
     <div
-      ref={ref}
+      ref={wrapperRef}
       data-block-id={id}
-      style={{ ...gridStyle, ...(block.style ? normalizeStyle(block.style) : {}) }}
-    />
+      className="group"
+      style={gridStyle}
+    >
+      <div
+        ref={ref}
+        style={{
+          ...(block.style ? normalizeStyle(block.style) : {}),
+          position: "absolute",
+          inset: 0,
+        }}
+      />
+      {draggable && (
+        <button
+          type="button"
+          onPointerDown={onDragStart}
+          aria-label="Drag block"
+          title="Drag to move"
+          className="absolute top-1.5 left-1.5 w-6 h-6 rounded
+                     bg-black/45 border border-white/15 backdrop-blur-sm
+                     opacity-0 group-hover:opacity-90 hover:opacity-100
+                     transition-opacity cursor-grab active:cursor-grabbing
+                     text-white/80 text-[13px] leading-none flex items-center justify-center
+                     select-none"
+          style={{ touchAction: "none", zIndex: 1000 }}
+        >
+          ⠿
+        </button>
+      )}
+    </div>
   );
 }

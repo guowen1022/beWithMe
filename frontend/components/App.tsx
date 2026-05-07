@@ -10,7 +10,6 @@ import UserSelector from "./UserSelector";
 import Onboarding from "./Onboarding";
 import GoalPlanner from "./GoalPlanner";
 import DynamicSurface from "./DynamicSurface";
-import CanvasCommandBar from "./CanvasCommandBar";
 
 export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
@@ -92,11 +91,13 @@ export default function App() {
     return <GoalPlanner onBack={() => setGoalMode(false)} />;
   }
 
-  // Canvas IS the reader. Full-bleed at "/", no chrome above it.
+  // Canvas IS the reader. Full-bleed at "/", no chrome above it. The
+  // command bar and teacher-thinking panel render as `system:` blocks
+  // inside DynamicSurface so they share the same grid + drag system as
+  // every other block on the canvas.
   return (
     <div className="relative flex-1 bg-[var(--bw-void)]">
       <DynamicSurface mode="fullscreen" />
-      <CanvasCommandBar />
     </div>
   );
 }

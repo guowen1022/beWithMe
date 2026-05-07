@@ -3,7 +3,6 @@ import { Geist, Geist_Mono, Onest, Fraunces, JetBrains_Mono } from "next/font/go
 import SpeakerSink from "@/components/SpeakerSink";
 import TeacherCaption from "@/components/TeacherCaption";
 import DesktopBrowserPerception from "@/components/DesktopBrowserPerception";
-import TeacherThinkingPanel from "@/components/TeacherThinkingPanel";
 import MermaidLoader from "@/components/MermaidLoader";
 import "./globals.css";
 
@@ -55,7 +54,6 @@ export default function RootLayout({
         <SpeakerSink />
         <TeacherCaption />
         <DesktopBrowserPerception />
-        <TeacherThinkingPanel />
         <MermaidLoader />
       </body>
     </html>
