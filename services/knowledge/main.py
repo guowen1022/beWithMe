@@ -25,6 +25,7 @@ from services.knowledge.routers import (
     preferences,
     profile,
     retrieval,
+    talk_preference,
     users,
 )
 from infra.topology import service_port
@@ -36,6 +37,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(preferences.router, prefix="/api")
+app.include_router(talk_preference.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
 app.include_router(retrieval.router, prefix="/api")
 

@@ -5,12 +5,17 @@ import {
   getPreferences,
   distillPreferences,
   getConcepts,
+  getTalkPreference,
+  updateTalkPreference,
+  DEFAULT_TALK_PREFERENCE,
   type Preferences,
   type Concept,
   type DebugEvent,
+  type TalkPreference,
 } from "@/lib/api";
 import KnowledgeGraph from "./KnowledgeGraph";
 import SessionCanvas from "./SessionCanvas";
+import TalkPreferenceControls from "./TalkPreferenceControls";
 
 const PREF_LABELS: Record<string, string> = {
   explanation_style: "Explanation Style",
@@ -51,6 +56,10 @@ export default function DebugPanel({
   const [tab, setTab] = useState<DebugTab>(initialTab ?? "prefs");
   const [graphKey, setGraphKey] = useState(0);
   const [sessionsKey, setSessionsKey] = useState(0);
+  const [talkPref, setTalkPref] = useState<TalkPreference>(DEFAULT_TALK_PREFERENCE);
+  const [talkPrefLoaded, setTalkPrefLoaded] = useState<boolean>(false);
+  const [talkPrefSavedAt, setTalkPrefSavedAt] = useState<number | null>(null);
+  const [talkPrefSaving, setTalkPrefSaving] = useState<boolean>(false);
 
   // Switch tab when initialTab prop changes (e.g., after ending a session)
   useEffect(() => {
@@ -63,7 +72,29 @@ export default function DebugPanel({
   const loadData = useCallback(() => {
     getPreferences().then(setPrefs).catch(() => setPrefs(null));
     getConcepts().then(setConcepts).catch(() => setConcepts([]));
+    getTalkPreference()
+      .then((value) => {
+        setTalkPref(value);
+        setTalkPrefLoaded(true);
+      })
+      .catch(() => {
+        setTalkPref(DEFAULT_TALK_PREFERENCE);
+        setTalkPrefLoaded(true);
+      });
   }, []);
+
+  async function handleSaveTalkPreference() {
+    setTalkPrefSaving(true);
+    try {
+      const saved = await updateTalkPreference(talkPref);
+      setTalkPref(saved);
+      setTalkPrefSavedAt(Date.now());
+    } catch (err) {
+      console.error("[talk-preference] save failed", err);
+    } finally {
+      setTalkPrefSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (open) loadData();
@@ -197,6 +228,37 @@ export default function DebugPanel({
             >
               {distilling ? "Distilling..." : "Distill Now"}
             </button>
+
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  Talk channel
+                </p>
+                {talkPrefSavedAt && Date.now() - talkPrefSavedAt < 4000 && (
+                  <span className="text-[10px] text-green-600 dark:text-green-400">
+                    saved
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                Per device: <strong>Voice</strong> plays audio,{" "}
+                <strong>Caption</strong> shows the words at the bottom of the
+                screen, <strong>Both</strong> does both.
+              </p>
+              <TalkPreferenceControls
+                value={talkPref}
+                onChange={setTalkPref}
+                disabled={!talkPrefLoaded}
+                variant="dim"
+              />
+              <button
+                onClick={handleSaveTalkPreference}
+                disabled={talkPrefSaving || !talkPrefLoaded}
+                className="rounded-md bg-gray-100 dark:bg-gray-800 px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                {talkPrefSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
 
             {prefs ? (
               <div className="space-y-3">

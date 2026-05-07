@@ -53,6 +53,14 @@ ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_id TEXT NO
 ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_speed DOUBLE PRECISION NOT NULL DEFAULT 1.0;
 ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS voice_lang TEXT NOT NULL DEFAULT 'en-us';
 
+-- Per-device talk channel (voice / text / both). Replaces the earlier
+-- free-text talk_preference column; we drop that here so existing dev
+-- DBs converge on the structured shape.
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS talk_desktop TEXT NOT NULL DEFAULT 'both';
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS talk_tablet TEXT NOT NULL DEFAULT 'both';
+ALTER TABLE IF EXISTS user_preferences ADD COLUMN IF NOT EXISTS talk_phone TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE IF EXISTS user_preferences DROP COLUMN IF EXISTS talk_preference;
+
 -- Recursive question on existing interactions
 ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS parent_interaction_id UUID REFERENCES interactions(id) ON DELETE SET NULL;
 ALTER TABLE IF EXISTS interactions ADD COLUMN IF NOT EXISTS title VARCHAR(200);

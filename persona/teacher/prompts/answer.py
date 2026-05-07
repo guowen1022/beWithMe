@@ -39,6 +39,7 @@ def build(
     concept_nodes: Optional[List["ConceptNode"]] = None,
     graph_context: str = "",
     canvas_state: object = None,
+    talk_preference: dict | None = None,
 ) -> PromptParts:
     """Build the answer-scenario prompt.
 
@@ -78,6 +79,7 @@ def build(
 
     # Preferences + background blocks (cacheable; rare to change).
     system_parts.extend(preferences_block.render(user_profile, self_description))
+    system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 
     # Mastery snapshot (cacheable; updated when concepts decay/recall).
     mastery = summarise_mastery(concept_nodes)

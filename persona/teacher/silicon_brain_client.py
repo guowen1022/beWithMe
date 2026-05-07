@@ -62,6 +62,18 @@ class SiliconBrainClient:
         resp.raise_for_status()
         return UserProfileDTO.model_validate(resp.json())
 
+    async def get_talk_preference(self, user_id: UUID) -> dict:
+        """Per-device talk-channel preference.
+
+        Returns `{"desktop": ..., "tablet": ..., "phone": ...}`, each
+        value one of `voice` | `text` | `both`. The defaults
+        (desktop=both, tablet=both, phone=text) are applied server-side
+        on first read.
+        """
+        resp = await self._http.get("/api/talk-preference", headers=_user_headers(user_id))
+        resp.raise_for_status()
+        return resp.json()
+
     async def search_document_chunks(
         self,
         user_id: UUID,

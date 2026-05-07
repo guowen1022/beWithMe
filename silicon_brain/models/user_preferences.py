@@ -48,4 +48,14 @@ class UserPreferences(Base):
     voice_speed: Mapped[float] = mapped_column(Float, default=DEFAULT_VOICE_SPEED)
     voice_lang: Mapped[str] = mapped_column(Text, default=DEFAULT_VOICE_LANG)
 
+    # Per-device-class talk channel — one of "voice" | "text" | "both".
+    # The teacher's system prompt renders these as a deterministic rule
+    # so the LLM picks the channel that matches the active device class
+    # without judgment. Defaults match the most useful behaviour on each
+    # form factor: desktop/tablet get audio + caption, phone is caption-
+    # only because users are often somewhere they can't put audio out.
+    talk_desktop: Mapped[str] = mapped_column(Text, default="both")
+    talk_tablet: Mapped[str] = mapped_column(Text, default="both")
+    talk_phone: Mapped[str] = mapped_column(Text, default="text")
+
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

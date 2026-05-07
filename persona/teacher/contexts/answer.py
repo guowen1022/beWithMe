@@ -51,6 +51,13 @@ async def assemble(
         print(f"[teacher] get_profile error: {e}", flush=True)
         self_description = ""
 
+    # 1a'. Per-device talk-channel preference (desktop/tablet/phone → voice|text|both).
+    try:
+        talk_preference = await client.get_talk_preference(user_id)
+    except Exception as e:
+        print(f"[teacher] get_talk_preference error: {e}", flush=True)
+        talk_preference = None
+
     # 1b. Teacher's preference state (categorical + embedding).
     user_profile = await get_user_profile(db, user_id, session_id=body.session_id)
 
@@ -155,6 +162,7 @@ async def assemble(
         concept_nodes=concept_nodes,
         graph_context=graph_ctx,
         canvas_state=canvas_state,
+        talk_preference=talk_preference,
     )
 
     return TeacherContext(parts=parts, prior_messages=prior_messages)

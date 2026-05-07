@@ -122,7 +122,10 @@ def _scripted_tool_call(text: str, tools: List[ToolSpec]) -> Optional[Dict[str, 
     if "speak" in lower and "speak" in by_name:
         return {
             "name": "speak",
-            "arguments": {"text": "hello from the fake provider"},
+            "arguments": {
+                "text": "hello from the fake provider",
+                "channel": "voice",
+            },
         }
     if "point_arrow" in lower and "point_arrow" in by_name:
         return {

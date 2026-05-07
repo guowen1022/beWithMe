@@ -401,6 +401,46 @@ export async function distillPreferences(): Promise<Preferences> {
   return res.json();
 }
 
+// Per-device talk-channel preference. Each device class picks one of
+// "voice" | "text" | "both"; the teacher's system prompt renders this as
+// a deterministic rule and the LLM applies the matching channel on every
+// `speak()` call. Server defaults: desktop=both, tablet=both, phone=text.
+export type TalkChannel = "voice" | "text" | "both";
+
+export interface TalkPreference {
+  desktop: TalkChannel;
+  tablet: TalkChannel;
+  phone: TalkChannel;
+}
+
+export const DEFAULT_TALK_PREFERENCE: TalkPreference = {
+  desktop: "both",
+  tablet: "both",
+  phone: "text",
+};
+
+export async function getTalkPreference(): Promise<TalkPreference> {
+  const res = await fetch(`${API_BASE}/talk-preference`, {
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to fetch talk preference");
+  return res.json();
+}
+
+export async function updateTalkPreference(
+  pref: TalkPreference,
+): Promise<TalkPreference> {
+  const res = await fetch(`${API_BASE}/talk-preference`, {
+    method: "PUT",
+    headers: authHeaders(),
+    body: JSON.stringify(pref),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error("Failed to update talk preference");
+  return res.json();
+}
+
 export interface Concept {
   id: string;
   name: string;

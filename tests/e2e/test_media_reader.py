@@ -119,6 +119,7 @@ def test_speak_tool_records_voice_log(test_user_id: str):
     asyncio.run(speak_tool.speak(
         user_id=user_uuid,
         text="hello, this is the persona",
+        channel="voice",
         target_device_id=device_uuid,
     ))
 

@@ -76,6 +76,7 @@ def build(
     user_profile: Optional["UserProfileState"] = None,
     concept_nodes: Optional[List["ConceptNode"]] = None,
     self_description: str = "",
+    talk_preference: dict | None = None,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
 
@@ -109,6 +110,7 @@ def build(
         system_parts.append("")
 
     system_parts.extend(preferences_block.render(user_profile, self_description))
+    system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 
     mastery = summarise_mastery(concept_nodes)
     if mastery:

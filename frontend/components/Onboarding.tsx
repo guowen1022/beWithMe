@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { updateProfile } from "@/lib/api";
+import {
+  updateProfile,
+  updateTalkPreference,
+  DEFAULT_TALK_PREFERENCE,
+  type TalkPreference,
+} from "@/lib/api";
+import TalkPreferenceControls from "./TalkPreferenceControls";
 
 export default function Onboarding({
   onComplete,
@@ -9,6 +15,7 @@ export default function Onboarding({
   onComplete: (desc: string) => void;
 }) {
   const [description, setDescription] = useState("");
+  const [talkPref, setTalkPref] = useState<TalkPreference>(DEFAULT_TALK_PREFERENCE);
   const [saving, setSaving] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -17,6 +24,7 @@ export default function Onboarding({
     setSaving(true);
     try {
       await updateProfile(description);
+      await updateTalkPreference(talkPref);
       onComplete(description);
     } catch (err) {
       console.error(err);
@@ -42,6 +50,19 @@ export default function Onboarding({
           className="w-full rounded-lg border border-gray-300 p-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           placeholder="e.g. I'm a grad student in computational neuroscience. I'm comfortable with linear algebra and probability but new to deep learning. I prefer intuitive explanations before formalism..."
         />
+
+        <div>
+          <h2 className="text-sm font-medium text-gray-700">
+            How should I talk to you?
+          </h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Pick a channel per device. <strong>Voice</strong> plays Kokoro
+            audio. <strong>Caption</strong> shows a YouTube-style line at the
+            bottom. <strong>Both</strong> does both.
+          </p>
+        </div>
+        <TalkPreferenceControls value={talkPref} onChange={setTalkPref} />
+
         <button
           type="submit"
           disabled={saving || !description.trim()}

@@ -53,14 +53,20 @@ async def assemble(
     except Exception as e:
         print(f"[teacher.reflect] db read error: {e}", flush=True)
 
-    # 3. Self-description from silicon_brain.
+    # 3. Self-description + per-device talk preference from silicon_brain.
     self_description = ""
+    talk_preference: dict | None = None
     client = SiliconBrainClient()
     try:
-        profile = await client.get_profile(user_id)
-        self_description = profile.self_description if profile else ""
-    except Exception as e:
-        print(f"[teacher.reflect] get_profile error: {e}", flush=True)
+        try:
+            profile = await client.get_profile(user_id)
+            self_description = profile.self_description if profile else ""
+        except Exception as e:
+            print(f"[teacher.reflect] get_profile error: {e}", flush=True)
+        try:
+            talk_preference = await client.get_talk_preference(user_id)
+        except Exception as e:
+            print(f"[teacher.reflect] get_talk_preference error: {e}", flush=True)
     finally:
         try:
             await client.aclose()
@@ -74,6 +80,7 @@ async def assemble(
         user_profile=user_profile,
         concept_nodes=concept_nodes,
         self_description=self_description,
+        talk_preference=talk_preference,
     )
 
     # Reflect turns have no chat history — they are not user-initiated.

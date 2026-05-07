@@ -45,4 +45,40 @@ def render(
     return out
 
 
-__all__ = ["render"]
+_VALID_CHANNELS = {"voice", "text", "both"}
+_DEFAULT_TALK_PREF: dict[str, str] = {
+    "desktop": "both",
+    "tablet": "both",
+    "phone": "text",
+}
+
+
+def render_talk_preference(talk_preference: dict | None) -> List[str]:
+    """Return system_parts lines describing how the teacher should
+    deliver `speak()` utterances.
+
+    `talk_preference` is `{desktop, tablet, phone}`, each value
+    `voice` | `text` | `both`. The user's saved per-device choice is
+    rendered as a deterministic rule the LLM applies by reading the
+    active device class from CURRENTLY ON CANVAS — no natural-language
+    interpretation required.
+    """
+    pref = dict(_DEFAULT_TALK_PREF)
+    if isinstance(talk_preference, dict):
+        for k in ("desktop", "tablet", "phone"):
+            v = talk_preference.get(k)
+            if isinstance(v, str) and v in _VALID_CHANNELS:
+                pref[k] = v
+    return [
+        "",
+        "TALK CHANNEL RULE — apply on every `speak` call:",
+        f"  * desktop → channel='{pref['desktop']}'",
+        f"  * tablet  → channel='{pref['tablet']}'",
+        f"  * phone   → channel='{pref['phone']}'",
+        "Read the active device class from CURRENTLY ON CANVAS and "
+        "pick the matching channel. `channel` is required — never "
+        "call `speak` without it.",
+    ]
+
+
+__all__ = ["render", "render_talk_preference"]
