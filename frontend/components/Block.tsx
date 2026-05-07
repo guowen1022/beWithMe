@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { bus } from "@/lib/bus";
-import { evalBlockSource, normalizeStyle, reportBlockError } from "@/lib/dynamic";
+import { evalBlockSource, normalizeStyle, reportBlockError, sourceRegistry } from "@/lib/dynamic";
 import { postBlockState, type BlockStateInput, type BlockFocus } from "@/lib/blockState";
 import { useDeviceClass } from "@/lib/device";
 import { scaleGridForDevice, type GridCoords } from "@/lib/gridConfig";
@@ -334,6 +334,13 @@ export function Block({ id, source }: Props) {
   };
 
   const draggable = !isOverlay && (block as { draggable?: boolean }).draggable !== false;
+  const removable = (block as { removable?: boolean }).removable !== false;
+
+  const onClose = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sourceRegistry.unmount(id);
+  };
 
   const onDragStart = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!draggable) return;
@@ -385,6 +392,23 @@ export function Block({ id, source }: Props) {
           style={{ touchAction: "none", zIndex: 1000 }}
         >
           ⠿
+        </button>
+      )}
+      {removable && (
+        <button
+          type="button"
+          onPointerDown={onClose}
+          aria-label="Close block"
+          title="Remove from canvas"
+          className="absolute top-1.5 right-1.5 w-6 h-6 rounded
+                     bg-black/45 border border-white/15 backdrop-blur-sm
+                     opacity-0 group-hover:opacity-90 hover:opacity-100 hover:bg-red-500/30 hover:border-red-400/50 hover:text-red-200
+                     transition-colors transition-opacity cursor-pointer
+                     text-white/80 text-[13px] leading-none flex items-center justify-center
+                     select-none"
+          style={{ zIndex: 1000 }}
+        >
+          ×
         </button>
       )}
     </div>

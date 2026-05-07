@@ -11,11 +11,13 @@ import { useDeviceClass } from "@/lib/device";
 import { scaleGridForDevice, type GridCoords } from "@/lib/gridConfig";
 import { blockLayout } from "@/lib/blockLayout";
 import { startBlockDrag } from "@/lib/blockDrag";
+import { systemBlocks } from "@/lib/systemBlocks";
 
 type Props = {
   id: string;
   defaultGrid: GridCoords;
   draggable?: boolean;
+  removable?: boolean;
   z?: number;
   contentStyle?: React.CSSProperties;
   children: React.ReactNode;
@@ -25,6 +27,7 @@ export function BlockShell({
   id,
   defaultGrid,
   draggable = true,
+  removable = true,
   z = 0,
   contentStyle,
   children,
@@ -94,6 +97,27 @@ export function BlockShell({
           style={{ touchAction: "none", zIndex: 1000 }}
         >
           ⠿
+        </button>
+      )}
+      {removable && (
+        <button
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            systemBlocks.hide(id);
+          }}
+          aria-label="Close block"
+          title="Hide (persona can re-mount)"
+          className="absolute top-1.5 right-1.5 w-6 h-6 rounded
+                     bg-black/45 border border-white/15 backdrop-blur-sm
+                     opacity-0 group-hover:opacity-90 hover:opacity-100 hover:bg-red-500/30 hover:border-red-400/50 hover:text-red-200
+                     transition-colors transition-opacity cursor-pointer
+                     text-white/80 text-[13px] leading-none flex items-center justify-center
+                     select-none"
+          style={{ zIndex: 1000 }}
+        >
+          ×
         </button>
       )}
     </div>

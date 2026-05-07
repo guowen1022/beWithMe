@@ -418,22 +418,25 @@ def _make_block_action(user_id: UUID):
 # the full set. Keep this map narrow — adding a tool to a wrong lane can
 # cause Lane A to spend its single iteration on a structural call.
 _TOOL_LANES: Dict[str, set[Lane]] = {
-    # Lane A says one thing and stops. `speak` is the verb. Lane B never
-    # talks to the user directly — its results surface via the notice
-    # queue that Lane A drains next turn.
+    # Lane A talks to the user AND can perform fast structural actions
+    # (mount/unmount blocks, scroll, push content) so a request like
+    # "open the uploader" actually mounts the widget instead of just
+    # claiming it did. The defining rule: tools that are pure SSE
+    # fan-outs (no extra LLM call, complete in ms) stay on Lane A;
+    # tools that themselves invoke the LLM, do RAG, or duplicate
+    # context that's already in the prompt go to Lane B only.
     "speak":              {"answer", "user_facing"},
-    # Lane B does structural / slow work. Hide from Lane A entirely so
-    # the single allowed iteration isn't spent on a structural call.
-    "read_media":         {"answer", "background"},
-    "read_document":      {"answer", "background"},
-    "list_media":         {"answer", "background"},
-    "mount_template":     {"answer", "background"},
-    "request_new_block":  {"answer", "background"},
-    "push_block_content": {"answer", "background"},
-    "interactive_graph":  {"answer", "background"},
-    "point_arrow":        {"answer", "background"},
-    "layout_blocks":      {"answer", "background"},
-    "block_action":       {"answer", "background"},
+    "mount_template":     {"answer", "user_facing", "background"},
+    "block_action":       {"answer", "user_facing", "background"},
+    "push_block_content": {"answer", "user_facing", "background"},
+    "point_arrow":        {"answer", "user_facing", "background"},
+    "layout_blocks":      {"answer", "user_facing", "background"},
+    "interactive_graph":  {"answer", "user_facing", "background"},
+    # Slow / redundant — Lane A would burn its single iteration here.
+    "read_media":         {"answer", "background"},   # canvas state already in prompt
+    "read_document":      {"answer", "background"},   # vector RAG, slow
+    "list_media":         {"answer", "background"},   # deprecated
+    "request_new_block":  {"answer", "background"},   # engineer LLM, very slow
 }
 
 
