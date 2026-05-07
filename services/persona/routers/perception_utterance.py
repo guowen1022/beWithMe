@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from infra.auth import parse_user_id as get_current_user_id
 from infra.contracts.ui import TeacherThinking
-from infra.perception import record_user_speech
+from infra.perception import is_likely_echo, record_user_speech
 from services.persona.routers.dynamic import enqueue_for_user
 
 
@@ -56,6 +56,20 @@ async def post_utterance(
             device_id = UUID(x_device_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="X-Device-Id not a valid UUID")
+
+    # Echo dedup. The ambient_mic block on the same device as the
+    # speakers can pick up the teacher's own TTS through the mic.
+    # The transcript that comes back is essentially what the teacher
+    # just said. Drop it server-side instead of in the frontend so
+    # the user can still INTERRUPT the teacher with anything that
+    # isn't a near-match of the running utterance ("stop", "wait",
+    # a different question).
+    if is_likely_echo(user_id, text):
+        print(
+            f"[perception_utterance] dropped echo: user={user_id} text={text[:80]!r}",
+            flush=True,
+        )
+        return UtteranceResponse()
 
     record_user_speech(
         user_id=user_id,

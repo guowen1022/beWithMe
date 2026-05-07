@@ -14,6 +14,7 @@ from infra.perception.cache import (
     read_for_user,
     forget_block,
     forget_device,
+    is_likely_echo,
     subscribe,
     unsubscribe,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "read_for_user",
     "forget_block",
     "forget_device",
+    "is_likely_echo",
     "subscribe",
     "unsubscribe",
     "BlockState",

@@ -1,5 +1,14 @@
 """In-memory perception cache.
 
+Includes echo dedup: when an `ambient_mic` block on the same device as
+an active speaker captures the teacher's own TTS played through the
+speakers, the resulting transcript is essentially the teacher's
+recent utterance. `is_likely_echo(...)` compares an incoming user
+transcript against the user's recent teacher voice utterances; the
+perception_utterance endpoint uses it to drop echoes server-side
+without suppressing legitimate user interruptions like "stop" or
+"wait" (which won't match any teacher utterance).
+
 Single source of truth for "what is the user receiving right now."
 Producers (frontend blocks, tools/speak.py) write here; consumers (the
 persona's read_media tool) read from here. No DB writes — state is
@@ -25,9 +34,11 @@ COALESCE_WINDOW_MS after the last focus-only change for that block.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Union
 from uuid import UUID
 
@@ -49,6 +60,13 @@ CONTENT_MAX_CHARS = 1000
 VOICE_LOG_MAX = 50
 USER_SPEECH_LOG_MAX = 50
 COALESCE_WINDOW_MS = 500
+
+# Echo dedup tunables.
+ECHO_WINDOW_S = 15.0       # only compare against teacher utterances this recent
+ECHO_RATIO_THRESHOLD = 0.6 # SequenceMatcher.ratio above this → echo
+ECHO_SUBSET_MIN_TOKENS = 4 # ignore subset matches shorter than this (so "ok"
+                           # uttered while teacher said "okay sure" doesn't get
+                           # mis-classified as echo)
 
 
 # ---------- state ----------
@@ -92,6 +110,75 @@ def _state_with_truncation(state: BlockState) -> BlockState:
     if len(state.content) <= CONTENT_MAX_CHARS:
         return state
     return state.model_copy(update={"content": _truncate(state.content)})
+
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _normalize_for_compare(s: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace. Stable for
+    SequenceMatcher input."""
+    if not s:
+        return ""
+    tokens = _WORD_RE.findall(s.lower())
+    return " ".join(tokens)
+
+
+def is_likely_echo(
+    user_id: UUID,
+    text: str,
+    *,
+    window_s: float = ECHO_WINDOW_S,
+    ratio_threshold: float = ECHO_RATIO_THRESHOLD,
+) -> bool:
+    """Return True if `text` looks like an echo of something the
+    teacher recently said on this user's device.
+
+    Used by the perception endpoint to drop transcripts that are
+    actually the teacher's own TTS leaking back through the mic, while
+    still letting genuine user interruptions through ("stop", "wait",
+    "hold on" — none of which appear inside the teacher's running
+    utterance).
+
+    Heuristics, in order:
+      1. Exact normalized match.
+      2. User's normalized text is a substring of any recent teacher
+         utterance (with a token-count floor so single short words
+         don't false-positive).
+      3. SequenceMatcher.ratio >= threshold against any recent
+         teacher utterance.
+
+    Only checks teacher-source voice entries within `window_s` seconds.
+    """
+    norm_user = _normalize_for_compare(text)
+    if not norm_user:
+        return False
+    user_token_count = len(norm_user.split())
+
+    log = _voice_log.get(str(user_id))
+    if not log:
+        return False
+
+    cutoff = datetime.utcnow() - timedelta(seconds=window_s)
+    for v in log:
+        if getattr(v, "source", "external") != "teacher":
+            continue
+        if v.played_at < cutoff:
+            continue
+        norm_teacher = _normalize_for_compare(v.text)
+        if not norm_teacher:
+            continue
+        if norm_user == norm_teacher:
+            return True
+        if (
+            user_token_count >= ECHO_SUBSET_MIN_TOKENS
+            and norm_user in norm_teacher
+        ):
+            return True
+        ratio = SequenceMatcher(None, norm_user, norm_teacher).ratio()
+        if ratio >= ratio_threshold:
+            return True
+    return False
 
 
 def _is_focus_only_change(prev: Optional[BlockState], new: BlockState) -> bool:
