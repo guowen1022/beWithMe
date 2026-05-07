@@ -113,7 +113,19 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
     baseAssetPath: ASSET_BASE,
     onnxWASMBasePath: ASSET_BASE,
     getStream: async () => {
-      ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ownStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          // Acoustic echo cancellation — the browser/OS subtracts the
+          // device's own speaker output from the mic capture. Without
+          // this, the teacher's TTS plays through the speakers, gets
+          // re-captured by the mic, and the transcript comes back as
+          // if the user said it. Belt-and-suspenders with the
+          // speaker-state gate in Block.tsx.
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       _liveStreams.add(ownStream);
       return ownStream;
     },
@@ -125,7 +137,19 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
       if (ownStream === s) ownStream = null;
     },
     resumeStream: async () => {
-      ownStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ownStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          // Acoustic echo cancellation — the browser/OS subtracts the
+          // device's own speaker output from the mic capture. Without
+          // this, the teacher's TTS plays through the speakers, gets
+          // re-captured by the mic, and the transcript comes back as
+          // if the user said it. Belt-and-suspenders with the
+          // speaker-state gate in Block.tsx.
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       _liveStreams.add(ownStream);
       return ownStream;
     },

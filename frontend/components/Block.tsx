@@ -18,6 +18,7 @@ import {
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, stopAllMicStreams, type MicVadHandle } from "@/lib/vad";
 import * as micArbiter from "@/lib/micArbiter";
+import * as speakerState from "@/lib/speakerState";
 
 type Props = { id: string; source: string };
 
@@ -116,9 +117,29 @@ export function Block({ id, source }: Props) {
           if (vad || stopped) return;
           if (userPaused || arbiterPaused) return;
           vad = await createMicVad({
-            onSpeechStart: opts.onSpeechStart,
-            onInterim: opts.onInterim,
-            onPhrase: (wav, phraseId) => { void opts.onPhrase(wav, phraseId); },
+            // Drop the speech-start signal too while the speaker is
+            // active so the block UI doesn't flicker red on the
+            // teacher's own voice leaking back through the mic.
+            onSpeechStart: (phraseId) => {
+              if (speakerState.isPlaying()) return;
+              opts.onSpeechStart?.(phraseId);
+            },
+            onInterim: (wav, phraseId) => {
+              if (speakerState.isPlaying()) return;
+              opts.onInterim?.(wav, phraseId);
+            },
+            onPhrase: (wav, phraseId) => {
+              // Acoustic echo cancellation in getUserMedia handles
+              // most of this, but a quiet room with active speakers
+              // can still leak the teacher's TTS back through the mic
+              // and fool VAD. If the speaker was actively playing
+              // any time during the phrase we just captured, drop it.
+              if (speakerState.isPlaying()) {
+                console.log("[block.audio] phrase dropped (speaker active)");
+                return;
+              }
+              void opts.onPhrase(wav, phraseId);
+            },
             onError: opts.onError,
           });
           vad.start();

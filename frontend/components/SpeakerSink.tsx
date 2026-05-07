@@ -19,6 +19,7 @@
 import { useEffect, useRef } from "react";
 
 import { speakTextStream, subscribeToDynamicStream } from "@/lib/api";
+import { startChunk as speakerStartChunk, endChunk as speakerEndChunk } from "@/lib/speakerState";
 
 interface VoiceJob {
   text: string;
@@ -131,6 +132,11 @@ export default function SpeakerSink() {
         src.buffer = buf;
         src.connect(ctx.destination);
         const start = Math.max(ctx.currentTime, nextStartRef.current);
+        // Tell the ambient_mic block we're actively playing so VAD can
+        // drop phrases captured during this window (echo of the
+        // teacher's own voice). Pair start/end on every chunk.
+        speakerStartChunk();
+        src.onended = () => { speakerEndChunk(); };
         src.start(start);
         nextStartRef.current = start + buf.duration;
       }
