@@ -94,6 +94,7 @@ def build(
     self_description: str = "",
     talk_preference: dict | None = None,
     recent_user_speech: Optional[List["UserUtterance"]] = None,
+    recent_notices: Optional[List[str]] = None,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
 
@@ -157,6 +158,15 @@ def build(
                 "=== RECENT SPOKEN UTTERANCES (in-memory, this session) ===\n"
                 f"{speech_section}"
             )
+
+    if recent_notices:
+        notices_lines = "\n".join(f"- {n}" for n in recent_notices)
+        dynamic_parts.append(
+            "=== RECENT BACKGROUND ACTIONS ===\n"
+            "(Lane B finished these tasks since your last reply. Surface them "
+            "naturally only if relevant to the user's last utterance.)\n"
+            f"{notices_lines}"
+        )
 
     events_section = _format_events(events)
     if events_section:

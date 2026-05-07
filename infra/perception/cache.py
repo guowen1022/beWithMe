@@ -292,10 +292,20 @@ def record_voice(
     text: str,
     voice: Optional[str] = None,
     device_id: Optional[UUID] = None,
+    source: str = "external",
 ) -> None:
-    """Append a voice utterance to the user's log + fire a VoiceEvent."""
+    """Append a voice utterance to the user's log + fire a VoiceEvent.
+
+    `source="teacher"` flags the persona's own speech so the teacher's
+    orchestrator can drop the resulting event instead of waking another
+    reflect turn.
+    """
     utt = VoiceUtterance(
-        text=text, voice=voice, device_id=device_id, played_at=datetime.utcnow(),
+        text=text,
+        voice=voice,
+        device_id=device_id,
+        played_at=datetime.utcnow(),
+        source=source,
     )
     _voice_log[str(user_id)].append(utt)
     _schedule_fire(VoiceEvent(user_id=user_id, utterance=utt))

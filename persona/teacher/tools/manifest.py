@@ -12,8 +12,21 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 from uuid import UUID
+
+
+# Lane tags for tool filtering. See `build_tools(lane=...)`.
+#   "answer"      — full toolset, used by /api/ask (typed Q&A).
+#   "user_facing" — Lane A reflect: the teacher is replying to the user via
+#                   speech. Only `speak` is exposed; structural / slow tools
+#                   (read_media, mount_template, engineer delegation) are
+#                   hidden so the LLM cannot waste the single allowed
+#                   iteration on something that should be a Lane B task.
+#   "background"  — Lane B work: everything except `speak`. The background
+#                   pool does NOT talk to the user — its results surface
+#                   via the notice queue that Lane A drains next turn.
+Lane = Literal["answer", "user_facing", "background"]
 
 from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
@@ -401,13 +414,41 @@ def _make_block_action(user_id: UUID):
     return executor
 
 
-def build_tools(user_id: UUID) -> List[ToolSpec]:
+# Tool-name → set of lanes it appears on. Anything not listed defaults to
+# the full set. Keep this map narrow — adding a tool to a wrong lane can
+# cause Lane A to spend its single iteration on a structural call.
+_TOOL_LANES: Dict[str, set[Lane]] = {
+    # Lane A says one thing and stops. `speak` is the verb. Lane B never
+    # talks to the user directly — its results surface via the notice
+    # queue that Lane A drains next turn.
+    "speak":              {"answer", "user_facing"},
+    # Lane B does structural / slow work. Hide from Lane A entirely so
+    # the single allowed iteration isn't spent on a structural call.
+    "read_media":         {"answer", "background"},
+    "read_document":      {"answer", "background"},
+    "list_media":         {"answer", "background"},
+    "mount_template":     {"answer", "background"},
+    "request_new_block":  {"answer", "background"},
+    "push_block_content": {"answer", "background"},
+    "interactive_graph":  {"answer", "background"},
+    "point_arrow":        {"answer", "background"},
+    "layout_blocks":      {"answer", "background"},
+    "block_action":       {"answer", "background"},
+}
+
+
+def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
     """Return the per-request tool list for the teacher.
 
     Each call gets a fresh list with executors bound to this user_id. The
     LLM cannot supply a different user_id — that's enforced by closure.
+
+    `lane` filters the toolset:
+    - "answer" (default): full set, for /api/ask (typed Q&A).
+    - "user_facing": Lane A reflect — only `speak`.
+    - "background": Lane B work — everything except `speak`.
     """
-    return [
+    full = [
         ToolSpec(
             name="read_media",
             description=(
@@ -843,6 +884,10 @@ def build_tools(user_id: UUID) -> List[ToolSpec]:
             executor=_make_block_action(user_id),
         ),
     ]
+    # Filter by lane. Any tool not listed in _TOOL_LANES is treated as
+    # available everywhere (forward-compat for tools added without
+    # remembering to update the map).
+    return [t for t in full if lane in _TOOL_LANES.get(t.name, {"answer", "user_facing", "background"})]
 
 
 __all__ = ["build_tools"]

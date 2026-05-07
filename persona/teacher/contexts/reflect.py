@@ -16,6 +16,7 @@ from typing import List
 from persona.teacher.contexts.answer import TeacherContext
 from persona.teacher.preferences import get_user_profile
 from persona.teacher.knowledge import get_concepts
+from persona.teacher import notices as teacher_notices
 from persona.teacher.prompts.reflect import (
     PerceptionEventSummary,
     build as build_reflect_prompt,
@@ -85,7 +86,17 @@ async def assemble(
     except Exception as e:
         print(f"[teacher.reflect] read user_speech_log error: {e}", flush=True)
 
-    # 5. Build the prompt.
+    # 5. Drain pending Lane B notices. Lane B (background pool) appends
+    #    one-line summaries of completed work; Lane A surfaces them in the
+    #    next reply when relevant. Drain (not peek) so we don't surface
+    #    the same notice twice.
+    recent_notices: list[str] = []
+    try:
+        recent_notices = teacher_notices.drain(user_id)
+    except Exception as e:
+        print(f"[teacher.reflect] drain notices error: {e}", flush=True)
+
+    # 6. Build the prompt.
     parts = build_reflect_prompt(
         events=events,
         canvas_state=canvas_state,
@@ -94,6 +105,7 @@ async def assemble(
         self_description=self_description,
         talk_preference=talk_preference,
         recent_user_speech=recent_user_speech,
+        recent_notices=recent_notices,
     )
 
     # Reflect turns have no chat history — they are not user-initiated.

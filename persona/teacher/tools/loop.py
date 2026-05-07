@@ -86,10 +86,16 @@ async def run(
     prior_messages: Optional[List[Dict[str, Any]]],
     tools: List[ToolSpec],
     max_tokens: int = 4096,
+    max_iterations: int = _MAX_TOOL_TURNS,
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
+
+    `max_iterations` caps the number of tool-result → re-prompt rounds.
+    Default is the historical 6 (suitable for `/ask` and Lane B background
+    work). Lane A (user-facing reflect) passes 1 to short-circuit the
+    loop and answer quickly.
 
     Final `done` shape:
       {"kind": "done", "text": full_answer, "usage": last_usage,
@@ -126,7 +132,7 @@ async def run(
     except Exception:
         pass
 
-    for turn in range(_MAX_TOOL_TURNS + 1):
+    for turn in range(max_iterations + 1):
         pending_calls: List[Dict[str, Any]] = []
         stop_reason = "end_turn"
 
@@ -180,7 +186,7 @@ async def run(
 
         if not pending_calls or stop_reason != "tool_use":
             break
-        if turn >= _MAX_TOOL_TURNS:
+        if turn >= max_iterations:
             # Hard cap — surface a final answer turn anyway, but stop
             # asking the model to call more tools.
             break

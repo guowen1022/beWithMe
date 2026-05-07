@@ -36,6 +36,8 @@ const TRIGGER_COLOR: Record<string, string> = {
   voice: "var(--bw-ink-muted)",
   "ambient-mic": "#7AA2F7",
   "user-speech": "#7AA2F7",
+  "lane-a": "#7AA2F7",
+  "lane-b": "#9D7CD8",
   router: "#7AA2F7",
   recommender: "#9D7CD8",
   distiller: "#9D7CD8",

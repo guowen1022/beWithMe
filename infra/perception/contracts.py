@@ -53,12 +53,20 @@ class BlockState(BaseModel):
 
 
 class VoiceUtterance(BaseModel):
-    """One spoken utterance — what the persona itself said, when, where."""
+    """One spoken utterance played on a device's speakers.
+
+    `source` distinguishes the persona's own speech (`"teacher"`) from
+    anything else (`"external"` — currently unused, reserved for future
+    e.g. another participant on a shared device). The teacher's
+    orchestrator drops `source="teacher"` voice events at classify time
+    so a `speak()` call doesn't recursively wake another reflect turn.
+    """
     model_config = _CFG
     text: str
     voice: Optional[str] = None
     device_id: Optional[UUID] = None
     played_at: datetime
+    source: str = "external"
 
 
 class UserUtterance(BaseModel):
