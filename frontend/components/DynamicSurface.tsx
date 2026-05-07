@@ -6,7 +6,7 @@ import { bus } from "@/lib/bus";
 import { sourceRegistry, type SourceEntry } from "@/lib/dynamic";
 import { useDeviceClass } from "@/lib/device";
 import { GRID_SIZES } from "@/lib/gridConfig";
-import { fetchCanvas, subscribeToDynamicStream } from "@/lib/api";
+import { fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
 
@@ -46,9 +46,9 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
   // Hydrate the registry from the user's per-user-git workspace on
   // mount. With templates being ephemeral (no workspace writes), the
   // hydrator only sees engineer-novel widgets the user has explicitly
-  // saved — empty for new users. Nothing else pre-loads. The user
-  // starts on a blank canvas; they bring blocks in by typing in the
-  // command bar (or the teacher mounts something on their behalf).
+  // saved — empty for new users. When the canvas is empty, mount the
+  // `lets_begin` welcome card as the first paint; clicking it transitions
+  // the canvas to the ambient_mic block.
   useEffect(() => {
     if (mode !== "fullscreen") return;
     let cancelled = false;
@@ -57,6 +57,16 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
         if (cancelled) return;
         for (const b of blocks) {
           sourceRegistry.mount({ id: b.id, source: b.source });
+        }
+        if (blocks.length === 0) {
+          // Mount the welcome card. The mount fans out via SSE — the
+          // useEffect below subscribes to that stream and will pick up
+          // the resulting ui-update mount. Best-effort: if the POST
+          // fails (e.g. backend unreachable) the canvas just stays
+          // empty, which is the prior behavior.
+          mountTemplate({ template: "lets_begin" }).catch((err) =>
+            console.warn("[dynamic-surface] lets_begin auto-mount failed", err),
+          );
         }
       })
       .catch((err) => console.warn("[dynamic-surface] hydration failed", err));
