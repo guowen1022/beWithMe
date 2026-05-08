@@ -237,9 +237,17 @@ body {
 .bw-prose blockquote :is(strong, em) { color: var(--bw-ink); }
 
 /* Tables — TradingView-density. Mono uppercase column labels, tabular
-   numerals, accent-soft row hover, sharp hairlines. */
+   numerals, accent-soft row hover, sharp hairlines.
+
+   Columns are content-sized (`width: auto`) rather than stretched to fill
+   the block. A 2-col table of short values (e.g. "Title | Year") used to
+   render with a canyon between columns under `width: 100%`; auto-width
+   keeps cells close-packed at padding distance, so the table reads as
+   one object instead of two floating columns. `max-width: 100%` caps
+   the natural width at the block's edge for wide tables. */
 .bw-prose table {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 0.93em;
   margin: 1.2em 0;
