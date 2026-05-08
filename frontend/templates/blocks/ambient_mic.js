@@ -225,13 +225,31 @@
           return null;
         }
         // Echo the transcript inline so the user can verify capture before
-        // (or independently of) any teacher reaction.
+        // (or independently of) any teacher reaction. If the server
+        // turns around and says it's an echo of our own TTS, we clear
+        // it below — this brief flash is the cost of the round-trip.
         heard.textContent = '“' + text + '”';
         return backend.recordUtterance({
           text: text,
           language: out.language || null,
           audio_duration_s: out.duration_seconds || null,
           target_persona: speakTo,
+        }).then(function (resp) {
+          // Server echo dedup: when the perception endpoint identifies
+          // this phrase as the teacher's own TTS bouncing back through
+          // the speakers, it returns accepted=false reason=echo. Hide
+          // the displayed transcript so the panel doesn't fill with
+          // the teacher's own words (matches the server behavior of
+          // suppressing the debug-panel emit). Anything else stays
+          // visible — including legitimate interruptions ("stop",
+          // "wait") that the dedup is designed to let through.
+          if (resp && resp.accepted === false && resp.reason === 'echo') {
+            // Only clear if the user hasn't already started a fresh phrase.
+            if (heard.textContent.indexOf(text) !== -1) {
+              heard.textContent = muted ? 'muted' : 'Listening for speech…';
+            }
+          }
+          return resp;
         });
       }).catch(function (err) {
         console.warn('[ambient_mic] phrase failed', err);

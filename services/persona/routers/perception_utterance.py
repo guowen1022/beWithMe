@@ -10,7 +10,7 @@ persona sidecar process.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -37,7 +37,17 @@ class UtteranceRequest(BaseModel):
 
 
 class UtteranceResponse(BaseModel):
-    recorded: Literal[True] = True
+    # `accepted` is the canonical signal — True when the utterance was
+    # recorded into the perception cache, False when it was dropped
+    # (today only on echo dedup). `reason` is set when accepted=False
+    # so the frontend can decide how to render the rejection (e.g.
+    # "echo" → quietly clear the displayed transcript so the user
+    # doesn't see their own speakers' words echo back). `recorded`
+    # is the legacy field name; mirrors `accepted` for back-compat
+    # and will be removed once no callers rely on it.
+    accepted: bool = True
+    reason: Optional[str] = None
+    recorded: bool = True
 
 
 @router.post("/perception/utterance", response_model=UtteranceResponse, status_code=202)
@@ -69,7 +79,7 @@ async def post_utterance(
             f"[perception_utterance] dropped echo: user={user_id} text={text[:80]!r}",
             flush=True,
         )
-        return UtteranceResponse()
+        return UtteranceResponse(accepted=False, reason="echo", recorded=False)
 
     record_user_speech(
         user_id=user_id,

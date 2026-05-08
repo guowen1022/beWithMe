@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy import delete
@@ -52,7 +52,12 @@ class MountResult:
     deleted: list[str]
 
 
-def _render_block_source(template: Template, block_id: str, grid: dict[str, int]) -> str:
+def _render_block_source(
+    template: Template,
+    block_id: str,
+    grid: dict[str, int],
+    params: Optional[dict[str, Any]] = None,
+) -> str:
     """Substitute the standard engineer placeholders in the template JS.
 
     We additionally append a `manifest:` entry to the block's outer
@@ -67,6 +72,12 @@ def _render_block_source(template: Template, block_id: str, grid: dict[str, int]
     We do this by string-replacing `({` with `({\n  manifest: <json>,`.
     Cheap and reliable for the parens-wrapped expression all our
     templates emit.
+
+    `params` carries template-specific values (today: `content` for
+    text_display). They substitute as JSON-encoded JS literals — the
+    placeholder in the template *replaces* the entire literal expression
+    (e.g. `var initial = __CONTENT__;`), so quote/escape safety lives at
+    the substitution boundary, not in the template authoring layer.
     """
     js = template.js
     js = js.replace("__BLOCK_ID__", block_id)
@@ -81,6 +92,17 @@ def _render_block_source(template: Template, block_id: str, grid: dict[str, int]
     # documented in TOPICS.md.
     js = js.replace("__DOC_TOPIC__", "documents.uploaded")
     js = js.replace("__SELECTION_TOPIC__", "text.selected")
+    # Per-block content topic. Each text_display block has its own topic
+    # derived from its block_id so the persona can update one without
+    # cross-talking to another.
+    js = js.replace("__CONTENT_TOPIC__", f"text.{block_id}.content")
+    # Template-specific params. Today only `content` (used by
+    # text_display) — encoded as a JSON string literal. Default ""
+    # keeps the rendered JS valid when the caller doesn't pass params.
+    content_value = ""
+    if params and isinstance(params.get("content"), str):
+        content_value = params["content"]
+    js = js.replace("__CONTENT__", json.dumps(content_value))
 
     manifest_json = json.dumps(template.manifest.to_json(), separators=(",", ":"))
     open_idx = js.find("({")
@@ -148,11 +170,14 @@ async def mount_template(
     grid: Optional[dict[str, int]] = None,
     replace: Optional[list[str]] = None,
     target_device_id: Optional[UUID] = None,
+    params: Optional[dict[str, Any]] = None,
 ) -> MountResult:
     """Render and mount a template on the user's canvas as an SSE overlay.
 
     `block_id` defaults to the template's kebab id (e.g. `upload-file`).
     `replace` is a list of block ids to unmount in the same SSE batch.
+    `params` carries template-specific values that substitute into
+    placeholders in the template JS (today: `content` for text_display).
 
     Nothing is written to git or to canvas_layout. The block exists only
     in memory + browser; on reload it disappears.
@@ -161,7 +186,7 @@ async def mount_template(
     bid = block_id or template.id_default
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
 
-    rendered = _render_block_source(template, bid, g)
+    rendered = _render_block_source(template, bid, g, params)
 
     # Sandbox-validate the rendered source before SSE-fanout. A broken
     # template (placeholder substitution gone wrong, drifted manifest,

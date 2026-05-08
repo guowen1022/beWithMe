@@ -205,6 +205,23 @@ def _format_block_line(block, device_class=None) -> str:
         elif kind == "passage":
             label = extra.get("title") or content or title or "(empty)"
             head = f'- text panel: "{label}"'
+            sel = (extra.get("selection") or "").strip()
+            if sel:
+                if len(sel) > 80:
+                    sel = sel[:77] + "…"
+                head += f' [user highlighted: "{sel}"]'
+        elif kind == "text":
+            label = content or title or "(empty)"
+            head = f'- note (id={bid}): "{label}"'
+            sel = (extra.get("selection") or "").strip()
+            if sel:
+                if len(sel) > 80:
+                    sel = sel[:77] + "…"
+                head += f' [user highlighted: "{sel}"]'
+            # Tell the LLM exactly how to overwrite this note's text in
+            # place. The topic is derived from the block id at mount time
+            # (see workshop/canvas/tools/mount_template._render_block_source).
+            head += f' — to update: push_block_content(block_id="{bid}", topic="text.{bid}.content", value="...")'
         elif kind == "browser":
             head = f"- browser: {content or '(loading)'}"
         elif kind == "upload":

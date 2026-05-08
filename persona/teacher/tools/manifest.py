@@ -122,6 +122,40 @@ def _make_read_media(user_id: UUID):
 
 def _make_mount_template(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
+        # Pretty-print incoming args so we can see exactly what the LLM
+        # emitted when a mount appears to "succeed" but no block lands.
+        # Tee to the perception trace file so it shows up alongside the
+        # llm-response lines (backend stdout is hard to capture).
+        try:
+            _arg_preview = json.dumps(args, default=str)[:600]
+        except Exception:
+            _arg_preview = repr(args)[:600]
+        _trace_line = f"[mount_template/exec] args={_arg_preview}"
+        print(_trace_line, flush=True)
+        try:
+            import time as _t
+            with open("/tmp/bewithme-perception-trace.log", "a") as _f:
+                _f.write(f"{_t.strftime('%H:%M:%S')} {_trace_line}\n")
+        except Exception:
+            pass
+
+        def _trace(msg: str) -> None:
+            print(msg, flush=True)
+            try:
+                import time as _t
+                with open("/tmp/bewithme-perception-trace.log", "a") as _f:
+                    _f.write(f"{_t.strftime('%H:%M:%S')} {msg}\n")
+            except Exception:
+                pass
+
+        # `_raw_arguments` is the explicit fallback shape from the LLM
+        # provider when the model truncated its tool-args mid-stream and
+        # the JSON didn't parse. We can't recover useful args from it —
+        # surface a clear error so the next turn knows to retry shorter.
+        if "_raw_arguments" in args:
+            _trace("[mount_template/exec] BAILING: _raw_arguments shape (model truncated args)")
+            return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+
         template_name = (args.get("template") or "").strip()
         if not template_name:
             return json.dumps({"error": "template is required"})
@@ -133,19 +167,37 @@ def _make_mount_template(user_id: UUID):
             target_uuid = UUID(target_device_id) if target_device_id else None
         except (ValueError, TypeError):
             return json.dumps({"error": "invalid target_device_id"})
+
+        # Be lenient about `params`: some LLM providers emit nested
+        # objects as JSON-encoded strings instead of structured objects.
+        # Accept either; only reject genuinely-broken shapes.
+        params = args.get("params")
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+                _trace("[mount_template/exec] params arrived as string; decoded to dict")
+            except json.JSONDecodeError:
+                return json.dumps({"error": "params was a string but not valid JSON"})
+        if params is not None and not isinstance(params, dict):
+            return json.dumps({"error": f"params must be an object, got {type(params).__name__}"})
+
         try:
             result = await mount_template(
                 user_id=user_id,
                 template_name=template_name,
                 replace=replace,
                 target_device_id=target_uuid,
+                params=params,
             )
         except FileNotFoundError:
+            _trace(f"[mount_template/exec] unknown template {template_name!r}")
             return json.dumps({
                 "error": f"unknown template {template_name!r}",
             })
         except ValueError as e:
+            _trace(f"[mount_template/exec] ValueError: {e}")
             return json.dumps({"error": str(e)})
+        _trace(f"[mount_template/exec] OK bid={result.block_id} template={result.template} deleted={result.deleted}")
         return json.dumps({
             "block_id": result.block_id,
             "template": result.template,
@@ -561,14 +613,16 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         ToolSpec(
             name="mount_template",
             description=(
-                "Display a known reading surface — `upload_file` (PDF "
-                "picker), `passage_reader` (paste/type text), `pdf_reader` "
-                "(rendered PDF), `inputs_launcher` (two-button starter, "
-                "auto-mounted on empty canvas — rarely needed manually). "
-                "Use when the user wants to upload, paste, or read. Fast "
-                "and deterministic. Pass `replace: [...]` to atomically "
-                "swap out an existing surface (e.g. replace the launcher "
-                "when you bring up the upload picker)."
+                "Display a known surface on the user's canvas. Templates: "
+                "`upload_file` (PDF picker), `passage_reader` (USER pastes/"
+                "types their own text — input widget, never use for prose "
+                "you author), `pdf_reader` (rendered PDF), `text_display` "
+                "(YOUR authored prose: introductions, summaries, "
+                "explanations — pass `params: {content: '...'}` so it "
+                "lands populated), `inputs_launcher` (two-button starter, "
+                "auto-mounted on empty canvas, rarely needed manually). "
+                "Fast and deterministic. Pass `replace: [...]` to "
+                "atomically swap out an existing surface."
             ),
             params_schema={
                 "type": "object",
@@ -585,6 +639,14 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                     "target_device_id": {
                         "type": "string",
                         "description": "Optional UUID; mount on this device only.",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": (
+                            "Template-specific values. text_display "
+                            "accepts {content: string} — the prose to "
+                            "display at mount time."
+                        ),
                     },
                 },
                 "required": ["template"],

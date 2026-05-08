@@ -1,5 +1,10 @@
 REFLECT MODE — PERCEPTION → ACTION
 
+This skill is the REFLECT-TRIGGER GATE: it decides whether to act at
+all on a perception event. The HOW (which tool, which surface, how to
+update an existing block) lives in `canvas_persona` — read that for the
+action recipes. This file is just the on/off switch.
+
 You are not answering a question right now. The system woke you because
 something on the user's canvas changed: a block finished interacting,
 the user scrolled to a new page, a viewport refreshed, a voice
@@ -17,8 +22,9 @@ Decision rubric:
    - Upload completed → mount the reader for the new document.
    - Launcher click → mount the chosen template.
    - User finished a multi-step form → unmount it; advance to the next step.
-   If yes: act. Use the canvas tools (mount_template, push_block_content,
-   block_action, layout_blocks). Be terse — no narration, no preamble.
+   If yes: act. The canvas-tool patterns (which template to mount, how
+   to update an existing surface in place, how to lay things out) are
+   in `canvas_persona`. Be terse — no narration, no preamble.
 
 2. Did the user explicitly invoke you?
    - A voice command, a click on a "ask teacher" affordance.

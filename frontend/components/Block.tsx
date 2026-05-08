@@ -18,6 +18,33 @@ import {
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, stopAllMicStreams, type MicVadHandle } from "@/lib/vad";
 import * as micArbiter from "@/lib/micArbiter";
+import { marked } from "marked";
+
+// Configure marked once: GFM (tables, strikethrough, autolinks) +
+// `breaks: true` so single newlines render as <br>.
+//
+// SECURITY: marked's default behavior PASSES THROUGH raw HTML tokens in
+// the input — so a literal `<script>` would land in the output. We
+// override the html-token renderer to escape it instead, blocking the
+// only XSS vector from persona-authored prose. The override applies to
+// `<html>`-shaped tokens at every position (block + inline). Tested
+// in `tests/unit/test_text_display_html.py::test_html_in_input_is_escaped`.
+marked.setOptions({ gfm: true, breaks: true });
+function _escapeHtmlForMarked(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+marked.use({
+  renderer: {
+    html(token: { text?: string }) {
+      return _escapeHtmlForMarked(token.text || "");
+    },
+  },
+});
 
 type Props = { id: string; source: string };
 
@@ -97,6 +124,12 @@ export function Block({ id, source }: Props) {
          * mute/cleanup, in case a previous instance leaked. */
         stopAll(): void;
       };
+      /** Render a markdown string (GFM, including tables) to an HTML
+       * string. Persona-authored prose surfaces (text_display) call this
+       * to get correct rendering for tables/headings/lists/code without
+       * hand-rolling a parser. The host configures marked once with
+       * gfm + breaks; raw HTML in the input is escape-safe by default. */
+      markdown(text: string): string;
     }
 
     // Audio helpers — gated through the mic arbiter so push-to-talk in
@@ -213,6 +246,11 @@ export function Block({ id, source }: Props) {
       backend,
       blockId: id,
       audio,
+      markdown(text: string) {
+        // `async: false` so this returns a string (not a Promise) —
+        // callers do `body.innerHTML = helpers.markdown(...)` synchronously.
+        return marked.parse(text || "", { async: false }) as string;
+      },
     };
 
     try {

@@ -66,8 +66,15 @@ _PERSONA_NAME = "teacher"
 LANE_A_DEBOUNCE_S = 0.5
 
 # Lane A: token cap on the user-facing reply. Single iteration of the
-# tool loop, so the budget translates almost directly into reply length.
-LANE_A_MAX_TOKENS = 700
+# tool loop, so the budget translates almost directly into output length —
+# but the output now has to carry tool-call JSON too. A `mount_template`
+# with a paragraph of markdown for `params.content` plus a `speak` plus
+# a sentence of reasoning can easily eat 800-1200 tokens; if we cap below
+# that the LLM truncates mid-tool-args and the args fall back to the
+# unparseable `_raw_arguments` shape (the teacher then mounts an empty
+# block or no block at all). 1500 is roomy enough for a 2-3 paragraph
+# intro; longer expansions belong on a follow-up turn or in Lane B.
+LANE_A_MAX_TOKENS = 1500
 
 # Lane B: token cap on background work. Larger because the tool loop
 # may chain multiple structural calls (mount → layout → push_content).
@@ -371,7 +378,16 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
             prior_messages=ctx.prior_messages,
             tools=build_tools(user_id, lane="user_facing"),
             max_tokens=LANE_A_MAX_TOKENS,
-            max_iterations=1,
+            # 2, not 1. The loop's hard-cap at `tools/loop.py:189` breaks
+            # BEFORE executing tools on the cap-hit turn — so with cap=1,
+            # if turn 0 emits a truncated tool call (DeepSeek frequently
+            # does this for `mount_template(params={content:...})` with
+            # markdown prose) and turn 1 retries with valid args, those
+            # retry args get silently dropped. Allowing one extra round
+            # lets the recovery round actually execute. Cost: at most
+            # one extra LLM call in the unhappy path; the happy path
+            # still finishes in one round.
+            max_iterations=2,
             purpose="reflect",
             user_id=user_id,
         ):

@@ -344,6 +344,7 @@ class _MountTemplateBody(BaseModel):
     block_id: str | None = None
     grid: dict[str, int] | None = None
     replace: list[str] | None = None
+    params: dict[str, Any] | None = None
 
 
 @router.post("/dynamic/mount-template")
@@ -375,6 +376,7 @@ async def dynamic_mount_template(
             grid=body.grid,
             replace=body.replace,
             target_device_id=device_uuid,
+            params=body.params,
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"unknown template: {body.template}")
