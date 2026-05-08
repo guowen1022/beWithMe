@@ -18,6 +18,10 @@ import type { MicVAD } from "@ricky0123/vad-web";
 export interface MicVadHandle {
   start(): void;
   pause(): void;
+  /** Force-finalize the in-flight phrase by encoding the buffered frames
+   *  and firing onPhrase synchronously. No-op if not currently in speech.
+   *  Caller must still pause()/destroy() afterwards to release the mic. */
+  flush(): void;
   destroy(): void;
 }
 
@@ -176,12 +180,14 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
     },
 
     onFrameProcessed: (_probs, frame) => {
-      if (!inSpeech || !opts.onInterim) return;
+      if (!inSpeech) return;
+      // Always buffer so flush() can finalize PTT releases mid-sentence.
+      // Interim emission stays gated on whether the caller subscribed.
       // Copy the frame — the library reuses the buffer between callbacks.
       phraseBuffer.push(new Float32Array(frame));
       phraseBufferLen += frame.length;
 
-      if (phraseBufferLen - lastInterimAt >= INTERIM_STRIDE_SAMPLES) {
+      if (opts.onInterim && phraseBufferLen - lastInterimAt >= INTERIM_STRIDE_SAMPLES) {
         lastInterimAt = phraseBufferLen;
         const merged = concat(phraseBuffer, phraseBufferLen);
         try {
@@ -211,6 +217,26 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
   return {
     start: () => vad.start(),
     pause: () => vad.pause(),
+    flush: () => {
+      // Synthesize an onSpeechEnd from whatever frames are buffered. The
+      // underlying silero-vad only fires onSpeechEnd after redemptionFrames
+      // (640ms) of silence, which never happens when the user releases
+      // PTT mid-sentence. Reset state *before* invoking onPhrase so the
+      // callback can synchronously trigger another mode transition.
+      if (!inSpeech) return;
+      const id = phraseId;
+      const len = phraseBufferLen;
+      const chunks = phraseBuffer;
+      inSpeech = false;
+      resetPhrase();
+      if (len === 0) return;
+      const merged = concat(chunks, len);
+      try {
+        opts.onPhrase(encodeWavPcm16(merged, SAMPLE_RATE), id);
+      } catch (err) {
+        opts.onError?.(err);
+      }
+    },
     destroy: () => {
       // Best-effort library teardown first so it can release ONNX/audio
       // resources cleanly. We don't await — `vad.destroy()` returns a

@@ -108,6 +108,11 @@ export function Block({ id, source }: Props) {
        * currently paused or if QuestionBar holds the mic (the subscription
        * will resume us automatically when it releases). */
       resume(): void;
+      /** Force-finalize the current phrase so PTT releases mid-sentence
+       * still flow through onPhrase. Call this *before* pause()/stop(),
+       * since pause() destroys the VAD and discards its buffer. No-op
+       * when no phrase is in flight. */
+      flush(): void;
     }
     interface BlockHelpers {
       reportState(state: BlockStateInput): void;
@@ -222,6 +227,10 @@ export function Block({ id, source }: Props) {
             } else {
               arbiterPaused = true;
             }
+          },
+          flush() {
+            if (!vad) return;
+            try { vad.flush(); } catch (err) { opts.onError?.(err); }
           },
         };
       },

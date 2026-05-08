@@ -37,6 +37,11 @@
     var DOUBLE_TAP_WINDOW_MS = 400;
     var keyDownAt = null;
     var lastTapAt = 0;
+    // VAD asset load (~40MB ONNX + wasm) takes a few seconds on a cold
+    // cache. Track whether the engine is fully loaded so the UI can
+    // show a clear "loading → ready" signal and we can refuse PTT/LIVE
+    // attempts before the mic is actually usable.
+    var vadReady = false;
     try {
       if (typeof localStorage !== 'undefined') {
         var stored = localStorage.getItem(LS_KEY);
@@ -169,15 +174,41 @@
     // keyboard handler, the click handler, and the initial mount paint
     // can't drift out of sync.
     function applyMode(next) {
+      var h = handleRef.current;
+      // Refuse PTT/LIVE before the VAD engine has finished loading —
+      // the mic would silently no-op (no frames flow) and the user
+      // would hold SPACE only to discover nothing was captured.
+      // Show a clear "still loading" hint instead.
+      if (next !== 'closed' && !vadReady) {
+        heard.textContent = 'Mic engine still loading — wait for "ready" below.';
+        return;
+      }
+      // Flush BEFORE mutating mode/muted: flush() invokes onPhrase
+      // synchronously, and onPhrase short-circuits on `if (muted)`. If we
+      // flipped muted=true first, the in-flight phrase would be encoded
+      // and immediately dropped on the floor. Doing it here means the
+      // synchronous onPhrase still sees the previous (open) state and
+      // forwards the transcript to the backend before we tear down.
+      if (next === 'closed' && mode !== 'closed') {
+        if (h && h.flush) { try { h.flush(); } catch (e) { console.warn(e); } }
+      }
       mode = next;
       muted = (mode === 'closed');
-      var h = handleRef.current;
       if (mode === 'closed') {
         if (h && h.pause) { try { h.pause(); } catch (e) { console.warn(e); } }
         if (audio && audio.stopAll) { try { audio.stopAll(); } catch (e) { console.warn(e); } }
         setDot('muted');
-        setStatus('mic off');
-        heard.textContent = 'Hold SPACE to talk · double-tap SPACE for always-on.';
+        // Branch on vadReady so the user sees a real "loading → ready"
+        // transition. `applyMode('closed')` is called both on initial
+        // mount paint (when vadReady=false) and after startVad resolves
+        // (vadReady=true) — same UI branch, different copy.
+        if (vadReady) {
+          setStatus('ready · mic off');
+          heard.textContent = 'Hold SPACE to talk · double-tap SPACE for always-on.';
+        } else {
+          setStatus('loading mic…');
+          heard.textContent = 'Loading mic engine — this takes a few seconds on first load.';
+        }
         muteBtn.textContent = 'Open mic';
       } else if (mode === 'live') {
         if (h && h.resume) { try { h.resume(); } catch (e) { console.warn(e); } }
@@ -236,8 +267,9 @@
       var duration = Date.now() - keyDownAt;
       keyDownAt = null;
       if (duration > TAP_MAX_MS) {
-        // HOLD released — PTT done. Phrases that fired during the hold
-        // have already been transcribed + sent via onPhrase. Just close.
+        // HOLD released — PTT done. applyMode('closed') flushes any
+        // in-flight phrase (silero-vad won't fire onSpeechEnd until
+        // 640ms of silence) before tearing down the mic.
         if (mode === 'ptt') applyMode('closed');
         // If we're already 'live', a hold is a no-op.
       } else {
@@ -350,8 +382,28 @@
       });
     }
 
-    setStatus('starting mic…');
-    heard.textContent = 'Requesting mic permission…';
+    // Paint the closed UI immediately. The VAD's ONNX + wasm assets
+    // (~40MB) take a few seconds to load on a cold cache, so we don't
+    // want to block the UI on a misleading "Requesting mic permission…"
+    // placeholder during that window. handleRef.current is null at
+    // this point — applyMode tolerates that (the h.pause/h.resume calls
+    // are guarded). The real pause hits the just-started VAD when
+    // startVad resolves below. If the user already had permission
+    // granted, no prompt fires; if not, only show the prompt note.
+    applyMode('closed');
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({ name: 'microphone' }).then(function (status) {
+          // Only override the closed-UI hint if we actually need a
+          // permission action from the user.
+          if (status.state === 'prompt') {
+            heard.textContent = 'Requesting mic permission…';
+          } else if (status.state === 'denied') {
+            heard.textContent = 'Mic blocked — enable it in browser settings.';
+          }
+        }).catch(function () { /* Permissions API not supported */ });
+      }
+    } catch (_) { /* noop */ }
     audio.startVad({
       onSpeechStart: onSpeechStart,
       onPhrase: onPhrase,
@@ -361,11 +413,17 @@
       },
     }).then(function (handle) {
       handleRef.current = handle;
+      vadReady = true;
       console.log('[ambient_mic] mic ready');
-      // Default state is CLOSED — pause the just-started VAD immediately.
-      // Permission has been granted at this point, so subsequent
-      // resume()s on space-down won't re-prompt.
-      applyMode('closed');
+      // The library auto-starts the VAD as part of its init
+      // (startOnLoad=true is the default). Sync the just-started
+      // VAD to the current mode and re-paint so the user sees the
+      // transition from "loading mic…" to "ready · mic off".
+      if (mode === 'closed') {
+        try { handle.pause(); } catch (_) { /* noop */ }
+        if (audio && audio.stopAll) { try { audio.stopAll(); } catch (_) { /* noop */ } }
+        applyMode('closed');
+      }
     }).catch(function (err) {
       console.warn('[ambient_mic] startVad failed', err);
       var msg = (err && err.message) || String(err);
