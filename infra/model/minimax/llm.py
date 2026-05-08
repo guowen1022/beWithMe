@@ -3,6 +3,7 @@ import json
 import re
 import anthropic
 from infra.config import settings
+from infra.model.http_client import make_async_http_client
 from infra.model.tools import ToolSpec
 
 _client: Optional[anthropic.AsyncAnthropic] = None
@@ -11,7 +12,14 @@ _client: Optional[anthropic.AsyncAnthropic] = None
 def _get_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
-        kwargs = {"api_key": settings.anthropic_api_key}
+        # Custom httpx client with keepalive_expiry + read/connect timeouts
+        # so idle pool connections don't hang the next call after a long
+        # idle gap. See infra/model/http_client.py for rationale.
+        kwargs = {
+            "api_key": settings.anthropic_api_key,
+            "http_client": make_async_http_client(),
+            "max_retries": 3,
+        }
         if settings.anthropic_base_url:
             kwargs["base_url"] = settings.anthropic_base_url
         _client = anthropic.AsyncAnthropic(**kwargs)
@@ -275,11 +283,17 @@ async def stream_with_tools(
 
 async def generate_json(prompt: str, max_tokens: int = 512) -> str:
     """Generate a JSON array response. Uses assistant prefill to force text output."""
-    # Use a fresh client to avoid state issues with shared client
-    kwargs = {"api_key": settings.anthropic_api_key}
+    # Use a fresh client to avoid state issues with shared client.
+    # Same keepalive/timeout/retry hygiene as the long-lived client —
+    # this one-shot path is rare but should still survive a stale pool.
+    kwargs = {
+        "api_key": settings.anthropic_api_key,
+        "http_client": make_async_http_client(),
+        "max_retries": 3,
+    }
     if settings.anthropic_base_url:
         kwargs["base_url"] = settings.anthropic_base_url
-    client = anthropic.AsyncAnthropic(**kwargs, timeout=120.0)
+    client = anthropic.AsyncAnthropic(**kwargs)
     response = await client.messages.create(
         model=settings.llm_model,
         max_tokens=max_tokens,

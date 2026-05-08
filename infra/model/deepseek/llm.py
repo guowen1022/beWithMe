@@ -13,6 +13,7 @@ import json
 from typing import Optional, Tuple, AsyncIterator, Dict, Any, List
 from openai import AsyncOpenAI
 from infra.config import settings
+from infra.model.http_client import make_async_http_client
 from infra.model.tools import ToolSpec
 
 _client: Optional[AsyncOpenAI] = None
@@ -21,9 +22,15 @@ _client: Optional[AsyncOpenAI] = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
+        # Use a custom httpx client with keepalive_expiry + explicit
+        # timeouts. Without this, an idle 5–15 min gap leaves a stale
+        # TCP connection in the pool; the next call writes to it and
+        # hangs forever waiting for a response. See infra/model/http_client.py.
         _client = AsyncOpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
+            http_client=make_async_http_client(),
+            max_retries=3,
         )
     return _client
 
