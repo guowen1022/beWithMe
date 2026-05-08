@@ -23,8 +23,20 @@
     var report = helpers && helpers.reportState ? helpers.reportState : function () {};
 
     var LS_KEY = 'ambient_mic.speak_to';
-    var muted = false;
+    // Default to muted (closed). User opens via spacebar (hold = PTT,
+    // double-tap = always-on) or by clicking the toggle button.
+    var muted = true;
     var speakTo = 'teacher';
+
+    // ── Keyboard mode state ─────────────────────────────
+    // 'closed': mic off (default).
+    // 'live':   always-on; VAD streams continuously.
+    // 'ptt':    push-to-talk; mic open while space is held.
+    var mode = 'closed';
+    var TAP_MAX_MS = 250;
+    var DOUBLE_TAP_WINDOW_MS = 400;
+    var keyDownAt = null;
+    var lastTapAt = 0;
     try {
       if (typeof localStorage !== 'undefined') {
         var stored = localStorage.getItem(LS_KEY);
@@ -95,7 +107,7 @@
 
     var muteBtn = document.createElement('button');
     muteBtn.type = 'button';
-    muteBtn.textContent = 'Mute';
+    muteBtn.textContent = 'Open mic';
     muteBtn.style.cssText =
       'padding:6px 10px; font-family:inherit; font-size:11px;' +
       'color:var(--bw-ink); background:var(--bw-surface-2);' +
@@ -152,31 +164,106 @@
     // Will be wired after audio.startVad resolves.
     var handleRef = { current: null };
 
-    // Mute toggle — actually closes the mic track. Without calling
-    // handle.pause(), the OS-level mic indicator (orange dot on macOS)
-    // stays on; we have to release the underlying getUserMedia stream.
-    var onMuteClick = function () {
-      muted = !muted;
-      muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+    // applyMode — single entry point for state transitions. Drives the
+    // VAD handle (pause/resume) and the visible UI in lockstep so the
+    // keyboard handler, the click handler, and the initial mount paint
+    // can't drift out of sync.
+    function applyMode(next) {
+      mode = next;
+      muted = (mode === 'closed');
       var h = handleRef.current;
-      if (muted) {
+      if (mode === 'closed') {
         if (h && h.pause) { try { h.pause(); } catch (e) { console.warn(e); } }
-        // Belt-and-suspenders: even if pause() somehow missed (stale code,
-        // race with init), nuke any leaked mic stream this module opened.
         if (audio && audio.stopAll) { try { audio.stopAll(); } catch (e) { console.warn(e); } }
         setDot('muted');
-        setStatus('muted');
-        heard.textContent = 'Muted — mic is closed.';
-      } else {
+        setStatus('mic off');
+        heard.textContent = 'Hold SPACE to talk · double-tap SPACE for always-on.';
+        muteBtn.textContent = 'Open mic';
+      } else if (mode === 'live') {
         if (h && h.resume) { try { h.resume(); } catch (e) { console.warn(e); } }
         setDot('idle');
-        setStatus('listening');
-        heard.textContent = 'Listening for speech…';
+        setStatus('always-on');
+        heard.textContent = 'Always-on. Listening for speech…';
+        muteBtn.textContent = 'Close mic';
+      } else { // 'ptt'
+        if (h && h.resume) { try { h.resume(); } catch (e) { console.warn(e); } }
+        setDot('speaking');
+        setStatus('PTT recording');
+        muteBtn.textContent = 'Recording…';
       }
       try { bus.publish('ambient_mic.muted', muted); } catch (_) { /* noop */ }
+    }
+
+    // Click toggle: equivalent to a spacebar tap from the current mode.
+    var onMuteClick = function () {
+      applyMode(mode === 'closed' ? 'live' : 'closed');
     };
     muteBtn.addEventListener('click', onMuteClick);
     cleanup(function () { muteBtn.removeEventListener('click', onMuteClick); });
+
+    // ── Spacebar control ───────────────────────────────
+    // Hold SPACE → push-to-talk: mic opens on keydown, stays open while
+    // held, closes on release. Phrases that fired during the hold are
+    // already sent via onPhrase below.
+    // Tap SPACE (CLOSED) once → no-op (closes the speculative PTT open).
+    // Tap SPACE (CLOSED) twice within DOUBLE_TAP_WINDOW_MS → enter LIVE.
+    // Tap SPACE (LIVE) once → exit LIVE, return to CLOSED.
+    function isTypingTarget(el) {
+      if (!el) return false;
+      var t = (el.tagName || '').toLowerCase();
+      if (t === 'input' || t === 'textarea' || t === 'select') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    }
+    function onKeyDown(e) {
+      if (e.code !== 'Space') return;
+      if (e.repeat) return;
+      if (isTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      keyDownAt = Date.now();
+      // Speculatively open the mic on every keydown from CLOSED so
+      // a HOLD captures audio from the first millisecond. If the user
+      // releases quickly (TAP), keyup pauses again with no audio sent.
+      if (mode === 'closed') applyMode('ptt');
+    }
+    function onKeyUp(e) {
+      if (e.code !== 'Space') return;
+      if (keyDownAt === null) return;
+      if (isTypingTarget(document.activeElement)) {
+        keyDownAt = null;
+        return;
+      }
+      var duration = Date.now() - keyDownAt;
+      keyDownAt = null;
+      if (duration > TAP_MAX_MS) {
+        // HOLD released — PTT done. Phrases that fired during the hold
+        // have already been transcribed + sent via onPhrase. Just close.
+        if (mode === 'ptt') applyMode('closed');
+        // If we're already 'live', a hold is a no-op.
+      } else {
+        // TAP
+        if (mode === 'live') {
+          applyMode('closed');
+          lastTapAt = 0;
+        } else {
+          // mode === 'ptt' (we set it on keydown). Pause and check for double-tap.
+          var now = Date.now();
+          applyMode('closed');
+          if ((now - lastTapAt) < DOUBLE_TAP_WINDOW_MS) {
+            lastTapAt = 0;
+            applyMode('live');
+          } else {
+            lastTapAt = now;
+          }
+        }
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    cleanup(function () {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+    });
 
     if (!audio || !audio.startVad || !backend || !backend.recordUtterance) {
       setStatus('helpers missing');
@@ -275,9 +362,10 @@
     }).then(function (handle) {
       handleRef.current = handle;
       console.log('[ambient_mic] mic ready');
-      setStatus(muted ? 'muted' : 'listening');
-      setDot(muted ? 'muted' : 'idle');
-      if (!muted) heard.textContent = 'Listening for speech…';
+      // Default state is CLOSED — pause the just-started VAD immediately.
+      // Permission has been granted at this point, so subsequent
+      // resume()s on space-down won't re-prompt.
+      applyMode('closed');
     }).catch(function (err) {
       console.warn('[ambient_mic] startVad failed', err);
       var msg = (err && err.message) || String(err);

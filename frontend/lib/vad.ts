@@ -120,11 +120,18 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
           // this, the teacher's TTS plays through the speakers, gets
           // re-captured by the mic, and the transcript comes back as
           // if the user said it. Belt-and-suspenders with the
-          // speaker-state gate in Block.tsx.
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+          // server-side echo dedup in infra/perception/cache.py.
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          // Chromium-only hint: prefer the OS's communications-mode
+          // AEC (Apple Audio Toolbox / Windows WASAPI) over the
+          // browser's software AEC. Markedly better on built-in
+          // laptop speakers. `ideal` (not `exact`) so non-Chromium
+          // browsers silently ignore the unknown constraint instead
+          // of failing the whole getUserMedia call.
+          echoCancellationType: { ideal: "system" },
+        } as MediaTrackConstraints,
       });
       _liveStreams.add(ownStream);
       return ownStream;
@@ -144,11 +151,18 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
           // this, the teacher's TTS plays through the speakers, gets
           // re-captured by the mic, and the transcript comes back as
           // if the user said it. Belt-and-suspenders with the
-          // speaker-state gate in Block.tsx.
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+          // server-side echo dedup in infra/perception/cache.py.
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          // Chromium-only hint: prefer the OS's communications-mode
+          // AEC (Apple Audio Toolbox / Windows WASAPI) over the
+          // browser's software AEC. Markedly better on built-in
+          // laptop speakers. `ideal` (not `exact`) so non-Chromium
+          // browsers silently ignore the unknown constraint instead
+          // of failing the whole getUserMedia call.
+          echoCancellationType: { ideal: "system" },
+        } as MediaTrackConstraints,
       });
       _liveStreams.add(ownStream);
       return ownStream;
