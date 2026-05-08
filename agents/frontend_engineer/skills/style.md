@@ -124,6 +124,41 @@ already-padded inner card.
 Serif is voice-only (Fraunces italic, opsz axis). Never lead a block
 with serif. Default everything to sans.
 
+## Markdown surfaces — `.bw-prose`
+
+Any block that renders persona-authored markdown (via `helpers.markdown`)
+must put `class="bw-prose"` on the container that receives the HTML.
+The class is defined once in `frontend/app/globals.css` and styles
+headings, tables, code, lists, blockquotes, links, and `<em>`-as-serif
+in one place — so every markdown surface in the app looks identical and
+a single token edit re-themes them all.
+
+```js
+var body = document.createElement('div');
+body.className = 'bw-prose';                    // ← required
+body.style.cssText =
+  'flex:1; padding:18px 22px;' +                // layout only
+  'overflow-y:auto; box-sizing:border-box;';    // do NOT set font-size
+                                                // / line-height / color
+                                                // here — bw-prose owns
+                                                // typography.
+body.innerHTML = helpers.markdown(text);
+```
+
+What you get for free:
+- `h1` with hairline underline; `h2` with a 3px aurora bar; `h4` becomes
+  an uppercase mono caption.
+- `<em>` switches to Fraunces italic (the "voice-only" rule).
+- Inline `code` renders as an accent-soft mono pill; fenced code blocks
+  get a 2px aurora left edge on a surface-2 panel.
+- Tables are TradingView-density: mono uppercase column labels, tabular
+  numerals, accent-soft row hover, sharp hairlines.
+- Lists use a 4px aurora square for `ul`, mono markers for `ol`.
+- Blockquotes are serif italic over an accent-soft gradient.
+
+Don't restyle these elements inside the block — extend the global rule
+instead so the system stays consistent.
+
 ## Buttons
 
 Solid accent, cool off-white text, no radius:

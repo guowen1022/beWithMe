@@ -67,6 +67,281 @@ body {
   overflow-y: hidden;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   .bw-prose — canonical markdown rendering surface
+   ─────────────────────────────────────────────────────────────────────────
+   Any block that renders persona-authored prose via helpers.markdown(...)
+   should put `class="bw-prose"` on the container that receives the HTML.
+   Tailwind v4's preflight strips browser defaults from h1..h6 and table —
+   without this scope, marked output renders as a wall of identical text.
+
+   Aesthetic: cinematic dark, single aurora accent, sharp corners (no
+   rounding), tabular-numerics in tables, Fraunces serif reserved for
+   italic voice. Mirrors agents/frontend_engineer/skills/style.md tokens.
+*/
+.bw-prose {
+  font-family: var(--bw-font-sans);
+  color: var(--bw-ink);
+  font-size: 14px;
+  line-height: 1.7;
+  letter-spacing: -0.005em;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Margin-trim — prose hugs its container; no orphaned top/bottom slack. */
+.bw-prose > :first-child { margin-top: 0; }
+.bw-prose > :last-child  { margin-bottom: 0; }
+
+/* Headings — sharp hierarchy, Onest display weights, tight tracking. */
+.bw-prose h1,
+.bw-prose h2,
+.bw-prose h3,
+.bw-prose h4,
+.bw-prose h5,
+.bw-prose h6 {
+  font-family: var(--bw-font-sans);
+  color: var(--bw-ink);
+  line-height: 1.2;
+  margin: 1.5em 0 0.55em;
+}
+.bw-prose h1 {
+  font-size: 1.75em;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid var(--bw-border);
+}
+.bw-prose h2 {
+  font-size: 1.32em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  position: relative;
+  padding-left: 0.7em;
+}
+.bw-prose h2::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.22em;
+  bottom: 0.22em;
+  width: 3px;
+  background: var(--bw-accent);
+}
+.bw-prose h3 {
+  font-size: 1.12em;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.bw-prose h4 {
+  font-size: 0.78em;
+  font-weight: 600;
+  font-family: var(--bw-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--bw-ink-muted);
+  margin-top: 1.6em;
+}
+.bw-prose h5,
+.bw-prose h6 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--bw-ink-muted);
+}
+
+/* Body copy. */
+.bw-prose p { margin: 0.85em 0; }
+
+/* Strong stays sans-bold; em switches to Fraunces italic — voice only. */
+.bw-prose strong {
+  color: var(--bw-ink);
+  font-weight: 600;
+}
+.bw-prose em {
+  font-family: var(--bw-font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+}
+
+/* Inline code — accent-soft pill in mono. */
+.bw-prose :not(pre) > code {
+  font-family: var(--bw-font-mono);
+  font-size: 0.86em;
+  background: var(--bw-accent-soft);
+  color: var(--bw-accent);
+  padding: 1.5px 6px;
+  border: 1px solid color-mix(in oklab, var(--bw-accent) 22%, transparent);
+  white-space: nowrap;
+}
+
+/* Block code — surface-2 panel with a 2px aurora left edge. */
+.bw-prose pre {
+  font-family: var(--bw-font-mono);
+  font-size: 0.86em;
+  background: var(--bw-surface-2);
+  color: var(--bw-ink);
+  border: 1px solid var(--bw-border);
+  border-left: 2px solid var(--bw-accent);
+  padding: 12px 14px;
+  margin: 1.1em 0;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+.bw-prose pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: inherit;
+  padding: 0;
+  white-space: pre;
+}
+
+/* Lists — sharp 4px accent square for ul, mono markers for ol. */
+.bw-prose ul,
+.bw-prose ol { padding-left: 1.5em; margin: 0.9em 0; }
+.bw-prose ul { list-style: none; padding-left: 1.25em; }
+.bw-prose ul > li { position: relative; }
+.bw-prose ul > li::before {
+  content: '';
+  position: absolute;
+  left: -1em;
+  top: 0.7em;
+  width: 4px;
+  height: 4px;
+  background: var(--bw-accent);
+}
+.bw-prose ol { list-style: decimal; }
+.bw-prose ol > li::marker {
+  color: var(--bw-ink-faint);
+  font-family: var(--bw-font-mono);
+  font-size: 0.85em;
+}
+.bw-prose li { margin: 0.3em 0; line-height: 1.65; }
+.bw-prose li > ul,
+.bw-prose li > ol { margin: 0.3em 0; }
+.bw-prose li > p { margin: 0.3em 0; }
+
+/* Blockquote — serif italic over an accent-soft gradient. */
+.bw-prose blockquote {
+  margin: 1.2em 0;
+  padding: 0.5em 1em;
+  border-left: 2px solid var(--bw-accent);
+  background: linear-gradient(90deg, var(--bw-accent-soft) 0%, transparent 70%);
+  font-family: var(--bw-font-serif);
+  font-style: italic;
+  font-size: 1.02em;
+  color: var(--bw-ink-muted);
+}
+.bw-prose blockquote p { margin: 0.4em 0; }
+.bw-prose blockquote :is(strong, em) { color: var(--bw-ink); }
+
+/* Tables — TradingView-density. Mono uppercase column labels, tabular
+   numerals, accent-soft row hover, sharp hairlines. */
+.bw-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93em;
+  margin: 1.2em 0;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--bw-border);
+}
+.bw-prose thead { background: var(--bw-surface-2); }
+.bw-prose th {
+  font-family: var(--bw-font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--bw-ink-muted);
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bw-border-strong);
+  white-space: nowrap;
+}
+.bw-prose td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bw-border);
+  color: var(--bw-ink);
+  vertical-align: top;
+}
+.bw-prose tbody tr { transition: background-color 100ms ease; }
+.bw-prose tbody tr:hover { background: var(--bw-accent-soft); }
+.bw-prose tbody tr:last-child td { border-bottom: none; }
+.bw-prose td:has(> code:only-child),
+.bw-prose td[align="right"] { font-variant-numeric: tabular-nums; }
+
+/* Links — accent with subtle underline that thickens on hover. */
+.bw-prose a {
+  color: var(--bw-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--bw-accent) 45%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 120ms ease, text-decoration-thickness 120ms ease;
+}
+.bw-prose a:hover {
+  text-decoration-color: var(--bw-accent);
+  text-decoration-thickness: 2px;
+}
+
+/* Horizontal rule — hairline. */
+.bw-prose hr {
+  border: none;
+  border-top: 1px solid var(--bw-border);
+  margin: 1.8em 0;
+}
+
+/* Image — never overflow the block. */
+.bw-prose img {
+  max-width: 100%;
+  display: block;
+  margin: 1em 0;
+  border: 1px solid var(--bw-border);
+}
+
+/* Strikethrough — fade. */
+.bw-prose del { color: var(--bw-ink-faint); }
+
+/* Keyboard — chunky monospace key cap. */
+.bw-prose kbd {
+  font-family: var(--bw-font-mono);
+  font-size: 0.82em;
+  background: var(--bw-surface-2);
+  border: 1px solid var(--bw-border-strong);
+  border-bottom-width: 2px;
+  padding: 1px 6px;
+  color: var(--bw-ink);
+}
+
+/* Definition lists. */
+.bw-prose dl { margin: 0.9em 0; }
+.bw-prose dt { font-weight: 600; color: var(--bw-ink); margin-top: 0.6em; }
+.bw-prose dd { margin: 0.2em 0 0.4em 1.2em; color: var(--bw-ink-muted); }
+
+/* Selection — accent-soft. */
+.bw-prose ::selection {
+  background: var(--bw-accent-soft);
+  color: var(--bw-ink);
+}
+
+/* KaTeX inline math needs breathing room — same rationale as the .prose
+   variant above, but scoped to .bw-prose. */
+.bw-prose p:has(.katex),
+.bw-prose li:has(.katex),
+.bw-prose h1:has(.katex),
+.bw-prose h2:has(.katex),
+.bw-prose h3:has(.katex),
+.bw-prose h4:has(.katex),
+.bw-prose strong:has(.katex) {
+  line-height: 1.95;
+}
+.bw-prose .katex-display {
+  margin: 0.85em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* Block registry highlight — flash an attention ring around any block when
    external code (teacher tool, console, etc.) calls registry.highlight(id). */
 @keyframes block-flash-anim {

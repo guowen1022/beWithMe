@@ -98,6 +98,31 @@ the schema is the contract, and the runtime is unforgiving.
 - `window.pdfjsLib` — pdf.js v4+ pre-loaded. Use `getDocument(...)` and
   `new pdfjsLib.TextLayer(...)` for PDFs.
 
+### Helpers (4th arg of `run`)
+
+`run(root, bus, cleanup, helpers)` — the host injects a `helpers` object:
+
+- `helpers.reportState({kind, content, extra, completed?})` — emit a
+  structured state report so the perception cache surfaces it. Prefer
+  this over relying on the auto-DOM-snapshot.
+- `helpers.backend.<name>(args)` — auto-generated typed backend caller.
+  Available when the block's `.md` declares a `backend:` map.
+- `helpers.blockId` — the block's id (for log lines, etc.).
+- `helpers.audio.{startVad, transcribe, stopAll}` — mic + STT, gated
+  through the shared mic arbiter. Only needed for mic blocks.
+- `helpers.markdown(text)` — render a GFM markdown string to an HTML
+  string. Use this for any prose/note rendering rather than hand-rolling
+  a parser. Tables, fenced code, blockquotes, and headings all work.
+  `marked` is configured once in the host with `gfm + breaks` and is
+  HTML-escape-safe by default. Pattern:
+  ```js
+  body.className = 'bw-prose';                   // typography contract
+  body.innerHTML = helpers.markdown(text);
+  ```
+  The container **must** carry `class="bw-prose"` — see `style.md` →
+  *Markdown surfaces*. Without it Tailwind's preflight strips heading
+  hierarchy and tables look like a wall of identical text.
+
 ## Bus wiring (cross-block coordination)
 
 Blocks coordinate over a sticky pub/sub bus. Inside `run`:
