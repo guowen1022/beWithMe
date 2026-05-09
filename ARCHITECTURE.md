@@ -243,6 +243,20 @@ The sandbox is a **gate**, not a deployment system. It exists so a buggy LLM-gen
 
 The frontend itself gains a small "dynamic surface" registry (`frontend/lib/dynamic.ts`) that listens for `ui-update` events and mounts/replaces components. Static UI keeps working; dynamic components layer on top.
 
+### 5.4 Out-of-frame surfaces — the `web_view` block
+
+Most blocks are pure DOM: their entire contents render inside the React frontend's origin and the sandbox can inspect/validate them. The `web_view` block is a deliberate exception.
+
+- The block's own DOM is just a header strip + a transparent body — that's what the sandbox sees and validates.
+- The actual page contents render in a separate Chromium top-level context (the Electron `WebContentsView` / `BrowserView` defined in `desktop/src/main.ts`), positioned over the block's body rect.
+- The persona's `web_view` tool drives navigation and perception via a token-authed HTTP shim (`desktop/src/web_view_shim.ts`) — not via the sandbox.
+
+**Why this is safe**: the sandbox guards against an LLM-generated component crashing or exfiltrating from the user's session. The `web_view` block is *not* LLM-generated — it's a fixed template the persona only mounts/unmounts; it does not author its own code. The page contents are explicitly sandboxed by Chromium itself (separate origin, separate cookie jar via `partition: "persist:bewithme-browser"`, separate process). The trust boundary moves from "our sandbox" to "Chromium's site isolation," which is exactly the model that makes a real browser safe.
+
+**Why this is needed**: many real pages refuse to render inside an iframe (anti-embedding via `X-Frame-Options` / `frame-ancestors`, or the page's own JS detecting framing and refusing to fetch). Even when an iframe loads, third-party storage partitioning means session-bound SPAs can't authenticate. A separate top-level Chromium context — first-party cookies, real `Referer`, no `window.top` self-checks — is the only correct fix.
+
+This is the only block today that lives outside the sandbox. Other personas authoring novel widgets (engineer's `request_new_block`) still go through the sandbox unchanged.
+
 ---
 
 ## 6. Authentication & trust

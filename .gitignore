@@ -21,5 +21,6 @@ frontend/out/
 data/browser_profile/
 data/sessions/
 data/canvases/
+data/web_view_port.json
 benchmark/results/
 .*.swp

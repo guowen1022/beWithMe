@@ -8,6 +8,7 @@ import {
 } from "electron";
 import path from "node:path";
 import fs from "node:fs";
+import { startWebViewShim } from "./web_view_shim";
 
 // The web app is designed for a single light palette. Force Electron to
 // always render in light mode so the window title bar doesn't pick up the
@@ -111,7 +112,21 @@ function showBrowserView(win: BaseWindow, view: WebContentsView) {
     win.contentView.addChildView(view);
     browserVisible = true;
   }
-  if (lastBrowserBounds) view.setBounds(lastBrowserBounds);
+  // Without bounds the BrowserView is added to the tree but has zero size,
+  // so the page loads invisibly. The frontend's existing "browse" UI sets
+  // bounds via browser:set-bounds, but persona-driven web_view calls may
+  // happen before the user has ever opened that UI. Default to a centered
+  // ~80% rectangle so the user actually sees the page.
+  if (!lastBrowserBounds) {
+    const { width: W, height: H } = win.getContentBounds();
+    lastBrowserBounds = clampBounds(win, {
+      x: Math.floor(W * 0.1),
+      y: Math.floor(H * 0.1),
+      width: Math.floor(W * 0.8),
+      height: Math.floor(H * 0.8),
+    });
+  }
+  view.setBounds(lastBrowserBounds);
 }
 
 function hideBrowserView(win: BaseWindow, view: WebContentsView) {
@@ -243,9 +258,26 @@ function configurePermissions() {
   );
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   configurePermissions();
   createWindow();
+  // HTTP shim for the persona's web_view tool. Writes port+token to
+  // <userData>/web_view_port.json so the Python sidecar can find it.
+  try {
+    await startWebViewShim({
+      ensureBrowserView,
+      showBrowserView: () => {
+        if (!mainWindow) return;
+        showBrowserView(mainWindow, ensureBrowserView());
+      },
+      hideBrowserView: () => {
+        if (!mainWindow || !browserView) return;
+        hideBrowserView(mainWindow, browserView);
+      },
+    });
+  } catch (err) {
+    console.error("[web_view_shim] failed to start:", err);
+  }
 });
 
 // Close-the-window = quit-the-app. macOS convention is to keep apps in the

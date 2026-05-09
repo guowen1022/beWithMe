@@ -82,9 +82,15 @@ and raises a clear `RuntimeError` at import otherwise.
 Config homes:
 - `config.yaml` (root) — `base_port`, `service_host`
 - `silicon_brain/config.py` — `DATABASE_URL`
-- `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`
+- `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`, `VISION_PROVIDER`, `DOUBAO_*`
 - `services/transcribe/main.py` — `WHISPER_MODEL_PATH`, `WHISPER_THREADS`
 - `services/speak/main.py` — `KOKORO_*`
+
+`LLM_PROVIDER` and `VISION_PROVIDER` are independent. The main reasoning LLM stays
+text-only (DeepSeek V4 today); vision calls are routed through
+`infra.model.vision.describe_image` to whichever provider `VISION_PROVIDER` selects,
+and the result flows back as plain text. Tools `look_at_image` and (planned) `web_view`
+with `include_screenshot=true` are the entry points.
 
 | Variable | Purpose |
 |---|---|
@@ -97,7 +103,11 @@ Config homes:
 | `DEEPSEEK_API_KEY` | API key for the DeepSeek provider. Required when `LLM_PROVIDER=deepseek`. |
 | `DEEPSEEK_BASE_URL` | DeepSeek base URL (e.g. `https://api.deepseek.com`). Required when `LLM_PROVIDER=deepseek`. |
 | `DEEPSEEK_MODEL` | DeepSeek model name (e.g. `deepseek-v4-pro`). Required when `LLM_PROVIDER=deepseek`. |
-| `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com`. |
+| `VISION_PROVIDER` | Active image-understanding backend (default: `doubao`). Dispatches to `infra/model/vision/<provider>.py`. Independent of `LLM_PROVIDER`. |
+| `DOUBAO_API_KEY` | Volces Ark API key for Doubao. Required when `VISION_PROVIDER=doubao`. |
+| `DOUBAO_BASE_URL` | Volces Ark endpoint (e.g. `https://ark.cn-beijing.volces.com/api/v3`). Required when `VISION_PROVIDER=doubao`. |
+| `DOUBAO_VISION_MODEL` | Doubao model name (e.g. `doubao-seed-2-0-lite-260428`). Required when `VISION_PROVIDER=doubao`. |
+| `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites
 

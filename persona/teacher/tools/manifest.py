@@ -31,8 +31,12 @@ Lane = Literal["answer", "user_facing", "background"]
 from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
 
+from tools.browser_set import browser_set
+from tools.look_at_image import look_at_image
 from tools.read_document import read_document
+from tools.read_url import read_url
 from tools.speak import speak
+from tools.web_view import web_view
 from workshop.canvas.tools.block_action import block_action
 from workshop.canvas.tools.interactive_graph import interactive_graph
 from workshop.canvas.tools.layout_blocks import layout_blocks
@@ -353,6 +357,130 @@ def _make_point_arrow(user_id: UUID):
     return executor
 
 
+def _make_read_url(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        url = (args.get("url") or "").strip()
+        if not url:
+            return json.dumps({"error": "url is required"})
+        try:
+            result = await read_url(user_id=user_id, url=url)
+        except Exception as e:
+            return json.dumps({"error": f"read_url failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
+def _make_browser_set(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        action = (args.get("action") or "").strip().lower()
+        if not action:
+            return json.dumps({"error": "action is required"})
+        # Numeric coercion for fields that may arrive as strings
+        timeout = args.get("timeout")
+        delay = args.get("delay")
+        x = args.get("x")
+        y = args.get("y")
+        try:
+            timeout = int(timeout) if timeout is not None else None
+            delay = int(delay) if delay is not None else None
+            x = int(x) if x is not None else None
+            y = int(y) if y is not None else None
+        except (TypeError, ValueError):
+            return json.dumps({"error": "timeout/delay/x/y must be integers"})
+
+        try:
+            result = await browser_set(
+                user_id=user_id,
+                action=action,
+                url=args.get("url") if isinstance(args.get("url"), str) else None,
+                selector=args.get("selector") if isinstance(args.get("selector"), str) else None,
+                value=args.get("value") if isinstance(args.get("value"), str) else None,
+                text=args.get("text") if isinstance(args.get("text"), str) else None,
+                key=args.get("key") if isinstance(args.get("key"), str) else None,
+                expression=args.get("expression") if isinstance(args.get("expression"), str) else None,
+                state=args.get("state") if isinstance(args.get("state"), str) else None,
+                wait_until=args.get("wait_until") if isinstance(args.get("wait_until"), str) else None,
+                timeout=timeout,
+                delay=delay,
+                full_page=bool(args.get("full_page") or False),
+                drain=bool(args.get("drain", True)),
+                x=x,
+                y=y,
+            )
+        except Exception as e:
+            return json.dumps({"error": f"browser_set failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
+def _make_web_view(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        action = (args.get("action") or "").strip().lower()
+        if not action:
+            return json.dumps({"error": "action is required"})
+        url = args.get("url")
+        selector = args.get("selector")
+        text = args.get("text")
+        direction = args.get("direction") or "down"
+        amount_raw = args.get("amount")
+        try:
+            amount = int(amount_raw) if amount_raw is not None else 400
+        except (TypeError, ValueError):
+            return json.dumps({"error": "amount must be an integer"})
+        timeout_raw = args.get("timeout_ms")
+        try:
+            timeout_ms = int(timeout_raw) if timeout_raw is not None else 5000
+        except (TypeError, ValueError):
+            return json.dumps({"error": "timeout_ms must be an integer"})
+        include_screenshot = bool(args.get("include_screenshot") or False)
+        x = args.get("x")
+        y = args.get("y")
+        try:
+            x = int(x) if x is not None else None
+            y = int(y) if y is not None else None
+        except (TypeError, ValueError):
+            return json.dumps({"error": "x and y must be integers"})
+        try:
+            result = await web_view(
+                user_id=user_id,
+                action=action,
+                url=url if isinstance(url, str) else None,
+                selector=selector if isinstance(selector, str) else None,
+                text=text if isinstance(text, str) else None,
+                direction=direction,
+                amount=amount,
+                timeout_ms=timeout_ms,
+                include_screenshot=include_screenshot,
+                x=x,
+                y=y,
+            )
+        except Exception as e:
+            return json.dumps({"error": f"web_view call failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
+def _make_look_at_image(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        image = (args.get("image") or "").strip()
+        if not image:
+            return json.dumps({"error": "image is required"})
+        question_raw = args.get("question")
+        question = (
+            question_raw.strip()
+            if isinstance(question_raw, str) and question_raw.strip()
+            else None
+        )
+        try:
+            result = await look_at_image(image, question)
+        except RuntimeError as e:
+            return json.dumps({"error": str(e)})
+        except Exception as e:
+            return json.dumps({"error": f"vision call failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
 def _make_speak(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
         text = (args.get("text") or "").strip()
@@ -489,6 +617,10 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     "read_document":      {"answer", "background"},   # vector RAG, slow
     "list_media":         {"answer", "background"},   # deprecated
     "request_new_block":  {"answer", "background"},   # engineer LLM, very slow
+    "look_at_image":      {"answer", "background"},   # remote vision call, ~5–6s
+    "web_view":           {"answer", "background"},   # drives Electron BrowserView, slow IO
+    "read_url":           {"answer", "background"},   # silent Playwright fetch, ~3–5s
+    "browser_set":        {"answer", "background"},   # full headless Playwright; slow IO
 }
 
 
@@ -594,6 +726,261 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_read_document(user_id),
+        ),
+        ToolSpec(
+            name="look_at_image",
+            description=(
+                "Delegate visual perception to a vision model. You are "
+                "text-only; this tool is your eyes. Pass `image` (a "
+                "`data:image/png;base64,...` URL is preferred — http(s) "
+                "URLs may fail due to provider region restrictions) plus "
+                "an optional `question` to steer the description (e.g. "
+                "'is the loading spinner still visible?', 'what does the "
+                "error banner say?', 'are there non-blank pixels in the "
+                "video region?'). Returns `{description: str}` — plain "
+                "text you reason over as if the user had described the "
+                "image themselves. Costs ~5–6s per call; use sparingly. "
+                "Minimum image dimension is 14×14 pixels."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "image": {
+                        "type": "string",
+                        "description": (
+                            "Image as a data URL (data:image/png;base64,...) "
+                            "or http(s) URL."
+                        ),
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "Optional. What to look for. Defaults to a "
+                            "general description."
+                        ),
+                    },
+                },
+                "required": ["image"],
+                "additionalProperties": False,
+            },
+            executor=_make_look_at_image(user_id),
+        ),
+        ToolSpec(
+            name="read_url",
+            description=(
+                "Convenience shortcut: browser_set(goto) + close. One-shot "
+                "headless read of a URL — no popup, no canvas mutation, no "
+                "visible window. Loads the URL in headless Chromium, "
+                "captures the visible text + the XHR/fetch responses the "
+                "page made during load, then closes the page. Returns "
+                "{url, title, text, length, truncated, responses}. Use "
+                "this for the common 'what's on this URL' pattern; for "
+                "anything more (interaction, observation over time, "
+                "screenshots, evaluating JS) use browser_set directly. "
+                "Do NOT echo the URL or raw text back at the user — "
+                "extract meaning, then respond via speak."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to read.",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            executor=_make_read_url(user_id),
+        ),
+        ToolSpec(
+            name="browser_set",
+            description=(
+                "Comprehensive headless browser toolkit. Use whenever you "
+                "need to read, interact with, or capture state from a "
+                "web page WITHOUT showing it to the user. The page runs "
+                "in a long-lived headless Chromium tab on the sidecar; "
+                "one global session per process. Action names match "
+                "Playwright's Page API verbatim — if you know "
+                "Playwright, you already know how to use this:\n"
+                "  - goto(url, wait_until?): page.goto. Loads URL, waits, "
+                "captures XHRs. Returns {url, title, text, html, responses}.\n"
+                "  - observe(drain=true): drain XHR responses captured "
+                "since last observe + re-read text/html. Use after "
+                "click/fill/wait, or while polling a live feed.\n"
+                "  - click(selector | x,y, timeout?): page.click or "
+                "page.mouse.click.\n"
+                "  - fill(selector, value): page.fill — set input value.\n"
+                "  - type(selector, text, delay?): page.type — keystrokes.\n"
+                "  - press(selector, key): page.press, e.g. key='Enter'.\n"
+                "  - screenshot(full_page?): returns base64 PNG.\n"
+                "  - screenshot_describe(full_page?): screenshot piped "
+                "through the vision model; returns a textual description "
+                "(you never see raw bytes). Costs ~5–6s.\n"
+                "  - evaluate(expression): page.evaluate — JS, returns "
+                "JSON-serialised result. Useful for reading window "
+                "globals (window.__INITIAL_STATE__) or computed values.\n"
+                "  - wait_for_selector(selector, timeout?), "
+                "wait_for_load_state(state), wait_for_timeout(timeout).\n"
+                "  - reload, go_back, go_forward.\n"
+                "  - content (HTML), title, url.\n"
+                "  - close(): close the page when done.\n"
+                "Default flow for 'read this URL' is just read_url (a "
+                "shortcut for goto+close). For interactive flows: "
+                "goto → click/fill/wait_for_selector → observe → "
+                "screenshot_describe → ... → close. For live feeds (stock "
+                "tickers, dashboards): goto → observe periodically → "
+                "close. Use web_view(open) instead ONLY when the user "
+                "explicitly asks to SEE the page (replays, login walls, "
+                "manual interaction)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "goto", "observe", "click", "fill", "type",
+                            "press", "screenshot", "screenshot_describe",
+                            "evaluate", "wait_for_selector",
+                            "wait_for_load_state", "wait_for_timeout",
+                            "reload", "go_back", "go_forward",
+                            "content", "title", "url", "close",
+                        ],
+                    },
+                    "url": {"type": "string", "description": "For goto."},
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector. For click/fill/type/press/wait_for_selector.",
+                    },
+                    "value": {"type": "string", "description": "For fill."},
+                    "text": {"type": "string", "description": "For type."},
+                    "key": {"type": "string", "description": "For press, e.g. 'Enter'."},
+                    "expression": {"type": "string", "description": "JS expression for evaluate."},
+                    "state": {
+                        "type": "string",
+                        "enum": ["load", "domcontentloaded", "networkidle"],
+                        "description": "For wait_for_load_state.",
+                    },
+                    "wait_until": {
+                        "type": "string",
+                        "enum": ["load", "domcontentloaded", "networkidle"],
+                        "description": "For goto / reload / go_back / go_forward.",
+                    },
+                    "timeout": {"type": "integer", "description": "Milliseconds."},
+                    "delay": {"type": "integer", "description": "ms between keystrokes for type."},
+                    "full_page": {
+                        "type": "boolean",
+                        "description": "For screenshot / screenshot_describe.",
+                    },
+                    "drain": {
+                        "type": "boolean",
+                        "description": "For observe; if false, keep responses in buffer.",
+                    },
+                    "x": {"type": "integer", "description": "Click x-coord (alternative to selector)."},
+                    "y": {"type": "integer", "description": "Click y-coord."},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+            executor=_make_browser_set(user_id),
+        ),
+        ToolSpec(
+            name="web_view",
+            description=(
+                "Visible web pane — the desktop's real Chromium "
+                "BrowserView, mounted on the canvas as a draggable / "
+                "resizable / closeable block. NOT the default for shared "
+                "URLs — for 'explain this article', 'what is this', "
+                "'summarise this paper', use read_url instead, then speak "
+                "the answer. Reach for web_view ONLY when the user "
+                "explicitly wants to see / play / interact with the page: "
+                "'show me', 'open it', 'play this replay', 'let me watch', "
+                "or when read_url failed to extract text (canvas / video / "
+                "image-only SPAs). The page loads first-party (real "
+                "cookies, real Referer), so anti-embed sites, DRM "
+                "players, session-bound SPAs, video/canvas replays that "
+                "'just don't work' inside request_new_block work here. "
+                "Available actions: "
+                "'open' (loads url, returns perception), 'observe' (re-checks "
+                "current page without re-navigating — call twice ~2s apart "
+                "to see if a video is actually playing via "
+                "video.current_time advancing), 'click' (selector OR x+y), "
+                "'type' (text into a focused or selected element), 'scroll' "
+                "(direction up/down + pixel amount), 'wait_for' (selector "
+                "appears within timeout_ms), 'close' (hide the pane). The "
+                "perception report includes title, url, ready_state, "
+                "loader_visible, video state (current_time, duration, "
+                "paused), canvas presence, visible text excerpt, console "
+                "errors, and failed network requests. Set "
+                "include_screenshot=true on open/observe ONLY when DOM "
+                "probes aren't enough — the screenshot is delegated to a "
+                "vision model and the textual description is added to the "
+                "report as `screenshot_description` (the persona never sees "
+                "raw image bytes). include_screenshot adds ~5–6s. If the "
+                "desktop isn't running, returns "
+                "{\"error\": \"desktop_not_running\"} so you can speak the "
+                "limitation back to the user."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "open", "observe", "click", "type",
+                            "scroll", "wait_for", "close",
+                        ],
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Required for action='open'.",
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": (
+                            "CSS selector. For click/type, alternative to x+y. "
+                            "Required for wait_for."
+                        ),
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type. Required for action='type'.",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down"],
+                        "description": "Scroll direction. Default 'down'.",
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "Scroll distance in pixels. Default 400.",
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Timeout for wait_for. Default 5000.",
+                    },
+                    "include_screenshot": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, capture a screenshot, run it through "
+                            "the vision model, and add the textual "
+                            "description to the report. Adds ~5–6s."
+                        ),
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Click x-coordinate (alternative to selector).",
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Click y-coordinate (alternative to selector).",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+            executor=_make_web_view(user_id),
         ),
         ToolSpec(
             name="list_media",

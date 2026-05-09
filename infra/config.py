@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     deepseek_base_url: str = ""
     deepseek_model: str = ""
 
+    # Vision (image-understanding) provider — separate from llm_provider.
+    # Selects the backend in infra/model/vision/. The main reasoning LLM
+    # (llm_provider) stays text-only; vision calls are delegated here.
+    vision_provider: str = "doubao"
+
+    # Doubao Seed 2.0 Lite via Volces Ark (OpenAI-compatible)
+    doubao_api_key: str = ""
+    doubao_base_url: str = ""
+    doubao_vision_model: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

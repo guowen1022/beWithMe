@@ -96,13 +96,29 @@ def _render_block_source(
     # derived from its block_id so the persona can update one without
     # cross-talking to another.
     js = js.replace("__CONTENT_TOPIC__", f"text.{block_id}.content")
-    # Template-specific params. Today only `content` (used by
-    # text_display) — encoded as a JSON string literal. Default ""
-    # keeps the rendered JS valid when the caller doesn't pass params.
+    # Template-specific params. Today: `content` (text_display) and
+    # `url`/`title`/`excerpt` (url_card). Each substitutes as a
+    # JSON-encoded JS literal — quote/escape safety lives at the
+    # substitution boundary, not in template authoring.
     content_value = ""
     if params and isinstance(params.get("content"), str):
         content_value = params["content"]
     js = js.replace("__CONTENT__", json.dumps(content_value))
+    # url_card params — default to empty strings so unrelated templates
+    # don't break when these placeholders aren't present.
+    url_value = ""
+    title_value = ""
+    excerpt_value = ""
+    if params:
+        if isinstance(params.get("url"), str):
+            url_value = params["url"]
+        if isinstance(params.get("title"), str):
+            title_value = params["title"]
+        if isinstance(params.get("excerpt"), str):
+            excerpt_value = params["excerpt"]
+    js = js.replace("__URL_CARD_URL__", json.dumps(url_value))
+    js = js.replace("__URL_CARD_TITLE__", json.dumps(title_value))
+    js = js.replace("__URL_CARD_EXCERPT__", json.dumps(excerpt_value))
 
     manifest_json = json.dumps(template.manifest.to_json(), separators=(",", ":"))
     open_idx = js.find("({")
