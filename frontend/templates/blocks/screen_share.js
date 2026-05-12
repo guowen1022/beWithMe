@@ -106,31 +106,69 @@
     var stream = null;
     var recorder = null;
     var sourceName = '';
+    var audioNoteLive = '';      // set after stream is acquired; affects status text
+    var chunksSent = 0;
+    var chunksFailed = 0;
+    var lastChunkBytes = 0;
 
     var authHeaders = userId ? { 'X-User-Id': userId } : {};
 
+    var refreshStatusCounter = function () {
+      var failTail = chunksFailed > 0 ? ', ' + chunksFailed + ' failed' : '';
+      var bytesTail = lastChunkBytes > 0 ? ' · ' + Math.round(lastChunkBytes / 1024) + 'KB' : '';
+      status.textContent = (sourceName || 'screen') + audioNoteLive +
+        ' · ' + chunksSent + ' chunks' + failTail + bytesTail;
+    };
+
     var postChunk = function (blob, startedAtMs) {
+      lastChunkBytes = blob.size;
       var fd = new FormData();
       fd.append('file', blob, 'chunk.webm');
       fd.append('session_id', sessionId);
       fd.append('chunk_started_at_ms', String(startedAtMs));
       if (sourceName) fd.append('source_name', sourceName);
-      // Fire-and-forget; failures don't tear down the recorder.
       fetch('/api/perception/screen_chunk', {
         method: 'POST', headers: authHeaders, body: fd,
+      }).then(function (res) {
+        if (res.ok) {
+          chunksSent += 1;
+        } else {
+          chunksFailed += 1;
+          // Surface the error body to the dev console so misrouted /
+          // 4xx / 5xx is diagnosable without DevTools network tab.
+          res.text().then(function (b) {
+            console.warn('[screen_share] chunk POST ' + res.status + ': ' + b.slice(0, 300));
+          }).catch(function () {});
+        }
+        refreshStatusCounter();
       }).catch(function (err) {
-        console.warn('[screen_share] chunk POST failed:', err);
+        chunksFailed += 1;
+        console.warn('[screen_share] chunk POST network error:', err);
+        refreshStatusCounter();
       });
+    };
+
+    var pickMime = function (mediaStream) {
+      // Codec hint MUST match what's actually in the stream. Asking for
+      // ;codecs=vp8,opus on a video-only stream causes some Chromium
+      // builds to silently never fire ondataavailable (the recorder
+      // construction succeeds but the muxer rejects every frame). Pick
+      // the narrowest hint that matches reality.
+      var hasAudio = mediaStream.getAudioTracks().length > 0;
+      var candidates = hasAudio
+        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+        : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+      if (typeof MediaRecorder === 'undefined') return candidates[candidates.length - 1];
+      for (var i = 0; i < candidates.length; i++) {
+        if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+      }
+      return 'video/webm';
     };
 
     var startRecorder = function (mediaStream) {
       stream = mediaStream;
-      var mime = 'video/webm;codecs=vp8,opus';
-      if (typeof MediaRecorder !== 'undefined' && !MediaRecorder.isTypeSupported(mime)) {
-        // VP8+opus is the most-supported combo in Chromium; fall back to
-        // raw video/webm if the explicit codec hint is rejected.
-        mime = 'video/webm';
-      }
+      var mime = pickMime(mediaStream);
+      console.log('[screen_share] starting recorder mime=' + mime + ' audioTracks=' + mediaStream.getAudioTracks().length + ' videoTracks=' + mediaStream.getVideoTracks().length);
       try {
         recorder = new MediaRecorder(stream, { mimeType: mime });
       } catch (err) {
@@ -139,6 +177,15 @@
         setColor('error');
         return;
       }
+      // Surface any async recorder failure (codec mismatch, source ended,
+      // etc.) so it's not invisible behind a still-green "Sharing" pill.
+      recorder.onerror = function (e) {
+        var msg = (e && e.error && e.error.message) ? e.error.message : 'recorder error';
+        console.warn('[screen_share] recorder.onerror:', e);
+        title.textContent = 'Recorder error';
+        status.textContent = msg;
+        setColor('error');
+      };
       recorder.ondataavailable = function (e) {
         if (e.data && e.data.size > 0) {
           postChunk(e.data, Date.now());
@@ -178,8 +225,8 @@
         return;
       }
       title.textContent = 'Sharing';
-      var audioNote = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
-      status.textContent = (sourceName || 'screen') + audioNote;
+      audioNoteLive = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
+      refreshStatusCounter();
       setColor('active');
       button.textContent = 'STOP';
       ensureAmbientMicMounted();

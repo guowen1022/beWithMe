@@ -73,6 +73,12 @@ async def post_screen_chunk(
     is just `{accepted, dropped_reason?, segments_emitted}` for debugging.
     The real output (TimelineSegments) flows through the perception cache.
     """
+    print(
+        f"[screen_share] chunk arriving: user={user_id} session={session_id} "
+        f"source={source_name!r} started_at={chunk_started_at_ms}",
+        flush=True,
+    )
+
     session = screen_session.get_or_create(
         user_id=user_id,
         session_id=session_id,
