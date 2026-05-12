@@ -144,24 +144,6 @@
           postChunk(e.data, Date.now());
         }
       };
-      recorder.onstart = function () {
-        title.textContent = 'Sharing';
-        var audioNote = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
-        status.textContent = (sourceName || 'screen') + audioNote;
-        setColor('active');
-        button.textContent = 'STOP';
-        ensureAmbientMicMounted();
-        report({
-          kind: 'screen_share',
-          content: 'Sharing ' + (sourceName || 'screen') + audioNote,
-          extra: {
-            active: true,
-            source_name: sourceName,
-            session_id: sessionId,
-            has_system_audio: hasSystemAudio,
-          },
-        });
-      };
       recorder.onstop = function () {
         title.textContent = 'Stopped';
         status.textContent = 'Idle';
@@ -171,7 +153,6 @@
           stream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} });
           stream = null;
         }
-        // Tell the backend the session is done so it can mark it offline.
         var fd = new FormData();
         fd.append('session_id', sessionId);
         fetch('/api/perception/screen_chunk/stop', {
@@ -183,7 +164,35 @@
           extra: { active: false, session_id: sessionId },
         });
       };
-      recorder.start(3000); // 3 s timeslice → one ondataavailable per chunk
+      // Chromium's MediaRecorder.onstart event fires inconsistently in
+      // some Electron builds — observed: button label stuck on START
+      // because onstart never fired even though chunks were being POSTed.
+      // Flip UI synchronously after start() returns to decouple the
+      // visual state from the event-loop quirk.
+      try {
+        recorder.start(3000); // 3 s timeslice → one ondataavailable per chunk
+      } catch (err) {
+        title.textContent = 'Recorder failed';
+        status.textContent = (err && err.message) ? err.message : String(err);
+        setColor('error');
+        return;
+      }
+      title.textContent = 'Sharing';
+      var audioNote = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
+      status.textContent = (sourceName || 'screen') + audioNote;
+      setColor('active');
+      button.textContent = 'STOP';
+      ensureAmbientMicMounted();
+      report({
+        kind: 'screen_share',
+        content: 'Sharing ' + (sourceName || 'screen') + audioNote,
+        extra: {
+          active: true,
+          source_name: sourceName,
+          session_id: sessionId,
+          has_system_audio: hasSystemAudio,
+        },
+      });
     };
 
     var hasSystemAudio = false;
@@ -206,9 +215,13 @@
             maxFrameRate: 15,
           },
         };
-        // Try video+audio; on macOS this typically throws NotFoundError
+        // Try video+audio first. On macOS this often throws NotFoundError
         // because system-audio capture needs a loopback driver (BlackHole
-        // etc.) the OS doesn't ship with. Fall back to video-only.
+        // etc.) the OS doesn't ship with. Some Chromium builds throw
+        // different error names for the same condition, so we treat ANY
+        // failure on the combined-stream attempt as "no system audio" and
+        // retry video-only. The renderer/recorder still gets a usable
+        // stream and the user's mic stays available via ambient_mic.
         try {
           var s = await navigator.mediaDevices.getUserMedia({
             audio: { mandatory: { chromeMediaSource: 'desktop' } },
@@ -217,11 +230,7 @@
           hasSystemAudio = s.getAudioTracks().length > 0;
           return s;
         } catch (err) {
-          var name = err && err.name ? err.name : '';
-          if (name !== 'NotFoundError' && name !== 'NotAllowedError' && name !== 'OverconstrainedError') {
-            throw err;
-          }
-          console.warn('[screen_share] system-audio capture unavailable (' + name + '); falling back to video-only');
+          console.warn('[screen_share] system-audio attempt failed (' + (err && err.name || 'unknown') + ': ' + (err && err.message || '') + ') — falling back to video-only');
           hasSystemAudio = false;
           return await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
         }

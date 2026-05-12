@@ -6,6 +6,7 @@ import {
   ipcMain,
   nativeTheme,
   session,
+  systemPreferences,
 } from "electron";
 import path from "node:path";
 import fs from "node:fs";
@@ -275,8 +276,42 @@ function configurePermissions() {
   );
 }
 
+async function ensureMacMediaPermissions(): Promise<void> {
+  // macOS-only: Chromium's permission allowlist (configurePermissions
+  // above) is not enough — the *OS* itself must also have granted the
+  // app access to the microphone, otherwise renderer getUserMedia()
+  // calls fail with NotFoundError (Chromium maps "OS-denied" to that).
+  // Trigger the system prompt the first time the user opens the app;
+  // returns immediately on already-granted, no-op on non-mac.
+  if (process.platform !== "darwin") return;
+  try {
+    const status = systemPreferences.getMediaAccessStatus("microphone");
+    if (status !== "granted") {
+      const granted = await systemPreferences.askForMediaAccess("microphone");
+      console.log(`[main] mic access ${granted ? "granted" : "DENIED"}`);
+    }
+  } catch (err) {
+    console.warn("[main] mic access prompt failed:", err);
+  }
+  // Screen recording can't be requested programmatically on macOS — the
+  // user has to flip the toggle in System Settings themselves. Detect
+  // and surface the status in logs so the dev knows why a black screen
+  // shows up if it does.
+  try {
+    const screenStatus = systemPreferences.getMediaAccessStatus("screen");
+    if (screenStatus !== "granted") {
+      console.warn(
+        `[main] screen-recording access is "${screenStatus}". ` +
+          "Open System Settings → Privacy & Security → Screen Recording " +
+          "and enable beWithMe / Electron if screen_share shows a black frame."
+      );
+    }
+  } catch {}
+}
+
 app.whenReady().then(async () => {
   configurePermissions();
+  await ensureMacMediaPermissions();
   createWindow();
   // HTTP shim for the persona's web_view tool. Writes port+token to
   // <userData>/web_view_port.json so the Python sidecar can find it.
