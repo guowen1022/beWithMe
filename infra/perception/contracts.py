@@ -133,7 +133,52 @@ class UserSpeechEvent(BaseModel):
     target_persona: str
 
 
-PerceptionEvent = Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent, UserSpeechEvent]
+class ScreenSegment(BaseModel):
+    """One timeline atom from an ongoing screen-share session.
+
+    Mirrors `infra.media.video.TimelineSegment` but adds the wall-clock
+    anchor + session id needed to correlate segments across chunks.
+    Ephemeral; lives only in the perception cache deque.
+    """
+    model_config = _CFG
+    kind: Literal["vision", "speech"]
+    wall_time_ms: int
+    content: str
+    is_scene_cut: bool = False  # only meaningful for kind="vision"
+
+
+class ScreenSegmentEvent(BaseModel):
+    """Fired by cache.record_screen_segment as the screen-share orchestrator
+    emits each segment. The teacher's trigger orchestrator wakes Lane A
+    only on speech segments or scene-cut frames (selective wake)."""
+    model_config = _CFG
+    type: Literal["screen-segment"] = "screen-segment"
+    user_id: UUID
+    session_id: str
+    segment: ScreenSegment
+    source_name: Optional[str] = None
+    target_persona: str = "teacher"
+
+
+class ScreenStoppedEvent(BaseModel):
+    """Fired when a screen-share session ends (user clicked STOP, recorder
+    closed, or the session timed out). The persona uses this to flip the
+    `online` flag on the perception view."""
+    model_config = _CFG
+    type: Literal["screen-stopped"] = "screen-stopped"
+    user_id: UUID
+    session_id: str
+    target_persona: str = "teacher"
+
+
+PerceptionEvent = Union[
+    BlockChangeEvent,
+    BlockCompletedEvent,
+    VoiceEvent,
+    UserSpeechEvent,
+    ScreenSegmentEvent,
+    ScreenStoppedEvent,
+]
 
 
 # ---------- read_media() return shape ----------
@@ -166,12 +211,27 @@ class VoicePerception(BaseModel):
     recent_utterances: List[VoiceUtterance] = []
 
 
+class ScreenPerception(BaseModel):
+    """One ongoing screen-share session's recent timeline.
+
+    Per-session (not per-device) because the user can in principle share
+    different screens from different devices simultaneously. v1 assumes
+    one session per user at a time; the model leaves room for more.
+    """
+    model_config = _CFG
+    session_id: str
+    online: bool
+    source_name: Optional[str] = None
+    recent_segments: List[ScreenSegment] = []
+
+
 class MediaPerception(BaseModel):
     """The persona's full perception view — answer to read_media()."""
     model_config = _CFG
     user_id: UUID
     canvases: List[CanvasPerception] = []
     voices: List[VoicePerception] = []
+    screens: List[ScreenPerception] = []
 
 
 __all__ = [
@@ -183,9 +243,13 @@ __all__ = [
     "BlockCompletedEvent",
     "VoiceEvent",
     "UserSpeechEvent",
+    "ScreenSegment",
+    "ScreenSegmentEvent",
+    "ScreenStoppedEvent",
     "PerceptionEvent",
     "BlockSummary",
     "CanvasPerception",
     "VoicePerception",
+    "ScreenPerception",
     "MediaPerception",
 ]

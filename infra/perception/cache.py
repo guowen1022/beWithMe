@@ -47,6 +47,9 @@ from infra.perception.contracts import (
     BlockCompletedEvent,
     BlockState,
     PerceptionEvent,
+    ScreenSegment,
+    ScreenSegmentEvent,
+    ScreenStoppedEvent,
     UserSpeechEvent,
     UserUtterance,
     VoiceEvent,
@@ -59,6 +62,7 @@ from infra.perception.contracts import (
 CONTENT_MAX_CHARS = 1000
 VOICE_LOG_MAX = 50
 USER_SPEECH_LOG_MAX = 50
+SCREEN_SEGMENT_LOG_MAX = 30  # per-session ring; older segments age out of perception
 COALESCE_WINDOW_MS = 500
 
 # Echo dedup tunables.
@@ -89,6 +93,13 @@ _voice_log: Dict[str, Deque[VoiceUtterance]] = defaultdict(
 _user_speech_log: Dict[str, Deque[UserUtterance]] = defaultdict(
     lambda: deque(maxlen=USER_SPEECH_LOG_MAX)
 )
+
+# (user_id, session_id) -> deque[ScreenSegment]
+# Live screen-share segments — one ring per active session. Drops out of
+# perception on session stop (record_screen_stopped clears the entry).
+_screen_segment_log: Dict[tuple, Deque[ScreenSegment]] = {}
+# (user_id, session_id) -> {"online": bool, "source_name": Optional[str]}
+_screen_session_meta: Dict[tuple, Dict[str, Any]] = {}
 
 Listener = Callable[[PerceptionEvent], Awaitable[None]]
 _listeners: List[Listener] = []
@@ -425,6 +436,61 @@ def record_user_speech(
     ))
 
 
+def record_screen_segment(
+    *,
+    user_id: UUID,
+    session_id: str,
+    segment: ScreenSegment,
+    source_name: Optional[str] = None,
+    target_persona: str = "teacher",
+) -> None:
+    """Append one timeline segment to the session ring + fire a
+    ScreenSegmentEvent. Same cheap-talk discipline as user speech."""
+    key = (str(user_id), session_id)
+    log = _screen_segment_log.get(key)
+    if log is None:
+        log = deque(maxlen=SCREEN_SEGMENT_LOG_MAX)
+        _screen_segment_log[key] = log
+    log.append(segment)
+    meta = _screen_session_meta.setdefault(key, {"online": True, "source_name": source_name})
+    meta["online"] = True
+    if source_name and not meta.get("source_name"):
+        meta["source_name"] = source_name
+    _schedule_fire(ScreenSegmentEvent(
+        user_id=user_id,
+        session_id=session_id,
+        segment=segment,
+        source_name=meta.get("source_name"),
+        target_persona=target_persona,
+    ))
+
+
+def record_screen_stopped(
+    *,
+    user_id: UUID,
+    session_id: str,
+    target_persona: str = "teacher",
+) -> None:
+    """Mark the session offline + fire ScreenStoppedEvent. Keeps the ring
+    around briefly so the persona's next read still sees the trailing
+    segments labelled `online: False`. Callers may explicitly call
+    `forget_screen_session(...)` to wipe the ring."""
+    key = (str(user_id), session_id)
+    meta = _screen_session_meta.get(key)
+    if meta is not None:
+        meta["online"] = False
+    _schedule_fire(ScreenStoppedEvent(
+        user_id=user_id, session_id=session_id, target_persona=target_persona,
+    ))
+
+
+def forget_screen_session(*, user_id: UUID, session_id: str) -> None:
+    """Drop a session's ring + meta entirely. Idempotent."""
+    key = (str(user_id), session_id)
+    _screen_segment_log.pop(key, None)
+    _screen_session_meta.pop(key, None)
+
+
 # ---------- reading ----------
 
 
@@ -448,10 +514,21 @@ def read_for_user(user_id: UUID) -> dict:
             state_view[did_s][bid] = (bstate, ts or datetime.utcnow())
     voice = list(_voice_log.get(uid_s, ()))
     user_speech = list(_user_speech_log.get(uid_s, ()))
+    screens: dict[str, dict] = {}
+    for (uid_key, session_id), ring in _screen_segment_log.items():
+        if uid_key != uid_s:
+            continue
+        meta = _screen_session_meta.get((uid_key, session_id), {"online": True, "source_name": None})
+        screens[session_id] = {
+            "online": bool(meta.get("online", False)),
+            "source_name": meta.get("source_name"),
+            "segments": list(ring),
+        }
     return {
         "block_state": state_view,
         "voice_log": voice,
         "user_speech_log": user_speech,
+        "screen_sessions": screens,
     }
 
 
@@ -464,6 +541,8 @@ def _reset_for_tests() -> None:
     _block_state_at.clear()
     _voice_log.clear()
     _user_speech_log.clear()
+    _screen_segment_log.clear()
+    _screen_session_meta.clear()
     for task in list(_pending_focus_fires.values()):
         if not task.done():
             task.cancel()

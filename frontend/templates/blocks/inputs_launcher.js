@@ -156,5 +156,10 @@
       'Paste or type text directly.',
       'passage_reader',
     ));
+    buttonRow.appendChild(makeButton(
+      'Share screen',
+      "Watch what I'm doing live.",
+      'screen_share',
+    ));
   },
 })

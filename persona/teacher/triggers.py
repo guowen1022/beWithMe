@@ -45,6 +45,8 @@ from uuid import UUID
 from infra.perception import (
     BlockChangeEvent,
     BlockCompletedEvent,
+    ScreenSegmentEvent,
+    ScreenStoppedEvent,
     UserSpeechEvent,
     VoiceEvent,
     subscribe,
@@ -142,7 +144,14 @@ def uninstall() -> None:
 # ---- classify ------------------------------------------------------------
 
 
-_AnyEvent = Union[BlockChangeEvent, BlockCompletedEvent, VoiceEvent, UserSpeechEvent]
+_AnyEvent = Union[
+    BlockChangeEvent,
+    BlockCompletedEvent,
+    VoiceEvent,
+    UserSpeechEvent,
+    ScreenSegmentEvent,
+    ScreenStoppedEvent,
+]
 
 
 def _classify(event: _AnyEvent) -> Optional[str]:
@@ -174,6 +183,23 @@ def _classify(event: _AnyEvent) -> Optional[str]:
             return None
         return "lane_a"
 
+    # Screen-share: ambient + selective wake. Every segment is added to
+    # perception by the cache; we wake Lane A only on speech segments or
+    # the first vision segment after a real change (is_scene_cut). Static
+    # screens (typing in a textbox) don't interrupt.
+    if isinstance(event, ScreenSegmentEvent):
+        if event.target_persona != _PERSONA_NAME:
+            return None
+        seg = event.segment
+        if seg.kind == "speech" or seg.is_scene_cut:
+            return "lane_a"
+        return None
+
+    # Session-stop is a perception state flip, not a wake-worthy event on
+    # its own. Persona will see `screen.online = False` next time it reads.
+    if isinstance(event, ScreenStoppedEvent):
+        return None
+
     return None
 
 
@@ -204,6 +230,23 @@ def _summarise_event(event: _AnyEvent, lane: str) -> Any:
             state_kind=None,
             content=event.utterance.text,
             extra=None,
+        )
+
+    if isinstance(event, ScreenSegmentEvent):
+        seg = event.segment
+        extra: Dict[str, Any] = {
+            "session_id": event.session_id,
+            "kind": seg.kind,
+            "wall_time_ms": seg.wall_time_ms,
+        }
+        if event.source_name:
+            extra["source_name"] = event.source_name
+        return PerceptionEventSummary(
+            event_type=f"screen_{seg.kind}",
+            block_id=None,
+            state_kind=None,
+            content=seg.content,
+            extra=extra,
         )
 
     # BlockCompletedEvent (BlockChangeEvent is dropped at classify).

@@ -35,6 +35,7 @@ from services.persona.routers import (
     interactions as interactions_router,
     perception_utterance as perception_utterance_router,
     recommender as recommender_router,
+    screen_share as screen_share_router,
     sessions as sessions_router,
     teacher_media as teacher_media_router,
 )
@@ -67,6 +68,7 @@ app.include_router(concepts_router.router, prefix="/api")
 app.include_router(dynamic_router.router, prefix="/api")
 app.include_router(teacher_media_router.router, prefix="/api")
 app.include_router(perception_utterance_router.router, prefix="/api")
+app.include_router(screen_share_router.router, prefix="/api")
 
 
 def main() -> None:

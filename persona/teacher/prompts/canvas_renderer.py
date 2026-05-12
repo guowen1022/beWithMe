@@ -87,7 +87,28 @@ def format_canvas_state(perc: object) -> str:
             text = text[:67] + "…"
         voice_lines.append(f'- voice: last said "{text}"')
 
-    if not lines and not voice_lines:
+    screen_lines: list[str] = []
+    screens = getattr(perc, "screens", []) or []
+    for screen in screens:
+        # Show offline (just-stopped) sessions once with an explicit hint
+        # so the persona can wrap up; subsequent reads will drop the section
+        # entirely once the cache is forgotten.
+        online = getattr(screen, "online", False)
+        source = getattr(screen, "source_name", None) or "unknown source"
+        recent = getattr(screen, "recent_segments", []) or []
+        # Last 8 segments — keep the prompt tight; older segments still live
+        # in the ring but aren't load-bearing for live awareness.
+        tail = recent[-8:]
+        header = (
+            f"=== SCREEN SHARE ({source}, live) ==="
+            if online
+            else f"=== SCREEN SHARE ({source}, ended) ==="
+        )
+        screen_lines.append(header)
+        for seg in tail:
+            screen_lines.append(_format_screen_segment(seg))
+
+    if not lines and not voice_lines and not screen_lines:
         return ""
 
     # Header line summarising connected canvases by device class. Lets the
@@ -110,7 +131,25 @@ def format_canvas_state(perc: object) -> str:
         parts.append("active: " + " · ".join(device_summaries))
     parts.extend(lines)
     parts.extend(voice_lines)
+    parts.extend(screen_lines)
     return "\n".join(parts)
+
+
+def _format_screen_segment(seg) -> str:
+    """One line per ScreenSegment: `[mm:ss] vision: …` or `[mm:ss] speech: …`.
+
+    Wall time is rendered as relative-since-session-start would be ideal,
+    but we don't have the session start here without plumbing more state.
+    Use the absolute wall time tail (last 6 digits of ms ≈ minutes:seconds
+    within the current 1000-second window) — readable, terse, monotonic."""
+    kind = getattr(seg, "kind", "vision")
+    wall_ms = getattr(seg, "wall_time_ms", 0)
+    tail_seconds = (wall_ms // 1000) % 1000  # rolling minute-window timestamp
+    mm, ss = divmod(tail_seconds, 60)
+    content = (getattr(seg, "content", "") or "").strip().replace("\n", " ")
+    if len(content) > 110:
+        content = content[:107] + "…"
+    return f"  [{mm:02d}:{ss:02d}] {kind}: {content}"
 
 
 # Mirrors infra/contracts/ui.DEVICE_GRID_BOUNDS — kept inline here so this
@@ -246,7 +285,18 @@ def _format_block_line(block, device_class=None) -> str:
             else:
                 head = "- upload widget: empty (NO FILE CHOSEN YET — user must click Choose File)"
         elif kind == "launcher":
-            head = "- launcher: awaiting user's choice (Upload PDF / Paste Passage)"
+            head = "- launcher: awaiting user's choice (Upload file / Paste passage / Share screen)"
+        elif kind == "screen_share":
+            active = bool(extra.get("active"))
+            source = extra.get("source_name") or "unknown source"
+            session_id = extra.get("session_id") or "?"
+            if active:
+                head = (
+                    f"- screen-share widget: LIVE (source={source}, session={session_id}) "
+                    f"— see SCREEN SHARE section below for the live timeline"
+                )
+            else:
+                head = "- screen-share widget: idle (user can click START)"
         elif kind == "snapshot":
             label = title or content or bid
             head = f'- panel: "{label}"'

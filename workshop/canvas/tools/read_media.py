@@ -24,6 +24,7 @@ from infra.perception import (
     BlockSummary,
     CanvasPerception,
     MediaPerception,
+    ScreenPerception,
     VoicePerception,
     read_for_user,
 )
@@ -58,10 +59,20 @@ async def read_media(
     perc = read_for_user(user_id)
     state_by_device = perc["block_state"]    # {did: {bid: (state, ts)}}
     voice_log = perc["voice_log"]
+    screen_sessions = perc.get("screen_sessions", {})  # {sid: {online, source_name, segments}}
     now = datetime.utcnow()
 
     canvases: list[CanvasPerception] = []
     voices: list[VoicePerception] = []
+    screens: list[ScreenPerception] = [
+        ScreenPerception(
+            session_id=sid,
+            online=info.get("online", False),
+            source_name=info.get("source_name"),
+            recent_segments=info.get("segments", []),
+        )
+        for sid, info in screen_sessions.items()
+    ]
 
     for d in devices:
         did_s = str(d.device_id)
@@ -115,7 +126,7 @@ async def read_media(
     if untagged and voices:
         voices[0].recent_utterances = untagged + voices[0].recent_utterances
 
-    return MediaPerception(user_id=user_id, canvases=canvases, voices=voices)
+    return MediaPerception(user_id=user_id, canvases=canvases, voices=voices, screens=screens)
 
 
 __all__ = ["read_media"]

@@ -2,6 +2,7 @@ import {
   app,
   BaseWindow,
   WebContentsView,
+  desktopCapturer,
   ipcMain,
   nativeTheme,
   session,
@@ -188,6 +189,22 @@ function createWindow() {
     }
   });
 }
+
+// Screen-share: enumerate displays + windows the renderer can capture.
+// The frontend `screen_share` block calls this, then passes the chosen
+// `id` to `getUserMedia({video: {mandatory: {chromeMediaSourceId: id}}})`.
+ipcMain.handle("screen:list_sources", async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: { width: 0, height: 0 }, // skip thumbnails — we don't render them yet
+    fetchWindowIcons: false,
+  });
+  return sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    kind: s.id.split(":")[0], // "screen" or "window"
+  }));
+});
 
 ipcMain.handle("browser:navigate", async (_e, url: string) => {
   if (!mainWindow) return;

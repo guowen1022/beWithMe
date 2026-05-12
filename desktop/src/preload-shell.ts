@@ -22,6 +22,8 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   };
 }
 
+type ScreenSource = { id: string; name: string; kind: string };
+
 contextBridge.exposeInMainWorld("beWithMeBridge", {
   browser: {
     navigate: (url: string) => ipcRenderer.invoke("browser:navigate", url),
@@ -40,5 +42,9 @@ contextBridge.exposeInMainWorld("beWithMeBridge", {
       subscribe<LoadingPayload>("browser:loading-changed", cb),
     onScrollChange: (cb: (p: ScrollPayload) => void) =>
       subscribe<ScrollPayload>("browser:scroll-changed", cb),
+  },
+  screen: {
+    listSources: () =>
+      ipcRenderer.invoke("screen:list_sources") as Promise<ScreenSource[]>,
   },
 });
