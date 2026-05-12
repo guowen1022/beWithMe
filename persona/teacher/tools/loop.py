@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import UUID
 
+from infra.config import settings
 from infra.model.llm import stream_with_tools
 from infra.model.tools import ToolSpec
 
@@ -32,38 +34,71 @@ _MAX_TOOL_TURNS = 6
 _TOOL_RESULT_MAX_CHARS = 2000
 
 
-def _truncate(s: str, n: int = _TOOL_RESULT_MAX_CHARS) -> str:
+def _truncate(s: str, n: int) -> str:
     if len(s) <= n:
         return s
     return s[:n] + f"\n…[truncated {len(s) - n} chars]"
 
 
 async def _execute_tool_calls(
-    calls: List[Dict[str, Any]], tools: List[ToolSpec]
+    calls: List[Dict[str, Any]],
+    tools: List[ToolSpec],
+    truncate_chars: int,
 ) -> List[Dict[str, Any]]:
-    """Run every tool concurrently. Unknown tools surface as error strings."""
+    """Run every tool concurrently. Unknown tools surface as error strings.
+
+    Each entry has `result` (truncated for the model's context) and
+    `result_raw` (untruncated, for callers that need to introspect the
+    structured payload — e.g. recipe-recording needs the full snapshot
+    refs list which is too big to fit in `result`)."""
     by_name = {t.name: t for t in tools}
 
     async def _one(call: Dict[str, Any]) -> Dict[str, Any]:
         spec = by_name.get(call.get("name") or "")
         if spec is None:
-            return {"call": call, "result": json.dumps({"error": f"unknown tool {call.get('name')!r}"})}
+            err = json.dumps({"error": f"unknown tool {call.get('name')!r}"})
+            return {"call": call, "result": err, "result_raw": err}
         try:
             result_text = await spec.executor(call.get("arguments") or {})
         except Exception as e:
             result_text = json.dumps({"error": f"{type(e).__name__}: {e}"})
-        return {"call": call, "result": _truncate(result_text)}
+        return {
+            "call": call,
+            "result": _truncate(result_text, truncate_chars),
+            "result_raw": result_text,
+        }
 
     return await asyncio.gather(*(_one(c) for c in calls))
 
 
-def _format_tool_round_for_history(executed: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Render one tool-use round as plain user/assistant messages.
+def _format_tool_round_for_history(executed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Render one tool-use round in the active provider's native shape.
 
-    The assistant message records what the model asked for; the user
-    message echoes back the tool results. Provider-agnostic; both
-    DeepSeek and MiniMax happily continue from this transcript.
+    Why this matters: in early versions we used a plain-text envelope
+    (`[tool_call name=... args=...]` / `[tool_result for=... ]`) for
+    cross-provider portability. After several rounds the LLM mimics
+    that format and starts emitting tool calls as **literal text**
+    instead of using the proper tool-use channel — a fatal failure
+    mode for long agentic loops (Lane R can run 25 rounds). Native
+    tool/tool-call messages eliminate the mimicry path entirely.
+
+    DeepSeek (OpenAI-compatible) format:
+      assistant.tool_calls = [{id, type:"function", function:{name, arguments(str)}}]
+      tool message: {role:"tool", tool_call_id, content}
+
+    MiniMax (Anthropic) format:
+      assistant.content = [{type:"tool_use", id, name, input}, ...]
+      user.content = [{type:"tool_result", tool_use_id, content}, ...]
     """
+    provider = (settings.llm_provider or "").lower()
+
+    if provider in ("deepseek", "openai"):
+        return _format_for_openai(executed)
+    if provider in ("minimax", "anthropic"):
+        return _format_for_anthropic(executed)
+
+    # Fallback for unknown providers — keep the legacy plain-text shape
+    # so we degrade gracefully rather than crash.
     asked = "\n".join(
         f"[tool_call name={e['call'].get('name')} id={e['call'].get('id')} args={json.dumps(e['call'].get('arguments') or {})}]"
         for e in executed
@@ -78,6 +113,58 @@ def _format_tool_round_for_history(executed: List[Dict[str, Any]]) -> List[Dict[
     ]
 
 
+def _format_for_openai(executed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """OpenAI-style: one assistant message with tool_calls + N tool
+    messages with tool_call_id."""
+    tool_calls = []
+    for e in executed:
+        c = e["call"]
+        tool_calls.append({
+            "id": c.get("id") or "call_unknown",
+            "type": "function",
+            "function": {
+                "name": c.get("name") or "",
+                "arguments": json.dumps(c.get("arguments") or {}),
+            },
+        })
+    msgs: List[Dict[str, Any]] = [
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+    ]
+    for e in executed:
+        c = e["call"]
+        msgs.append({
+            "role": "tool",
+            "tool_call_id": c.get("id") or "call_unknown",
+            "content": e["result"],
+        })
+    return msgs
+
+
+def _format_for_anthropic(executed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Anthropic-style: assistant tool_use blocks + user tool_result blocks."""
+    asst_blocks = []
+    for e in executed:
+        c = e["call"]
+        asst_blocks.append({
+            "type": "tool_use",
+            "id": c.get("id") or "call_unknown",
+            "name": c.get("name") or "",
+            "input": c.get("arguments") or {},
+        })
+    user_blocks = []
+    for e in executed:
+        c = e["call"]
+        user_blocks.append({
+            "type": "tool_result",
+            "tool_use_id": c.get("id") or "call_unknown",
+            "content": e["result"],
+        })
+    return [
+        {"role": "assistant", "content": asst_blocks},
+        {"role": "user", "content": user_blocks},
+    ]
+
+
 async def run(
     *,
     static_system: str,
@@ -89,22 +176,46 @@ async def run(
     max_iterations: int = _MAX_TOOL_TURNS,
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
+    wall_clock_deadline_s: Optional[float] = None,
+    deadline_grace_s: float = 10.0,
+    tool_result_max_chars: int = _TOOL_RESULT_MAX_CHARS,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
     `max_iterations` caps the number of tool-result → re-prompt rounds.
     Default is the historical 6 (suitable for `/ask` and Lane B background
     work). Lane A (user-facing reflect) passes 1 to short-circuit the
-    loop and answer quickly.
+    loop and answer quickly. Research lane (Lane R) passes ~25 so an
+    investigator can chain many tool calls before synthesizing.
+
+    `wall_clock_deadline_s` is a soft deadline measured from the start
+    of the call. When set, the loop:
+      - Injects a one-time "you have ~N s left, wrap up now" system
+        note before the iteration that crosses (deadline - grace_s),
+        so the model lands a clean synthesis instead of being chopped
+        off mid-tool-call. `deadline_grace_s` is the size of that
+        wrap-up window — Lane R uses ~30 s because a tool loop needs
+        a couple of rounds to converge on a final `speak`.
+      - Hard-breaks if the deadline is exceeded.
+
+    `tool_result_max_chars` controls how aggressively tool results are
+    truncated before re-entering the model's context. Lane A keeps the
+    tight 2000 default to defend its small token budget; Lane R passes
+    a larger value (~6000) so browser pages and document chunks survive
+    intact for reasoning.
 
     Final `done` shape:
       {"kind": "done", "text": full_answer, "usage": last_usage,
-       "stop_reason": "end_turn", "tool_rounds": int}
+       "stop_reason": "end_turn", "tool_rounds": int,
+       "deadline_hit": bool}
     """
     history: List[Dict[str, Any]] = list(prior_messages or [])
     full_text_parts: List[str] = []
     last_usage: Dict[str, Any] = {}
     tool_rounds = 0
+    started_at = time.monotonic()
+    deadline_warned = False
+    deadline_hit = False
 
     # TEMP debug — record the EXACT dynamic_user (which carries
     # `=== CURRENTLY ON CANVAS ===`) the LLM is about to see, plus the
@@ -133,6 +244,36 @@ async def run(
         pass
 
     for turn in range(max_iterations + 1):
+        # Wall-clock deadline check, before opening the next stream.
+        # 10 s grace window: inject a one-time system note so the model
+        # knows to wrap up. Past the deadline: break (don't even open
+        # another stream). The "deadline_hit" flag in done lets callers
+        # surface a "had to stop early" hint to the user if needed.
+        if wall_clock_deadline_s is not None:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= wall_clock_deadline_s:
+                deadline_hit = True
+                break
+            if (
+                not deadline_warned
+                and elapsed >= max(0.0, wall_clock_deadline_s - deadline_grace_s)
+            ):
+                deadline_warned = True
+                remaining = max(1, int(wall_clock_deadline_s - elapsed))
+                history.append({
+                    "role": "user",
+                    "content": (
+                        f"[system] DEADLINE: only ~{remaining}s left. "
+                        "STOP all investigation tool calls (browser_set, "
+                        "read_url, look_at_image). On your VERY NEXT turn "
+                        "call `speak` with your synthesis, quoting the "
+                        "concrete facts already in your research_note "
+                        "history. Do not call any other tool. If you "
+                        "feel notes are incomplete, hedge — 'based on "
+                        "what I observed' — but DO speak."
+                    ),
+                })
+
         pending_calls: List[Dict[str, Any]] = []
         stop_reason = "end_turn"
 
@@ -156,6 +297,15 @@ async def run(
                     "name": evt.get("name"),
                     "arguments": evt.get("arguments") or {},
                 })
+                # Re-yield to the caller so trigger pipelines can observe
+                # which tools the model is invoking (used by Lane R to
+                # detect when speak has been called).
+                yield {
+                    "kind": "tool_call",
+                    "id": evt.get("id"),
+                    "name": evt.get("name"),
+                    "arguments": evt.get("arguments") or {},
+                }
             elif kind == "done":
                 last_usage = evt.get("usage", {}) or {}
                 stop_reason = evt.get("stop_reason") or "end_turn"
@@ -191,8 +341,37 @@ async def run(
             # asking the model to call more tools.
             break
 
-        executed = await _execute_tool_calls(pending_calls, tools)
+        executed = await _execute_tool_calls(
+            pending_calls, tools, tool_result_max_chars
+        )
         tool_rounds += 1
+        # Propagate snapshot results upstream so callers can capture
+        # ARIA refs at record time (used by workshop/research recipes).
+        # Other tool results are intentionally NOT propagated — the
+        # truncated text already feeds back into the model on the next
+        # turn, and snapshot is the only result whose structured shape
+        # external callers need to introspect.
+        for e in executed:
+            call = e.get("call") or {}
+            if call.get("name") != "browser_set":
+                continue
+            args = call.get("arguments") or {}
+            if (args.get("action") or "").lower() != "snapshot":
+                continue
+            # Use `result_raw` (untruncated) — the truncated `result` is
+            # mid-JSON when the snapshot tree is large (Wikipedia ≈ 24 KB)
+            # and would fail to parse.
+            raw = e.get("result_raw") or e.get("result") or "{}"
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                continue
+            yield {
+                "kind": "tool_result",
+                "name": "browser_set",
+                "action": "snapshot",
+                "result": parsed,
+            }
         history.extend(_format_tool_round_for_history(executed))
         # Subsequent turns continue the same conversation — the user's
         # original `dynamic_user` shouldn't be re-sent. Move it into
@@ -207,6 +386,7 @@ async def run(
         "usage": last_usage,
         "stop_reason": "end_turn",
         "tool_rounds": tool_rounds,
+        "deadline_hit": deadline_hit,
     }
 
 

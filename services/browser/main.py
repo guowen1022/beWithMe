@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -381,6 +382,192 @@ async def _close_session(app: FastAPI) -> None:
     app.state.session_page = None
     app.state.session_url = None
     app.state.session_responses = []
+    # Invalidate snapshot refs on session teardown.
+    app.state.session_refs = {}
+
+
+def _invalidate_refs(app: FastAPI) -> None:
+    """Clear the @ref → Locator map. Call on any nav (goto/reload/back/forward)
+    — the DOM has changed, refs from the previous page point at nothing."""
+    app.state.session_refs = {}
+
+
+# --- accessibility-snapshot + @ref resolution ----------------------------
+#
+# Adds a `snapshot` session action that captures Playwright's ARIA snapshot
+# (a YAML representation of the page's accessibility tree), assigns
+# `@e1, @e2, ...` refs to interesting nodes, and stores a ref → Locator
+# map on app.state.session_refs. Subsequent click/text/scroll/etc accept
+# `@e<n>` in their `selector` slot. This eliminates the
+# LLM-author-JS-via-evaluate pattern for "find the section about X" — the
+# model reads a compact tree instead and addresses elements by ref.
+
+# Roles whose lines get a `@e<n>` ref. Other roles still appear in the
+# tree text (preserve structure for the reader) but aren't addressable.
+# Picked for research workflows — headings + content blocks + primary
+# interactive elements. Excludes:
+#   - link: Wikipedia-class pages have hundreds of citation links that
+#     would exhaust the ref budget. The LLM can still SEE them in the
+#     tree text and navigate using their @ref containers (heading,
+#     region) if needed.
+#   - listitem / list / group / generic: structural noise.
+_REF_ROLES = {
+    # Landmarks / sections
+    "main", "region", "navigation", "banner", "complementary",
+    "contentinfo", "article", "search", "form", "dialog", "tabpanel",
+    # Headings — the primary navigation surface for content pages.
+    # text(@heading) returns the WHOLE section under it (section-aware),
+    # so the agent rarely needs to address individual paragraphs.
+    "heading",
+    # Interactive (no link — see comment above)
+    "button", "textbox", "combobox", "listbox", "checkbox",
+    "radio", "tab", "menuitem", "switch", "slider", "spinbutton",
+    "treeitem", "option",
+    # Content blocks — exclude paragraph (too many; sections cover them)
+    "blockquote", "table", "img", "figure", "code", "math",
+    # Status
+    "alert", "alertdialog", "status", "tooltip",
+}
+
+# Max refs per snapshot. Wikipedia's HTTP/2 page produces ~87 KB of raw
+# aria_snapshot YAML; capping keeps the LLM-visible tree scannable.
+_MAX_REFS = 250
+_MAX_NAME_LEN = 80
+_MAX_TREE_CHARS = 16000
+
+# Selectors we try (in order) to auto-scope snapshots to the page's main
+# content area. Most content sites bury the article in a region marked
+# with one of these — bypassing it wastes refs on nav/sidebar/footer
+# clutter. The agent can override by passing an explicit selector.
+_DEFAULT_MAIN_SCOPES = (
+    "main",
+    "[role='main']",
+    "article",
+    "#bodyContent",      # Wikipedia
+    "#content",
+    "#main",
+)
+
+
+# Parses one line of Playwright's aria_snapshot YAML. Examples:
+#   - heading "Photosynthesis" [level=1]:
+#   - link "Jump to content"
+#   - button "Search" [disabled]
+#   - paragraph: Some text content here
+#   - /url: "#bodyContent"        (skipped; metadata line)
+#   - text: "Some text"           (skipped; static text)
+_LINE_RE = re.compile(
+    r"^(?P<indent>\s*)-\s+"          # bullet + leading indent
+    r"(?P<role>[a-zA-Z][a-zA-Z0-9_-]*)"
+    r"(?:\s+\"(?P<name>(?:\\.|[^\"\\])*)\")?"  # optional "name"
+    r"(?P<attrs>(?:\s+\[[^\]]*\])*)"           # zero or more [attr=value]
+    r"(?P<rest>:.*)?$"
+)
+
+
+def _build_locator(page, role: str, name: str, occurrence: int):
+    """Return a Playwright Locator addressing the `occurrence`-th node with
+    this (role, name) pair. None if Playwright can't construct it.
+
+    `exact=True` matters — without it, Playwright matches names by regex,
+    so a heading "Evolution" matches "Cyanobacteria and the evolution
+    of photosynthesis" too, triggering strict-mode violations when we
+    later call .evaluate(). We always want the exact match the ARIA
+    snapshot reported.
+    """
+    try:
+        if name:
+            loc = page.get_by_role(role, name=name, exact=True)
+        else:
+            loc = page.get_by_role(role)
+        if occurrence > 0:
+            loc = loc.nth(occurrence)
+        return loc
+    except Exception:
+        return None
+
+
+def _parse_aria_snapshot(yaml_text: str, page):
+    """Walk the Playwright aria_snapshot YAML output line by line. For each
+    line whose role is in `_REF_ROLES`, assign a `@e<n>` ref and build a
+    Playwright Locator. Returns (refs_map, tree_text)."""
+    refs_map: dict[str, dict] = {}
+    counter: dict[tuple[str, str], int] = {}
+    out_lines: list[str] = []
+
+    for line in yaml_text.split("\n"):
+        if not line.strip():
+            continue
+        m = _LINE_RE.match(line)
+        if not m:
+            # Metadata lines like `- /url: ...` or `- text: ...` are
+            # preserved in the tree for context but don't get refs.
+            out_lines.append(line.rstrip())
+            continue
+        role = m.group("role").lower()
+        # Skip lines like `- /url: ...` (role starts with /). The regex
+        # above wouldn't match them, but defensive.
+        if role.startswith("/"):
+            out_lines.append(line.rstrip())
+            continue
+        name = m.group("name") or ""
+        if name:
+            # YAML-style escape: \" → "
+            name = name.replace('\\"', '"').replace("\\\\", "\\")
+        attrs = m.group("attrs") or ""
+
+        if role in _REF_ROLES and len(refs_map) < _MAX_REFS:
+            key = (role, name)
+            occurrence = counter.get(key, 0)
+            counter[key] = occurrence + 1
+            ref = f"@e{len(refs_map) + 1}"
+            refs_map[ref] = {
+                "role": role,
+                "name": name,
+                "occurrence": occurrence,
+                "attrs": attrs,
+                "locator": _build_locator(page, role, name, occurrence),
+            }
+            # Prepend the ref to the line, keeping original indent.
+            indent = m.group("indent") or ""
+            display_name = (
+                f' "{name[:_MAX_NAME_LEN - 1]}…"'
+                if len(name) > _MAX_NAME_LEN
+                else (f' "{name}"' if name else "")
+            )
+            out_lines.append(f"{indent}- {ref} {role}{display_name}{attrs}")
+        else:
+            # Keep the line for structural context but don't add a ref.
+            out_lines.append(line.rstrip())
+
+    tree_text = "\n".join(out_lines)
+    if len(tree_text) > _MAX_TREE_CHARS:
+        tree_text = tree_text[:_MAX_TREE_CHARS] + f"\n…[tree truncated, {len(tree_text)} total chars]"
+    return refs_map, tree_text
+
+
+async def _resolve_locator(app: FastAPI, page, sel: str | None):
+    """If `sel` is an @e<n> ref, return the stored Locator. Otherwise
+    return None and the caller can use `sel` as a raw selector string."""
+    if not sel or not sel.startswith("@e"):
+        return None
+    refs = getattr(app.state, "session_refs", None) or {}
+    entry = refs.get(sel)
+    if entry is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unknown ref {sel!r}. Refs invalidate on goto/reload/back/"
+                "forward — call action='snapshot' to get a fresh set."
+            ),
+        )
+    locator = entry.get("locator")
+    if locator is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ref {sel!r} has no locator (was built on a different page)",
+        )
+    return locator
 
 
 def _drain_responses(app: FastAPI, drain: bool) -> list[dict[str, Any]]:
@@ -439,6 +626,7 @@ async def _do_goto(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     if context is None:
         raise HTTPException(status_code=503, detail="Browser not ready")
     await _close_session(app)
+    _invalidate_refs(app)
 
     target = body.url
     page = await context.new_page()
@@ -481,12 +669,15 @@ async def _do_observe(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
 async def _do_click(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     timeout = body.timeout or 30000
-    if body.selector:
+    loc = await _resolve_locator(app, page, body.selector)
+    if loc is not None:
+        await loc.click(timeout=timeout)
+    elif body.selector:
         await page.click(body.selector, timeout=timeout)
     elif body.x is not None and body.y is not None:
         await page.mouse.click(body.x, body.y)
     else:
-        raise HTTPException(status_code=400, detail="click needs selector or {x, y}")
+        raise HTTPException(status_code=400, detail="click needs selector, @ref, or {x, y}")
     return {"ok": True}
 
 
@@ -494,7 +685,12 @@ async def _do_fill(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     if not body.selector:
         raise HTTPException(status_code=400, detail="fill needs selector")
-    await page.fill(body.selector, body.value or "", timeout=body.timeout or 30000)
+    timeout = body.timeout or 30000
+    loc = await _resolve_locator(app, page, body.selector)
+    if loc is not None:
+        await loc.fill(body.value or "", timeout=timeout)
+    else:
+        await page.fill(body.selector, body.value or "", timeout=timeout)
     return {"ok": True}
 
 
@@ -504,11 +700,12 @@ async def _do_type(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="type needs selector")
     if body.text is None:
         raise HTTPException(status_code=400, detail="type needs text")
-    await page.type(
-        body.selector, body.text,
-        delay=body.delay or 0,
-        timeout=body.timeout or 30000,
-    )
+    timeout = body.timeout or 30000
+    loc = await _resolve_locator(app, page, body.selector)
+    if loc is not None:
+        await loc.type(body.text, delay=body.delay or 0, timeout=timeout)
+    else:
+        await page.type(body.selector, body.text, delay=body.delay or 0, timeout=timeout)
     return {"ok": True}
 
 
@@ -516,7 +713,12 @@ async def _do_press(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     if not body.selector or not body.key:
         raise HTTPException(status_code=400, detail="press needs selector and key")
-    await page.press(body.selector, body.key, timeout=body.timeout or 30000)
+    timeout = body.timeout or 30000
+    loc = await _resolve_locator(app, page, body.selector)
+    if loc is not None:
+        await loc.press(body.key, timeout=timeout)
+    else:
+        await page.press(body.selector, body.key, timeout=timeout)
     return {"ok": True}
 
 
@@ -586,18 +788,230 @@ async def _do_wait_for_timeout(app: FastAPI, body: SessionRequest) -> dict[str, 
 async def _do_reload(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     await page.reload(wait_until=body.wait_until or "domcontentloaded")
+    _invalidate_refs(app)
     return {"ok": True}
 
 
 async def _do_go_back(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     await page.go_back(wait_until=body.wait_until or "domcontentloaded")
+    _invalidate_refs(app)
     return {"ok": True}
 
 
 async def _do_go_forward(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
     page = _require_session(app)
     await page.go_forward(wait_until=body.wait_until or "domcontentloaded")
+    _invalidate_refs(app)
+    return {"ok": True}
+
+
+async def _do_snapshot(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
+    """Capture an ARIA snapshot of the page, assign @e refs to interesting
+    nodes, and return a compact YAML-ish tree the LLM can scan. Refs
+    persist on app.state until the next navigation.
+
+    Scope resolution: if `selector` is set, snapshot that subtree. Otherwise
+    auto-detect a main-content scope (`main`, `article`, `#bodyContent`,
+    ...) to skip page chrome — falls back to `body` if none match. The
+    auto-detected scope is reported back as `scope_used`.
+    """
+    page = _require_session(app)
+
+    target = None
+    scope_used = None
+    if body.selector:
+        target = page.locator(body.selector)
+        scope_used = body.selector
+    else:
+        for sel in _DEFAULT_MAIN_SCOPES:
+            try:
+                count = await page.locator(sel).count()
+            except Exception:
+                continue
+            if count > 0:
+                target = page.locator(sel).first
+                scope_used = sel
+                break
+    if target is None:
+        target = page.locator("body")
+        scope_used = "body"
+
+    try:
+        yaml_text = await target.aria_snapshot(timeout=body.timeout or 5000)
+    except Exception as e:
+        return {"error": f"snapshot failed: {e}", "refs": [], "tree": "", "scope_used": scope_used}
+    if not yaml_text:
+        return {"error": "empty snapshot", "refs": [], "tree": "", "scope_used": scope_used}
+
+    refs_map, tree_text = _parse_aria_snapshot(yaml_text, page)
+    app.state.session_refs = refs_map
+
+    # Headings get their own flat list — the tree text is capped at
+    # _MAX_TREE_CHARS and on a long article (Wikipedia: ~30 H2s + many
+    # H3s) the back-half of headings can fall off the displayed tree.
+    # The flat list ensures all headings are addressable even when the
+    # tree display truncates.
+    headings_flat = [
+        {"ref": r, "level": _level_from_attrs(v.get("attrs", "")), "name": v["name"][:_MAX_NAME_LEN]}
+        for r, v in refs_map.items() if v["role"] == "heading"
+    ]
+
+    # The non-heading interactive refs are more numerous and less
+    # central — leave them to the tree display.
+    ref_summary = [
+        {
+            "ref": r,
+            "role": v["role"],
+            "name": v["name"][:_MAX_NAME_LEN],
+        }
+        for r, v in refs_map.items()
+    ]
+
+    return {
+        "ref_count": len(refs_map),
+        "heading_count": len(headings_flat),
+        "headings": headings_flat,
+        "tree": tree_text,
+        "refs": ref_summary,
+        "scope_used": scope_used,
+        "truncated": len(refs_map) >= _MAX_REFS,
+        "note": (
+            f"{len(refs_map)} refs ({len(headings_flat)} headings), scoped "
+            f"to {scope_used!r}. The flat `headings` field lists every "
+            "addressable heading even when the tree display truncates. "
+            "Use @e<n> in click/text/scroll/fill/type. For HEADINGS, "
+            "text @e<heading> returns the whole section (heading + content "
+            "until next same-or-higher heading). Refs invalidate on "
+            "goto/reload/back/forward."
+        ),
+    }
+
+
+def _level_from_attrs(attrs_str: str) -> int:
+    """Extract `level=N` from an attribute string like ` [level=2]`."""
+    m = re.search(r"\[level=(\d+)\]", attrs_str or "")
+    return int(m.group(1)) if m else 0
+
+
+# Section-text JS — runs in the page when the @ref points at a heading.
+# Walks forward from the heading, collecting innerText of every following
+# sibling, until it hits another heading of same-or-higher level.
+#
+# Wikipedia (and many sites) wrap H2s in a container like
+# <div class="mw-heading"><h2>...</h2><span class="mw-editsection">...</span></div>.
+# Walking siblings of the H2 itself returns just "[edit]" because the H2 is
+# the last child of its wrapper. We detect this and walk from the wrapper
+# instead, scanning subsequent siblings for any heading that ends the section.
+_SECTION_TEXT_JS = """
+(el) => {
+  if (!el) return '';
+  // Find the H1-H6 element. el might already be one, or a thin wrapper.
+  let h = /^H[1-6]$/i.test(el.tagName)
+    ? el
+    : (el.querySelector ? el.querySelector('h1,h2,h3,h4,h5,h6') : null);
+  if (!h) return (el.innerText || '').trim();
+  const level = parseInt(h.tagName[1]);
+  // If h is wrapped in a thin container whose ONLY heading is h (typical
+  // pattern: Wikipedia's .mw-heading), walk from the wrapper so the
+  // section's first content sibling actually becomes accessible. But
+  // only ascend ONCE — going further hits the article body, which
+  // contains many headings, and we'd grab everything.
+  let walkFrom = h;
+  const parent = h.parentElement;
+  if (
+    parent &&
+    parent !== document.body &&
+    parent.querySelectorAll('h1,h2,h3,h4,h5,h6').length === 1
+  ) {
+    walkFrom = parent;
+  }
+  function levelOf(node) {
+    if (/^H[1-6]$/i.test(node.tagName || '')) return parseInt(node.tagName[1]);
+    if (node.querySelector) {
+      const sub = node.querySelector('h1,h2,h3,h4,h5,h6');
+      return sub ? parseInt(sub.tagName[1]) : 0;
+    }
+    return 0;
+  }
+  const parts = [(walkFrom.innerText || '').trim()];
+  let cur = walkFrom.nextElementSibling;
+  // Safety cap on total chars walked — wikipedias can have very long
+  // sections; we want enough for the LLM to reason but not the entire
+  // article. The downstream _do_text further truncates to 8000.
+  let total = parts[0].length;
+  while (cur && total < 20000) {
+    const lvl = levelOf(cur);
+    if (lvl > 0 && lvl <= level) break;
+    const t = (cur.innerText || '').trim();
+    if (t) {
+      parts.push(t);
+      total += t.length;
+    }
+    cur = cur.nextElementSibling;
+  }
+  return parts.join('\\n\\n');
+}
+"""
+
+
+async def _do_text(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
+    """Return the visible text of a specific element. Takes either @ref
+    (preferred) or a CSS selector. Use this after `snapshot` to read just
+    one section instead of dragging the whole page text back to the LLM.
+
+    Heading-aware: if the target's role is `heading`, returns the whole
+    section (heading + every following sibling until the next same-or-
+    higher-level heading). That's what "give me the Criticisms section"
+    actually means.
+    """
+    page = _require_session(app)
+    if not body.selector:
+        raise HTTPException(status_code=400, detail="text needs selector or @ref")
+    timeout = body.timeout or 5000
+
+    # Check if the @ref points at a heading — if so, use section-text JS.
+    is_heading = False
+    refs = getattr(app.state, "session_refs", None) or {}
+    if body.selector.startswith("@e"):
+        entry = refs.get(body.selector)
+        if entry and entry.get("role") == "heading":
+            is_heading = True
+
+    loc = await _resolve_locator(app, page, body.selector)
+    try:
+        if is_heading and loc is not None:
+            inner = await loc.evaluate(_SECTION_TEXT_JS, timeout=timeout)
+        elif loc is not None:
+            inner = await loc.inner_text(timeout=timeout)
+        else:
+            inner = await page.inner_text(body.selector, timeout=timeout)
+    except Exception as e:
+        return {"error": f"text failed: {e}"}
+    text = (inner or "").strip()
+    return {
+        "text": text[:8000],
+        "length": len(text),
+        "truncated": len(text) > 8000,
+        "section_text": is_heading,
+    }
+
+
+async def _do_scroll(app: FastAPI, body: SessionRequest) -> dict[str, Any]:
+    """Scroll an element (by @ref or CSS selector) into view. After this,
+    a screenshot or observe will reflect the new viewport."""
+    page = _require_session(app)
+    if not body.selector:
+        raise HTTPException(status_code=400, detail="scroll needs selector or @ref")
+    timeout = body.timeout or 5000
+    loc = await _resolve_locator(app, page, body.selector)
+    try:
+        if loc is not None:
+            await loc.scroll_into_view_if_needed(timeout=timeout)
+        else:
+            await page.locator(body.selector).first.scroll_into_view_if_needed(timeout=timeout)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
     return {"ok": True}
 
 
@@ -641,6 +1055,9 @@ _SESSION_HANDLERS = {
     "title": _do_title,
     "url": _do_url,
     "close": _do_close,
+    "snapshot": _do_snapshot,
+    "text": _do_text,
+    "scroll": _do_scroll,
 }
 
 
@@ -676,6 +1093,9 @@ async def lifespan(app: FastAPI):
     app.state.session_page = None
     app.state.session_url = None
     app.state.session_responses = []
+    # @ref → Locator map, populated by action='snapshot', invalidated on
+    # any navigation. Empty until first snapshot.
+    app.state.session_refs = {}
     try:
         yield
     finally:

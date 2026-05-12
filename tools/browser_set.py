@@ -40,6 +40,9 @@ _VALID_ACTIONS = {
     "wait_for_selector", "wait_for_load_state", "wait_for_timeout",
     "reload", "go_back", "go_forward",
     "content", "title", "url", "close",
+    # Accessibility-snapshot + @ref selection — the cheap path for
+    # "find / read a specific section" without writing JS.
+    "snapshot", "text", "scroll",
 }
 
 
