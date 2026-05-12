@@ -166,29 +166,34 @@
       return 'video/webm';
     };
 
-    var startRecorder = function (mediaStream) {
-      stream = mediaStream;
-      var mime = pickMime(mediaStream);
-      console.log('[screen_share] starting recorder mime=' + mime + ' audioTracks=' + mediaStream.getAudioTracks().length + ' videoTracks=' + mediaStream.getVideoTracks().length);
+    var sessionActive = false;
+    var segmentTimer = null;
+    var chosenMime = '';
+
+    // Each MediaRecorder lifetime produces ONE self-contained webm with
+    // its EBML header. If you `start(timeslice)`, every subsequent
+    // ondataavailable fires a CONTINUATION segment (no header) and
+    // ffprobe rejects it standalone — which is exactly what was
+    // happening on the backend (21/22 chunks failed with "EBML header
+    // parsing failed"). Pattern: start a fresh recorder, let it run
+    // for ~3 s, stop it. onstop fires one final ondataavailable with a
+    // complete webm, then we spin up the next recorder. ~50 ms gap
+    // between chunks is acceptable at this cadence.
+    var startSegment = function () {
+      if (!sessionActive || !stream) return;
       try {
-        recorder = new MediaRecorder(stream, { mimeType: mime });
+        recorder = new MediaRecorder(stream, { mimeType: chosenMime });
       } catch (err) {
+        console.warn('[screen_share] MediaRecorder ctor failed:', err);
         title.textContent = 'Recorder failed';
         status.textContent = String(err && err.message ? err.message : err);
         setColor('error');
+        sessionActive = false;
         return;
       }
-      // Surface any async recorder failure (codec mismatch, source ended,
-      // etc.) so it's not invisible behind a still-green "Sharing" pill.
       recorder.onerror = function (e) {
         var msg = (e && e.error && e.error.message) ? e.error.message : 'recorder error';
         console.warn('[screen_share] recorder.onerror:', e);
-        title.textContent = 'Recorder error';
-        status.textContent = msg;
-        setColor('error');
-      };
-      recorder.onstart = function () {
-        console.log('[screen_share] recorder.onstart fired; state=' + recorder.state);
       };
       recorder.ondataavailable = function (e) {
         console.log('[screen_share] ondataavailable size=' + (e.data && e.data.size) + ' state=' + recorder.state);
@@ -197,55 +202,58 @@
         }
       };
       recorder.onstop = function () {
-        title.textContent = 'Stopped';
-        status.textContent = 'Idle';
-        setColor('idle');
-        button.textContent = 'START';
-        if (stream) {
-          stream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} });
-          stream = null;
+        // Either the segment timer fired (normal cadence) or the user
+        // pressed STOP. In the active case, spin up the next segment
+        // immediately. In the stop case, sessionActive is false.
+        if (sessionActive) {
+          startSegment();
+        } else {
+          finalizeStop();
         }
-        var fd = new FormData();
-        fd.append('session_id', sessionId);
-        fetch('/api/perception/screen_chunk/stop', {
-          method: 'POST', headers: authHeaders, body: fd,
-        }).catch(function () {});
-        report({
-          kind: 'screen_share',
-          content: 'Stopped',
-          extra: { active: false, session_id: sessionId },
-        });
       };
-      // Chromium's MediaRecorder.onstart event fires inconsistently in
-      // some Electron builds — observed: button label stuck on START
-      // because onstart never fired even though chunks were being POSTed.
-      // Flip UI synchronously after start() returns to decouple the
-      // visual state from the event-loop quirk.
       try {
-        recorder.start(3000); // 3 s timeslice → one ondataavailable per chunk
+        recorder.start();
       } catch (err) {
-        title.textContent = 'Recorder failed';
-        status.textContent = (err && err.message) ? err.message : String(err);
-        setColor('error');
+        console.warn('[screen_share] recorder.start failed:', err);
+        sessionActive = false;
         return;
       }
-      console.log('[screen_share] recorder.start returned; state=' + recorder.state);
-      // Health-check: at +5s, if zero chunks have arrived OR been
-      // attempted, force-flush via requestData(). If data still doesn't
-      // come, the codec/muxer is the problem (vp9+opus often silently
-      // drops data with chromeMediaSource:'desktop' streams). If data
-      // DOES come, the timeslice argument is being ignored.
-      setTimeout(function () {
-        console.log('[screen_share] +5s health: state=' + (recorder ? recorder.state : 'null') + ' chunksSent=' + chunksSent + ' chunksFailed=' + chunksFailed);
-        if (recorder && recorder.state === 'recording' && chunksSent === 0 && chunksFailed === 0) {
-          try {
-            recorder.requestData();
-            console.log('[screen_share] +5s health: requested manual data flush');
-          } catch (err) {
-            console.warn('[screen_share] +5s health: requestData failed:', err);
-          }
+      segmentTimer = setTimeout(function () {
+        if (recorder && recorder.state === 'recording') {
+          try { recorder.stop(); } catch (_) {}
         }
-      }, 5000);
+      }, 3000);
+    };
+
+    var finalizeStop = function () {
+      if (segmentTimer) { clearTimeout(segmentTimer); segmentTimer = null; }
+      if (stream) {
+        stream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} });
+        stream = null;
+      }
+      title.textContent = 'Stopped';
+      audioNoteLive = '';
+      status.textContent = 'Idle';
+      setColor('idle');
+      button.textContent = 'START';
+      var fd = new FormData();
+      fd.append('session_id', sessionId);
+      fetch('/api/perception/screen_chunk/stop', {
+        method: 'POST', headers: authHeaders, body: fd,
+      }).catch(function () {});
+      report({
+        kind: 'screen_share',
+        content: 'Stopped',
+        extra: { active: false, session_id: sessionId },
+      });
+    };
+
+    var startRecorder = function (mediaStream) {
+      stream = mediaStream;
+      chosenMime = pickMime(mediaStream);
+      console.log('[screen_share] starting recorder mime=' + chosenMime + ' audioTracks=' + mediaStream.getAudioTracks().length + ' videoTracks=' + mediaStream.getVideoTracks().length);
+      sessionActive = true;
+      startSegment();
       title.textContent = 'Sharing';
       audioNoteLive = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
       refreshStatusCounter();
@@ -325,8 +333,17 @@
     };
 
     var onClick = function () {
-      if (recorder && recorder.state === 'recording') {
-        try { recorder.stop(); } catch (_) {}
+      if (sessionActive) {
+        // User pressed STOP — flip the flag so onstop runs finalizeStop
+        // instead of starting the next segment, then trigger the final
+        // segment's emission by stopping the live recorder.
+        sessionActive = false;
+        if (segmentTimer) { clearTimeout(segmentTimer); segmentTimer = null; }
+        if (recorder && recorder.state === 'recording') {
+          try { recorder.stop(); } catch (_) {}
+        } else {
+          finalizeStop();
+        }
         return;
       }
       title.textContent = 'Starting…';
@@ -342,10 +359,11 @@
     cleanup(function () { button.removeEventListener('click', onClick); });
 
     cleanup(function () {
+      sessionActive = false;
+      if (segmentTimer) { clearTimeout(segmentTimer); segmentTimer = null; }
       if (recorder && recorder.state === 'recording') {
         try { recorder.stop(); } catch (_) {}
       } else if (stream) {
-        // Recorder never started (or already stopped) but the stream is live.
         stream.getTracks().forEach(function (t) { try { t.stop(); } catch (_) {} });
       }
     });
