@@ -48,9 +48,30 @@ _CHUNK_ROOT = Path("/tmp/bewithme-screen")
 _CROSS_CHUNK_HAMMING = 6  # same threshold the in-chunk dedup uses
 
 
+_LOG_PATH = Path(__file__).resolve().parents[3] / ".dev-logs" / "screen_share.log"
+
+
+def _log(msg: str) -> None:
+    """Write to .dev-logs/screen_share.log AND stderr.
+
+    The live dev session's stderr goes to the foreground terminal, which
+    is unreadable from outside that tty — this file gives us ground
+    truth about what actually arrives, drops, or errors during a chunk
+    flow. Matches the media_upload.log pattern.
+    """
+    line = msg if msg.endswith("\n") else msg + "\n"
+    print(line, end="", file=sys.stderr, flush=True)
+    try:
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _LOG_PATH.open("a") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
 def _log_exception(label: str, err: BaseException) -> None:
     tb = traceback.format_exception(type(err), err, err.__traceback__)
-    print(f"[screen_share:{label}] " + "".join(tb), file=sys.stderr, flush=True)
+    _log(f"[screen_share:{label}] " + "".join(tb))
 
 
 def _session_dir(session_id: str) -> Path:
@@ -73,10 +94,9 @@ async def post_screen_chunk(
     is just `{accepted, dropped_reason?, segments_emitted}` for debugging.
     The real output (TimelineSegments) flows through the perception cache.
     """
-    print(
+    _log(
         f"[screen_share] chunk arriving: user={user_id} session={session_id} "
-        f"source={source_name!r} started_at={chunk_started_at_ms}",
-        flush=True,
+        f"source={source_name!r} started_at={chunk_started_at_ms}"
     )
 
     session = screen_session.get_or_create(
@@ -174,6 +194,10 @@ async def post_screen_chunk(
         except OSError:
             pass
 
+    _log(
+        f"[screen_share] chunk done: session={session_id} bytes={len(data)} "
+        f"segments_emitted={segments_emitted}"
+    )
     return {"accepted": True, "segments_emitted": segments_emitted}
 
 

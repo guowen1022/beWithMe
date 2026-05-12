@@ -149,15 +149,16 @@
     };
 
     var pickMime = function (mediaStream) {
-      // Codec hint MUST match what's actually in the stream. Asking for
-      // ;codecs=vp8,opus on a video-only stream causes some Chromium
-      // builds to silently never fire ondataavailable (the recorder
-      // construction succeeds but the muxer rejects every frame). Pick
-      // the narrowest hint that matches reality.
+      // Codec hint must match the stream shape. PROVEN by the next-dev
+      // log on 2026-05-12: vp9+opus on a desktopCapturer stream causes
+      // every ondataavailable to fire with size=0 — state stays
+      // 'recording', isTypeSupported() returns true, but the muxer
+      // silently drops all data. requestData() flush also returned 0
+      // bytes. Same hardware works with vp8. Don't offer vp9 here.
       var hasAudio = mediaStream.getAudioTracks().length > 0;
       var candidates = hasAudio
-        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-        : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+        ? ['video/webm;codecs=vp8,opus', 'video/webm']
+        : ['video/webm;codecs=vp8', 'video/webm'];
       if (typeof MediaRecorder === 'undefined') return candidates[candidates.length - 1];
       for (var i = 0; i < candidates.length; i++) {
         if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
@@ -186,7 +187,11 @@
         status.textContent = msg;
         setColor('error');
       };
+      recorder.onstart = function () {
+        console.log('[screen_share] recorder.onstart fired; state=' + recorder.state);
+      };
       recorder.ondataavailable = function (e) {
+        console.log('[screen_share] ondataavailable size=' + (e.data && e.data.size) + ' state=' + recorder.state);
         if (e.data && e.data.size > 0) {
           postChunk(e.data, Date.now());
         }
@@ -224,6 +229,23 @@
         setColor('error');
         return;
       }
+      console.log('[screen_share] recorder.start returned; state=' + recorder.state);
+      // Health-check: at +5s, if zero chunks have arrived OR been
+      // attempted, force-flush via requestData(). If data still doesn't
+      // come, the codec/muxer is the problem (vp9+opus often silently
+      // drops data with chromeMediaSource:'desktop' streams). If data
+      // DOES come, the timeslice argument is being ignored.
+      setTimeout(function () {
+        console.log('[screen_share] +5s health: state=' + (recorder ? recorder.state : 'null') + ' chunksSent=' + chunksSent + ' chunksFailed=' + chunksFailed);
+        if (recorder && recorder.state === 'recording' && chunksSent === 0 && chunksFailed === 0) {
+          try {
+            recorder.requestData();
+            console.log('[screen_share] +5s health: requested manual data flush');
+          } catch (err) {
+            console.warn('[screen_share] +5s health: requestData failed:', err);
+          }
+        }
+      }, 5000);
       title.textContent = 'Sharing';
       audioNoteLive = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
       refreshStatusCounter();
@@ -232,7 +254,7 @@
       ensureAmbientMicMounted();
       report({
         kind: 'screen_share',
-        content: 'Sharing ' + (sourceName || 'screen') + audioNote,
+        content: 'Sharing ' + (sourceName || 'screen') + audioNoteLive,
         extra: {
           active: true,
           source_name: sourceName,
@@ -262,34 +284,27 @@
             maxFrameRate: 15,
           },
         };
-        // Try video+audio first. On macOS this often throws NotFoundError
-        // because system-audio capture needs a loopback driver (BlackHole
-        // etc.) the OS doesn't ship with. Some Chromium builds throw
-        // different error names for the same condition, so we treat ANY
-        // failure on the combined-stream attempt as "no system audio" and
-        // retry video-only. The renderer/recorder still gets a usable
-        // stream and the user's mic stays available via ambient_mic.
-        try {
-          var s = await navigator.mediaDevices.getUserMedia({
-            audio: { mandatory: { chromeMediaSource: 'desktop' } },
-            video: videoConstraint,
-          });
-          hasSystemAudio = s.getAudioTracks().length > 0;
-          return s;
-        } catch (err) {
-          console.warn('[screen_share] system-audio attempt failed (' + (err && err.name || 'unknown') + ': ' + (err && err.message || '') + ') — falling back to video-only');
-          hasSystemAudio = false;
-          return await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
-        }
+        // Video-only on purpose. PROVEN by the next-dev log: when we
+        // included `audio: {mandatory: {chromeMediaSource: 'desktop'}}`,
+        // Chromium grabbed an audio device that conflicted with
+        // ambient_mic's VAD getUserMedia({audio: true}) — every VAD
+        // retry returned NotFoundError once screen_share had the audio
+        // track open. Mic is the more important channel for the persona
+        // (it gets a clean Whisper transcript via ambient_mic →
+        // /perception/utterance), so we don't fight for the shared
+        // audio device. System audio capture is deferred until we have
+        // a separate audio-routing path that doesn't compete.
+        hasSystemAudio = false;
+        return await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
       }
-      // Browser fallback (non-Electron). getDisplayMedia natively handles
-      // the picker + audio negotiation; whatever the user grants is fine.
+      // Browser fallback (non-Electron). getDisplayMedia is video-only
+      // here for the same reason: don't compete with ambient_mic for the
+      // audio device.
       sourceName = 'browser-shared';
       var ds = await navigator.mediaDevices.getDisplayMedia({
         video: { width: 1280, height: 720, frameRate: 15 },
-        audio: true,
       });
-      hasSystemAudio = ds.getAudioTracks().length > 0;
+      hasSystemAudio = false;
       return ds;
     };
 
