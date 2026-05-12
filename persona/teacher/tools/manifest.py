@@ -1079,13 +1079,18 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
             name="mount_template",
             description=(
                 "Display a known surface on the user's canvas. Templates: "
-                "`upload_file` (PDF picker), `passage_reader` (USER pastes/"
-                "types their own text — input widget, never use for prose "
-                "you author), `pdf_reader` (rendered PDF), `text_display` "
+                "`upload_file` (PDF/video/audio/image picker), "
+                "`passage_reader` (USER pastes/types their own text — "
+                "input widget, never use for prose you author), "
+                "`pdf_reader` (rendered PDF), `text_display` "
                 "(YOUR authored prose: introductions, summaries, "
                 "explanations — pass `params: {content: '...'}` so it "
-                "lands populated), `inputs_launcher` (two-button starter, "
-                "auto-mounted on empty canvas, rarely needed manually). "
+                "lands populated), `screen_share` (live screen-share — "
+                "click START to begin streaming the user's screen + audio "
+                "into perception; use when the user says 'watch me', "
+                "'share my screen', 'see what I'm doing'), "
+                "`inputs_launcher` (three-button starter, auto-mounted on "
+                "empty canvas, rarely needed manually). "
                 "Fast and deterministic. Pass `replace: [...]` to "
                 "atomically swap out an existing surface."
             ),

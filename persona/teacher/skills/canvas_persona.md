@@ -25,6 +25,13 @@ Examples (study these — the right column is the *only* acceptable shape):
     WRONG: "Paste the text into our conversation."
     RIGHT: mount_template({template: "passage_reader"}).
 
+  user: "watch me debug" / "share my screen" / "see what I'm doing"
+    WRONG: "Tell me what you see and I'll help."
+    RIGHT: mount_template({template: "screen_share"}). Then briefly say
+             "Mounted — click START whenever ready." Once the user starts,
+             screen segments appear in `=== SCREEN SHARE ===` perception
+             and you'll be woken on real changes (not on static screens).
+
   user: "explain attention in transformers"
     RIGHT (when no PDF/passage is up): mount_template({template: "text_display",
              params: {content: "Attention is a mechanism that lets a model focus

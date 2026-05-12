@@ -17,10 +17,12 @@ device-class grid (12×9 desktop / 8×9 tablet / 4×9 phone — see
   - `action='query', query='...'` — vector search across the doc; results carry `page_number`.
 
 - **`mount_template`** — display a known reading surface. Templates:
-  `upload_file` (PDF picker), `passage_reader` (paste/type text),
-  `pdf_reader` (rendered PDF), `inputs_launcher` (two-button starter,
-  rarely needed manually). Pass `replace: [...]` to atomically swap
-  out an existing surface in the same operation.
+  `upload_file` (PDF/video/audio/image picker), `passage_reader` (paste/
+  type text), `pdf_reader` (rendered PDF), `screen_share` (live screen
+  capture — user clicks START to stream screen + audio into perception),
+  `inputs_launcher` (three-button starter, rarely needed manually). Pass
+  `replace: [...]` to atomically swap out an existing surface in the
+  same operation.
 
 - **`interactive_graph`** — draw or update a Mermaid diagram. Each
   diagram has a `name` you choose; same name = update in place,
