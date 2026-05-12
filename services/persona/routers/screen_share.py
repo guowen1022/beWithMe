@@ -94,16 +94,18 @@ async def post_screen_chunk(
     is just `{accepted, dropped_reason?, segments_emitted}` for debugging.
     The real output (TimelineSegments) flows through the perception cache.
     """
-    _log(
-        f"[screen_share] chunk arriving: user={user_id} session={session_id} "
-        f"source={source_name!r} started_at={chunk_started_at_ms}"
-    )
-
+    t_arrived = time.monotonic()
     session = screen_session.get_or_create(
         user_id=user_id,
         session_id=session_id,
         started_at_wall_ms=chunk_started_at_ms,
         source_name=source_name or None,
+    )
+    in_flight_before = session.in_flight_chunks
+    _log(
+        f"[screen_share] chunk arriving: user={user_id} session={session_id} "
+        f"source={source_name!r} started_at={chunk_started_at_ms} "
+        f"in_flight_before={in_flight_before}"
     )
 
     # Backpressure check — drop the chunk before we even read its bytes
@@ -133,7 +135,15 @@ async def post_screen_chunk(
         # Per-chunk processing reuses the shipped orchestrator. Each
         # describe_video() call uses its own temp workdir; we sequentially
         # consume yielded segments to keep dedup ordering deterministic.
+        t_first_seg = None
+        t_describe_start = time.monotonic()
         async for seg in describe_video(chunk_path, max_frames=6):
+            if t_first_seg is None:
+                t_first_seg = time.monotonic() - t_describe_start
+                _log(
+                    f"[screen_share] first_segment seq={seq} session={session_id} "
+                    f"kind={seg.kind} time_to_first_seg={t_first_seg:.2f}s"
+                )
             wall = chunk_started_at_ms + int(seg.start * 1000)
             is_scene_cut = False
             if seg.kind == "vision":
@@ -194,11 +204,13 @@ async def post_screen_chunk(
         except OSError:
             pass
 
+    elapsed = time.monotonic() - t_arrived
     _log(
-        f"[screen_share] chunk done: session={session_id} bytes={len(data)} "
-        f"segments_emitted={segments_emitted}"
+        f"[screen_share] chunk done: seq={seq} session={session_id} "
+        f"bytes={len(data)} segments_emitted={segments_emitted} "
+        f"elapsed={elapsed:.2f}s"
     )
-    return {"accepted": True, "segments_emitted": segments_emitted}
+    return {"accepted": True, "segments_emitted": segments_emitted, "elapsed_s": round(elapsed, 2)}
 
 
 @router.post("/perception/screen_chunk/stop", status_code=202)

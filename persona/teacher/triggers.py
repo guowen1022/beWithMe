@@ -201,16 +201,17 @@ def _classify(event: _AnyEvent) -> Optional[str]:
             return None
         return "lane_a"
 
-    # Screen-share: ambient + selective wake. Every segment is added to
-    # perception by the cache; we wake Lane A only on speech segments or
-    # the first vision segment after a real change (is_scene_cut). Static
-    # screens (typing in a textbox) don't interrupt.
+    # Screen-share: cache-only, never wakes a lane. The segment is
+    # already written to the perception cache by `record_screen_segment`
+    # independent of this classifier — Lane A reads the latest
+    # `ScreenPerception` from cache the next time user voice legitimately
+    # wakes it. Routing screen events to Lane A here caused
+    # `_lane_a_handle` to cancel the user's in-flight reply every time
+    # the screen changed (scene-cut mid-reply ⇒ preemption ⇒ debounced
+    # restart). Lane B is also wrong because each event would spawn its
+    # own tool loop. If a proactive "watcher" is wanted later, design it
+    # as a separate timer-based reader, not a per-event wake.
     if isinstance(event, ScreenSegmentEvent):
-        if event.target_persona != _PERSONA_NAME:
-            return None
-        seg = event.segment
-        if seg.kind == "speech" or seg.is_scene_cut:
-            return "lane_a"
         return None
 
     # Session-stop is a perception state flip, not a wake-worthy event on
