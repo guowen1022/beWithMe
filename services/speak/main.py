@@ -12,6 +12,7 @@ import asyncio
 import io
 import os
 import re
+import time
 import wave
 from contextlib import asynccontextmanager
 
@@ -202,10 +203,12 @@ async def speak_stream(body: SpeakRequest):
 
     # Synthesize the first chunk eagerly so we can set the sample-rate header
     # before the response body starts flowing.
+    first_chunk_t0 = time.perf_counter()
     async with _infer_lock:
         first_pcm, sample_rate = await asyncio.to_thread(
             _synthesize_pcm, kokoro, chunks[0], voice, speed, lang
         )
+    first_chunk_ms = round((time.perf_counter() - first_chunk_t0) * 1000, 2)
 
     async def gen():
         yield first_pcm
@@ -222,6 +225,7 @@ async def speak_stream(body: SpeakRequest):
         headers={
             "X-Sample-Rate": str(sample_rate),
             "X-Audio-Format": "pcm_s16le_mono",
+            "X-First-Chunk-Ms": str(first_chunk_ms),
             "Cache-Control": "no-store",
         },
     )

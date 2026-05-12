@@ -101,14 +101,24 @@ async def generate_cached(
     dynamic_user: str,
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
 ) -> Tuple[str, dict]:
     client = _get_client()
     messages = _build_messages(static_system, static_user_passage, dynamic_user, prior_messages)
-    response = await client.chat.completions.create(
-        model=settings.deepseek_model,
-        max_tokens=max_tokens,
-        messages=messages,
-    )
+    kwargs: Dict[str, Any] = {
+        "model": settings.deepseek_model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if disable_thinking:
+        # DeepSeek's chat models default to thinking-mode-enabled — they
+        # emit a chain-of-thought before any visible token, which spikes
+        # TTFT. For chat-style Lane A turns (user voice reply), we opt
+        # out. Heavier paths (research, brain-builder, engineer) leave it
+        # on for reasoning quality. See
+        # https://api-docs.deepseek.com/guides/thinking_mode
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    response = await client.chat.completions.create(**kwargs)
     text = response.choices[0].message.content or ""
     return text, _usage_dict(response.usage)
 
@@ -158,6 +168,7 @@ async def stream_with_tools(
     prior_messages: Optional[list] = None,
     tools: Optional[List[ToolSpec]] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming chat with OpenAI-style tool calling.
 
@@ -184,6 +195,11 @@ async def stream_with_tools(
     }
     if tools:
         kwargs["tools"] = [t.to_openai() for t in tools]
+    if disable_thinking:
+        # See generate_cached for context. Lane A (user voice reply)
+        # opts out of thinking mode to avoid the invisible CoT prefill
+        # that spikes TTFT. Reasoning paths leave the default on.
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     full_text_parts: list[str] = []
     final_usage = None

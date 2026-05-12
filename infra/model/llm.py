@@ -185,6 +185,7 @@ async def generate_cached(
     *,
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
+    disable_thinking: bool = False,
 ) -> Tuple[str, dict]:
     summary = _summarise_prompt(dynamic_user, static_user_passage)
     started = time.perf_counter()
@@ -195,6 +196,7 @@ async def generate_cached(
         text, usage = await _raw_generate_cached(
             static_system, static_user_passage, dynamic_user,
             prior_messages=prior_messages, max_tokens=max_tokens,
+            disable_thinking=disable_thinking,
         )
     finally:
         await _emit_end(purpose, user_id, summary, started, text=text, usage=usage)
@@ -239,6 +241,7 @@ async def stream_with_tools(
     *,
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
+    disable_thinking: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     summary = _summarise_prompt(dynamic_user, static_user_passage)
     started = time.perf_counter()
@@ -250,6 +253,7 @@ async def stream_with_tools(
         async for evt in _raw_stream_with_tools(
             static_system, static_user_passage, dynamic_user,
             prior_messages=prior_messages, tools=tools, max_tokens=max_tokens,
+            disable_thinking=disable_thinking,
         ):
             kind = evt.get("kind")
             if kind == "delta":

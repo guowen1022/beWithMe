@@ -179,6 +179,9 @@ async def run(
     wall_clock_deadline_s: Optional[float] = None,
     deadline_grace_s: float = 10.0,
     tool_result_max_chars: int = _TOOL_RESULT_MAX_CHARS,
+    phases: Optional[Dict[str, Any]] = None,
+    timing_origin: Optional[float] = None,
+    disable_thinking: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
@@ -216,6 +219,14 @@ async def run(
     started_at = time.monotonic()
     deadline_warned = False
     deadline_hit = False
+
+    # Benchmark instrumentation. `timing_origin` is a perf_counter() reading
+    # taken by the caller at request start, so first-token and first-speak
+    # timings are reported relative to the user-visible request boundary, not
+    # to when this loop happened to run.
+    _origin = timing_origin if timing_origin is not None else time.perf_counter()
+    _first_delta_seen = False
+    _first_speak_seen = False
 
     # TEMP debug — record the EXACT dynamic_user (which carries
     # `=== CURRENTLY ON CANVAS ===`) the LLM is about to see, plus the
@@ -286,15 +297,32 @@ async def run(
             max_tokens=max_tokens,
             purpose=purpose,
             user_id=user_id,
+            disable_thinking=disable_thinking,
         ):
             kind = evt.get("kind")
             if kind == "delta":
-                full_text_parts.append(evt.get("text", ""))
-                yield {"kind": "delta", "text": evt.get("text", "")}
+                text_chunk = evt.get("text", "")
+                if phases is not None and not _first_delta_seen and text_chunk:
+                    phases["llm_ttft_ms"] = round((time.perf_counter() - _origin) * 1000, 2)
+                    _first_delta_seen = True
+                full_text_parts.append(text_chunk)
+                yield {"kind": "delta", "text": text_chunk}
             elif kind == "tool_call":
+                call_name = evt.get("name")
+                if phases is not None and not _first_speak_seen and call_name == "speak":
+                    phases["first_speak_call_ms"] = round((time.perf_counter() - _origin) * 1000, 2)
+                    phases["tool_iterations_before_speak"] = tool_rounds
+                    # The text the persona is about to vocalize — needed by
+                    # the benchmark to POST it to /api/speak/stream and
+                    # measure the actual TTS first-byte time.
+                    args = evt.get("arguments") or {}
+                    spoken = args.get("text") or args.get("content") or ""
+                    if spoken:
+                        phases["first_speak_text"] = spoken
+                    _first_speak_seen = True
                 pending_calls.append({
                     "id": evt.get("id"),
-                    "name": evt.get("name"),
+                    "name": call_name,
                     "arguments": evt.get("arguments") or {},
                 })
                 # Re-yield to the caller so trigger pipelines can observe
@@ -303,7 +331,7 @@ async def run(
                 yield {
                     "kind": "tool_call",
                     "id": evt.get("id"),
-                    "name": evt.get("name"),
+                    "name": call_name,
                     "arguments": evt.get("arguments") or {},
                 }
             elif kind == "done":
@@ -379,6 +407,10 @@ async def run(
         if dynamic_user:
             history.append({"role": "user", "content": dynamic_user})
             dynamic_user = ""
+
+    if phases is not None:
+        phases["tool_iterations_total"] = tool_rounds
+        phases["llm_done_ms"] = round((time.perf_counter() - _origin) * 1000, 2)
 
     yield {
         "kind": "done",

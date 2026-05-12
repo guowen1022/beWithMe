@@ -1,8 +1,9 @@
 import asyncio
 import json
 import re
+import time
 from uuid import UUID
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
@@ -19,6 +20,7 @@ from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from workshop.canvas.tools.request_ui_block import request_ui_block
 from workshop.canvas.tools.mount_template import mount_template
 from infra.templates import list_templates, load_template
+from tools.speak import speak as tool_speak
 
 router = APIRouter()
 
@@ -72,6 +74,44 @@ def _match_template(description: str) -> str | None:
 
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
+
+# Sentence terminator detector for auto-speak. Mirrors
+# `services/speak/main.py:_SENTENCE_SPLIT` so the boundary the client
+# would split on matches what we fire here. We additionally accept
+# end-of-string when flushing the buffer at stream close.
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+_VALID_DEVICE_CLASSES = {"desktop", "tablet", "phone"}
+
+
+def _resolve_active_channel(
+    talk_preference: dict | None, device_class: str
+) -> str:
+    """Map (talk_preference, device_class) → 'voice' | 'text' | 'both'.
+
+    Mirrors the LLM's TALK CHANNEL RULE so the backend can pick the
+    right prompt builder + auto-speak behavior without round-tripping
+    through the model. Defaults to 'both' if unset, matching
+    `preferences_block._DEFAULT_TALK_PREF`.
+    """
+    fallback = {"desktop": "both", "tablet": "both", "phone": "text"}
+    pref = talk_preference if isinstance(talk_preference, dict) else {}
+    return pref.get(device_class) or fallback.get(device_class, "both")
+
+
+def _strip_for_speech(text: str) -> str:
+    """Cheap markdown stripper for auto-spoken sentences.
+
+    The voice-mode prompt tells the LLM not to emit markdown, but the
+    model occasionally leaks `**bold**` or stray `*` from training
+    bias. Strip the obvious tokens so the TTS doesn't read them aloud
+    ("asterisk asterisk bold"). Keep this conservative — we only
+    remove characters that are clearly markdown noise.
+    """
+    out = text.replace("**", "").replace("__", "")
+    # Drop leading/trailing whitespace + standalone bullet markers
+    out = re.sub(r"^[\s>*\-]+", "", out)
+    return out.strip()
 
 
 def _get_client(request: Request) -> SiliconBrainClient:
@@ -190,8 +230,16 @@ async def ask_stream(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
+    x_device_class: str | None = Header(default=None, alias="X-Device-Class"),
+    x_lane_thinking: str | None = Header(default=None, alias="X-Lane-Thinking"),
 ):
-    """SSE endpoint with streaming — detects proxy search events."""
+    """SSE endpoint with streaming — detects proxy search events.
+
+    `X-Lane-Thinking` header: opt-in toggle for the orchestration
+    benchmark. Values: `on` keeps DeepSeek thinking enabled for this
+    turn (the default for Lane A is `off` for fast voice replies);
+    `off` or absent uses the default. Not a public API — debug-only.
+    """
     question = body.question or ""
 
     # Debug shortcut: '/block <description>' bypasses the teacher entirely
@@ -206,7 +254,48 @@ async def ask_stream(
         )
 
     client = _get_client(request)
-    ctx = await assemble_context(body, user_id, db, client)
+
+    # Resolve the active channel. We need it BEFORE assemble_context so
+    # the right prompt builder (voice_answer vs answer) gets used.
+    # talk_preference is fetched fresh by assemble_context anyway, so we
+    # pre-fetch it here cheaply.
+    device_class = (x_device_class or "").strip().lower()
+    if device_class not in _VALID_DEVICE_CLASSES:
+        device_class = "desktop"
+    try:
+        talk_pref = await client.get_talk_preference(user_id)
+    except Exception as e:
+        print(f"[ask/stream] talk_preference fetch failed: {e}", flush=True)
+        talk_pref = None
+    active_channel = _resolve_active_channel(talk_pref, device_class)
+    voice_mode = active_channel in ("voice", "both")
+
+    # Benchmark instrumentation: collect per-phase elapsed milliseconds keyed
+    # off a single perf_counter origin. Reported on the terminal SSE event as
+    # `phase_timings_ms`. No-op outside the benchmark path — instrumentation
+    # cost is one perf_counter pair per step.
+    timing_origin = time.perf_counter()
+    phases: dict = {}
+    phases["device_class"] = device_class
+    phases["active_channel"] = active_channel
+    phases["voice_mode"] = voice_mode
+
+    # Resolve thinking flag. Default for Lane A is OFF (fast TTFT).
+    # Benchmarks can override via X-Lane-Thinking: on.
+    thinking_override = (x_lane_thinking or "").strip().lower()
+    if thinking_override == "on":
+        disable_thinking = False
+    elif thinking_override == "off":
+        disable_thinking = True
+    else:
+        disable_thinking = True  # Lane A default
+    phases["disable_thinking"] = disable_thinking
+
+    with_assemble_t0 = time.perf_counter()
+    ctx = await assemble_context(
+        body, user_id, db, client, phases=phases, voice_mode=voice_mode
+    )
+    phases["context_total_ms"] = round((time.perf_counter() - with_assemble_t0) * 1000, 2)
     teacher_tools = build_teacher_tools(user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
@@ -216,6 +305,44 @@ async def ask_stream(
         answer_body = ""
         extracted_title: str | None = None
         usage: dict = {}
+        # Auto-speak state. Only active on voice channels. The buffer
+        # accumulates streamed prose; once a sentence terminator (.!?
+        # followed by whitespace) is found, the sentence fires to Kokoro
+        # in the background via tools.speak.speak(). If the LLM emits
+        # its own `speak` tool call this turn, we shut off auto-speak to
+        # avoid double-voicing the same content.
+        sentence_buffer = ""
+        auto_speak_suppressed = False
+        auto_speak_count = 0
+        auto_speak_first_ms: float | None = None
+
+        async def _fire_sentence(sentence: str):
+            """Background-fire a single sentence to TTS. Errors are
+            logged and swallowed — auto-speak is a best-effort path."""
+            nonlocal auto_speak_count, auto_speak_first_ms
+            cleaned = _strip_for_speech(sentence)
+            if not cleaned:
+                return
+            if auto_speak_first_ms is None:
+                auto_speak_first_ms = round(
+                    (time.perf_counter() - timing_origin) * 1000, 2
+                )
+                phases["auto_speak_first_ms"] = auto_speak_first_ms
+            auto_speak_count += 1
+            phases["auto_speak_count"] = auto_speak_count
+            try:
+                # channel='voice' on voice-only devices, 'both' on both.
+                # Use the resolved active_channel directly — matches the
+                # speak() tool's channel semantics.
+                speak_channel = "voice" if active_channel == "voice" else "both"
+                await tool_speak(
+                    user_id=user_id,
+                    text=cleaned,
+                    channel=speak_channel,
+                )
+            except Exception as e:
+                print(f"[ask/stream] auto-speak failed: {e}", flush=True)
+
         try:
             title_resolved = False
             head_buffer = ""
@@ -228,9 +355,32 @@ async def ask_stream(
                 tools=teacher_tools,
                 purpose="answer",
                 user_id=user_id,
+                phases=phases,
+                timing_origin=timing_origin,
+                # Lane A default: skip the LLM's chain-of-thought for fast
+                # TTFT. Reasoning paths (research, brain-builder, engineer)
+                # keep it on. Orchestration benchmark can override via the
+                # X-Lane-Thinking header.
+                disable_thinking=disable_thinking,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]
+                    # Auto-speak: accumulate the streamed prose and fire
+                    # each completed sentence to Kokoro as a background
+                    # task. Voice-mode only; suppressed once the LLM
+                    # calls speak() itself.
+                    if voice_mode and not auto_speak_suppressed and chunk:
+                        sentence_buffer += chunk
+                        while True:
+                            match = _SENTENCE_BOUNDARY.search(sentence_buffer)
+                            if not match:
+                                break
+                            sentence = sentence_buffer[: match.end()].strip()
+                            sentence_buffer = sentence_buffer[match.end():]
+                            if sentence:
+                                task = asyncio.create_task(_fire_sentence(sentence))
+                                _background_tasks.add(task)
+                                task.add_done_callback(_background_tasks.discard)
                     if not title_resolved:
                         head_buffer += chunk
                         # Only attempt parse_title once we've seen a newline.
@@ -252,6 +402,22 @@ async def ask_stream(
                                 title_resolved = True
                     else:
                         await status_queue.put({"type": "token", "text": chunk})
+                elif evt["kind"] == "tool_call":
+                    # If the LLM is going to speak() itself, stop the
+                    # auto-speak path — its text wins. Drop any pending
+                    # buffer so we don't double-voice a partial sentence.
+                    if voice_mode and evt.get("name") == "speak":
+                        auto_speak_suppressed = True
+                        sentence_buffer = ""
+                    # Forward every tool call to the SSE stream so the
+                    # frontend / benchmark can observe what the persona
+                    # is invoking. Frontend ignores types it doesn't
+                    # know; benchmark grades on these.
+                    await status_queue.put({
+                        "type": "tool_call",
+                        "name": evt.get("name"),
+                        "arguments": evt.get("arguments") or {},
+                    })
                 elif evt["kind"] == "done":
                     answer = evt["text"]
                     usage = evt["usage"]
@@ -265,6 +431,16 @@ async def ask_stream(
                         else:
                             await status_queue.put({"type": "token", "text": head_buffer})
                         title_resolved = True
+
+            # Flush any trailing prose that didn't end in a sentence
+            # terminator — the user's last word still needs to be heard.
+            if voice_mode and not auto_speak_suppressed:
+                tail = sentence_buffer.strip()
+                if tail:
+                    task = asyncio.create_task(_fire_sentence(tail))
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
+                    sentence_buffer = ""
 
             final_title, answer_body = parse_title(answer)
             if extracted_title is None:
@@ -285,11 +461,13 @@ async def ask_stream(
                 "prior_message_count": len(ctx.prior_messages),
                 "usage": usage,
             })
+            phases["total_ms"] = round((time.perf_counter() - timing_origin) * 1000, 2)
             await status_queue.put({
                 "type": "answer",
                 "answer": answer_body,
                 "title": extracted_title,
                 "related_interaction_ids": [],
+                "phase_timings_ms": phases,
             })
         except Exception as e:
             print(f"[ask/stream] error: {e}", flush=True)
@@ -359,6 +537,8 @@ async def ask(
         ctx.parts.static_user_passage,
         ctx.parts.dynamic_user,
         prior_messages=ctx.prior_messages,
+        # Lane A: same rationale as ask_stream — chat path, no CoT.
+        disable_thinking=True,
     )
     title, _ = parse_title(answer)
 

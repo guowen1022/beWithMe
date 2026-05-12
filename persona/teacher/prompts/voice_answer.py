@@ -1,8 +1,22 @@
-"""Answer-scenario prompt — user asked a question, teacher answers.
+"""Lane A voice-mode prompt — sibling of `prompts/answer.py`.
 
-Composes from skills + helpers. The output should match the previous
-monolithic `prompt_v2.build_answer_prompt` to within whitespace so the
-LLM behavior is unchanged across the refactor.
+Same signature, same return type. Used when the active TALK CHANNEL on
+the requesting device is `voice` or `both`. Differs from `answer.py`
+in exactly two ways:
+
+  * `answer_format.md` (TITLE / CONCLUSION FIRST / blocks-with-`---` /
+    CONCEPTS) is NOT loaded — that is a *written-text contract*,
+    irrelevant for spoken delivery and actively misleading when the
+    response is auto-TTS'd sentence by sentence.
+
+  * `lane_a_voice.md` is loaded in its place — plain conversational
+    prose, no markdown, no meta-narration, voice-primary with visuals
+    as supplements.
+
+The rest of the system prompt (teaching principle, canvas persona,
+canvas skills, preferences, talk-preference rule) is identical so the
+persona keeps its full canvas tool palette and learner-context
+awareness.
 """
 from __future__ import annotations
 
@@ -41,12 +55,9 @@ def build(
     canvas_state: object = None,
     talk_preference: dict | None = None,
 ) -> PromptParts:
-    """Build the answer-scenario prompt.
-
-    Same signature as the legacy `build_answer_prompt_v2` so the agent
-    dispatch and tool loop need no changes during the refactor.
-    """
-    # ---- STATIC SYSTEM ---------------------------------------------------
+    """Build the voice-mode answer prompt. Same signature as
+    `prompts/answer.py:build()` so callers can swap at the
+    `assemble_context` layer based on the active channel."""
     system_parts: List[str] = [
         "You are a helpful and patient reading assistant. "
         "Please read the teaching principles (loaded below).",
@@ -58,32 +69,26 @@ def build(
         system_parts.append(teaching_principle)
     system_parts.append("")
 
-    # Persona-specific canvas framing (the "you control the canvas" voice).
     canvas_persona = load_skill("teacher/canvas_persona")
     if canvas_persona:
         system_parts.append(canvas_persona)
         system_parts.append("")
 
-    # Shared canvas knowledge from the workshop set.
     for skill_name in _CANVAS_SKILLS:
         body = load_skill(skill_name)
         if body:
             system_parts.append(body)
             system_parts.append("")
 
-    # Output contract — TITLE / TONE / MATH / STRUCTURE. Text-mode only;
-    # voice-mode turns are routed through prompts/voice_answer.py which
-    # skips this skill in favor of lane_a_voice.md.
-    answer_format = load_skill("teacher/answer_format")
-    if answer_format:
-        system_parts.append(answer_format)
+    # Lane A voice contract — replaces answer_format.md for spoken turns.
+    lane_a_voice = load_skill("teacher/lane_a_voice")
+    if lane_a_voice:
+        system_parts.append(lane_a_voice)
         system_parts.append("")
 
-    # Preferences + background blocks (cacheable; rare to change).
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 
-    # Mastery snapshot (cacheable; updated when concepts decay/recall).
     mastery = summarise_mastery(concept_nodes)
     if mastery:
         system_parts.append("")
@@ -91,10 +96,8 @@ def build(
 
     static_system = "\n".join(system_parts)
 
-    # ---- STATIC USER PASSAGE --------------------------------------------
     static_user_passage = f"=== FULL PASSAGE ===\n{passage}" if passage else ""
 
-    # ---- DYNAMIC USER ---------------------------------------------------
     dynamic_parts: List[str] = []
 
     canvas_section = format_canvas_state(canvas_state)

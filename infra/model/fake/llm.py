@@ -45,6 +45,7 @@ async def generate_cached(
     dynamic_user: str,
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     return _FAKE_ANSWER, _FAKE_USAGE
 
@@ -146,6 +147,7 @@ async def stream_with_tools(
     prior_messages: Optional[list] = None,
     tools: Optional[List[ToolSpec]] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Deterministic tool-calling script for tests.
 
