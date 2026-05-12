@@ -19,20 +19,28 @@ from uuid import UUID
 # Lane tags for tool filtering. See `build_tools(lane=...)`.
 #   "answer"      — full toolset, used by /api/ask (typed Q&A).
 #   "user_facing" — Lane A reflect: the teacher is replying to the user via
-#                   speech. Only `speak` is exposed; structural / slow tools
-#                   (read_media, mount_template, engineer delegation) are
-#                   hidden so the LLM cannot waste the single allowed
-#                   iteration on something that should be a Lane B task.
-#   "background"  — Lane B work: everything except `speak`. The background
-#                   pool does NOT talk to the user — its results surface
-#                   via the notice queue that Lane A drains next turn.
-Lane = Literal["answer", "user_facing", "background"]
+#                   speech. Only `speak` + fast structural tools + `start_research`
+#                   are exposed; slow IO and the planning tools are hidden
+#                   so Lane A's small iteration budget isn't wasted on
+#                   investigation work that belongs in Lane R.
+#   "background"  — Lane B work: structural follow-ups after a block
+#                   completes. Does NOT talk to the user — its results
+#                   surface via the notice queue.
+#   "research"    — Lane R: a long-running multi-step investigation
+#                   spawned by `start_research`. Has the full browser
+#                   toolkit, the planning tools (research_plan /
+#                   research_note), `speak` for the final synthesis,
+#                   and the structural tools so it can mount the
+#                   progress ribbon and any diagrams it produces. ~25
+#                   iterations, ~90 s wall clock, larger token budget.
+Lane = Literal["answer", "user_facing", "background", "research"]
 
 from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
 
 from tools.browser_set import browser_set
 from tools.look_at_image import look_at_image
+from tools.look_at_video import look_at_video
 from tools.read_document import read_document
 from tools.read_url import read_url
 from tools.speak import speak
@@ -409,6 +417,13 @@ def _make_browser_set(user_id: UUID):
             )
         except Exception as e:
             return json.dumps({"error": f"browser_set failed: {e}"})
+        # Snapshot results carry a ref→locator map that doesn't serialize;
+        # strip the locator-internal field so we send a clean payload back.
+        # (the sidecar already does this, but be defensive.)
+        if isinstance(result, dict) and isinstance(result.get("refs"), list):
+            for r in result["refs"]:
+                if isinstance(r, dict):
+                    r.pop("locator", None)
         return json.dumps(result)
     return executor
 
@@ -477,6 +492,33 @@ def _make_look_at_image(user_id: UUID):
             return json.dumps({"error": str(e)})
         except Exception as e:
             return json.dumps({"error": f"vision call failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
+def _make_look_at_video(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        video = (args.get("video") or "").strip()
+        if not video:
+            return json.dumps({"error": "video is required"})
+        question_raw = args.get("question")
+        question = (
+            question_raw.strip()
+            if isinstance(question_raw, str) and question_raw.strip()
+            else None
+        )
+        max_frames_raw = args.get("max_frames")
+        try:
+            max_frames = int(max_frames_raw) if max_frames_raw is not None else 24
+        except (TypeError, ValueError):
+            return json.dumps({"error": "max_frames must be an integer"})
+        max_frames = max(1, min(max_frames, 64))
+        try:
+            result = await look_at_video(video, question, max_frames=max_frames)
+        except RuntimeError as e:
+            return json.dumps({"error": str(e)})
+        except Exception as e:
+            return json.dumps({"error": f"video call failed: {e}"})
         return json.dumps(result)
     return executor
 
@@ -594,6 +636,179 @@ def _make_block_action(user_id: UUID):
     return executor
 
 
+# ---- Research-mode tools -------------------------------------------------
+#
+# `start_research` is the gate: Lane A calls it when the user asks an
+# open-ended question that needs multi-step investigation. The executor
+# spawns a Lane R turn via `_execute_research` and returns immediately,
+# so Lane A doesn't block on the long-running work.
+#
+# `research_plan` and `research_note` are the planning scaffold the
+# Lane R LLM uses inside the research loop. Both update the in-memory
+# `research_state` and push the new state to the canvas's progress
+# ribbon via the workshop's push_block_content.
+
+async def _push_research_state_to_canvas(user_id: UUID) -> None:
+    """Mount the progress ribbon if it's not yet up, then push the
+    latest state to it. Failures are non-fatal — the LLM keeps making
+    progress even if the user's canvas is offline."""
+    from persona.teacher import research_state
+    state = research_state.get(user_id)
+    if state is None:
+        return
+    block_id = state.block_id
+    payload = state.to_payload()
+
+    # Mount once. If the block already exists the engineer-side mount
+    # would error; we ignore that and proceed straight to push so the
+    # block updates regardless of which path created it.
+    try:
+        await mount_template(
+            user_id=user_id,
+            template_name="research_progress",
+            block_id=block_id,
+        )
+    except Exception:
+        pass
+
+    try:
+        await push_block_content(
+            user_id=user_id,
+            block_id=block_id,
+            topic=f"text.{block_id}.content",
+            value=payload,
+        )
+    except Exception as e:
+        print(f"[research] push_block_content failed: {e}", flush=True)
+
+
+def _make_research_plan(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        from persona.teacher import research_state
+        steps = args.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return json.dumps({"error": "steps must be a non-empty list of strings"})
+        cleaned = [str(s).strip() for s in steps if str(s).strip()]
+        if not cleaned:
+            return json.dumps({"error": "steps must contain at least one non-empty step"})
+        if len(cleaned) > 7:
+            return json.dumps({"error": "max 7 steps; narrow the plan"})
+        if len(cleaned) < 3:
+            return json.dumps({
+                "error": (
+                    "min 3 steps. If you cannot enumerate 3 steps, this is "
+                    "not a research question — call speak with a normal "
+                    "answer instead."
+                ),
+            })
+        # If begin() hasn't been called yet (defensive — the trigger
+        # already calls it), do it now so the plan tool always works.
+        if research_state.get(user_id) is None:
+            research_state.begin(user_id, goal="")
+        state = research_state.set_plan(user_id, cleaned)
+        if state is None:
+            return json.dumps({"error": "no active research state"})
+        await _push_research_state_to_canvas(user_id)
+        return json.dumps(state.to_llm_view())
+    return executor
+
+
+def _make_research_note(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        from persona.teacher import research_state
+        idx_raw = args.get("step_index")
+        finding = args.get("finding")
+        if not isinstance(finding, str) or not finding.strip():
+            return json.dumps({"error": "finding is required (non-empty string)"})
+        try:
+            step_index = int(idx_raw) if idx_raw is not None else -1
+        except (TypeError, ValueError):
+            return json.dumps({"error": "step_index must be an integer"})
+        is_error = bool(args.get("error") or False)
+        state = research_state.record_note(
+            user_id, step_index, finding.strip(), error=is_error
+        )
+        if state is None:
+            return json.dumps({"error": "no active research state — call research_plan first"})
+        if step_index < 0 or step_index >= len(state.steps):
+            return json.dumps({"error": f"step_index {step_index} out of range"})
+        await _push_research_state_to_canvas(user_id)
+        return json.dumps(state.to_llm_view())
+    return executor
+
+
+def _make_start_research(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        from persona.teacher import research_state
+        # Late imports — triggers.py imports manifest.py, so direct imports
+        # at module load would cycle.
+        from persona.teacher.triggers import (
+            _execute_research,
+            _execute_research_from_recipe,
+        )
+        from workshop.research import recipes as _recipes
+        from workshop.research import recipe_store as _recipe_store
+        import asyncio as _asyncio
+
+        goal = (args.get("goal") or "").strip()
+        if not goal:
+            return json.dumps({"error": "goal is required"})
+        if research_state.is_active(user_id):
+            return json.dumps({
+                "status": "already_running",
+                "message": "a research turn is already in flight for this user",
+            })
+
+        # URL resolution: LLM-provided `page_url` wins; canvas autodetect
+        # as fallback. Used to derive the host for recipe lookup; we keep
+        # `goal_url` available to pass into the replay path.
+        goal_url = (args.get("page_url") or "").strip() or None
+        if not goal_url:
+            try:
+                goal_url = await _recipes.infer_url_from_canvas(user_id)
+            except Exception as e:
+                print(f"[start_research] infer_url_from_canvas failed: {e}", flush=True)
+                goal_url = None
+
+        # Recipe lookup: per-user, same host, cosine sim ≥ 0.85. Failures
+        # along the way degrade silently to the fresh research path.
+        match = None
+        host = _recipes.host_from_url(goal_url) if goal_url else None
+        if host:
+            try:
+                from infra.rag.embedding import embed_text
+                emb = await embed_text(goal)
+                if emb:
+                    match = await _recipe_store.lookup(
+                        user_id, host=host, goal_embedding=emb,
+                    )
+            except Exception as e:
+                print(f"[start_research] recipe lookup failed: {e}", flush=True)
+
+        # Initialize state up front so the ribbon mounts with the goal
+        # before the loop's first iteration adds steps.
+        research_state.begin(user_id, goal=goal)
+        await _push_research_state_to_canvas(user_id)
+
+        # Fire-and-forget dispatch. Both paths own their own lifecycle.
+        if match is not None and goal_url:
+            print(
+                f"[start_research] replay hit: recipe={match.id} "
+                f"host={host} goal={goal[:60]!r}",
+                flush=True,
+            )
+            _asyncio.create_task(
+                _execute_research_from_recipe(user_id, goal, goal_url, match)
+            )
+            return json.dumps({"status": "started", "goal": goal, "via": "recipe"})
+
+        # Pass goal_url through so the research prompt can pull in the
+        # per-host navigation note (workshop/research/per_host_skills).
+        _asyncio.create_task(_execute_research(user_id, goal, goal_url))
+        return json.dumps({"status": "started", "goal": goal, "via": "fresh"})
+    return executor
+
+
 # Tool-name → set of lanes it appears on. Anything not listed defaults to
 # the full set. Keep this map narrow — adding a tool to a wrong lane can
 # cause Lane A to spend its single iteration on a structural call.
@@ -605,22 +820,28 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # fan-outs (no extra LLM call, complete in ms) stay on Lane A;
     # tools that themselves invoke the LLM, do RAG, or duplicate
     # context that's already in the prompt go to Lane B only.
-    "speak":              {"answer", "user_facing"},
-    "mount_template":     {"answer", "user_facing", "background"},
-    "block_action":       {"answer", "user_facing", "background"},
-    "push_block_content": {"answer", "user_facing", "background"},
-    "point_arrow":        {"answer", "user_facing", "background"},
-    "layout_blocks":      {"answer", "user_facing", "background"},
-    "interactive_graph":  {"answer", "user_facing", "background"},
+    "speak":              {"answer", "user_facing", "research"},
+    "mount_template":     {"answer", "user_facing", "background", "research"},
+    "block_action":       {"answer", "user_facing", "background", "research"},
+    "push_block_content": {"answer", "user_facing", "background", "research"},
+    "point_arrow":        {"answer", "user_facing", "background", "research"},
+    "layout_blocks":      {"answer", "user_facing", "background", "research"},
+    "interactive_graph":  {"answer", "user_facing", "background", "research"},
     # Slow / redundant — Lane A would burn its single iteration here.
-    "read_media":         {"answer", "background"},   # canvas state already in prompt
-    "read_document":      {"answer", "background"},   # vector RAG, slow
-    "list_media":         {"answer", "background"},   # deprecated
-    "request_new_block":  {"answer", "background"},   # engineer LLM, very slow
-    "look_at_image":      {"answer", "background"},   # remote vision call, ~5–6s
-    "web_view":           {"answer", "background"},   # drives Electron BrowserView, slow IO
-    "read_url":           {"answer", "background"},   # silent Playwright fetch, ~3–5s
-    "browser_set":        {"answer", "background"},   # full headless Playwright; slow IO
+    # Lane R needs all of these — that's the point of research mode.
+    "read_media":         {"answer", "background", "research"},   # canvas state already in prompt
+    "read_document":      {"answer", "background", "research"},   # vector RAG, slow
+    "list_media":         {"answer", "background", "research"},   # deprecated
+    "request_new_block":  {"answer", "background"},               # engineer LLM, too slow for Lane R
+    "look_at_image":      {"answer", "background", "research"},   # remote vision call, ~5–6s
+    "look_at_video":      {"answer", "background", "research"},   # ffmpeg + N vision calls + Whisper; slow
+    "web_view":           {"answer", "background", "research"},   # drives Electron BrowserView, slow IO
+    "read_url":           {"answer", "background", "research"},   # silent Playwright fetch, ~3–5s
+    "browser_set":        {"answer", "background", "research"},   # full headless Playwright; slow IO
+    # Research-mode entry + scaffold.
+    "start_research":     {"answer", "user_facing"},              # Lane A spawns Lane R
+    "research_plan":      {"research"},                            # only inside the research loop
+    "research_note":      {"research"},                            # only inside the research loop
 }
 
 
@@ -766,6 +987,55 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
             executor=_make_look_at_image(user_id),
         ),
         ToolSpec(
+            name="look_at_video",
+            description=(
+                "Delegate video perception to the vision pipeline. Use this "
+                "for video files (mp4/mov/webm/mkv) or audio files (mp3/wav) "
+                "— NOT for single still images, which go through "
+                "`look_at_image`. Pass `video` as a local file path or "
+                "http(s) URL. Optionally pass `question` to steer the "
+                "per-frame prompt (e.g. 'what is the person writing?'). "
+                "Returns `{description: str}` where the description is a "
+                "chronological timeline interleaving visual descriptions "
+                "and speech transcripts, e.g. "
+                "`[00:00.0] vision: ...\\n[00:00.4–00:03.2] speech: \"...\"`. "
+                "Slow: ffmpeg + many vision calls + Whisper transcription; "
+                "expect 10–60s depending on clip length. Caps at "
+                "`max_frames` vision calls (default 24, max 64)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "video": {
+                        "type": "string",
+                        "description": (
+                            "Local file path or http(s) URL to the video "
+                            "or audio source."
+                        ),
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "Optional. What to look for in each frame. "
+                            "Defaults to a general description."
+                        ),
+                    },
+                    "max_frames": {
+                        "type": "integer",
+                        "description": (
+                            "Optional. Cap on vision calls. Default 24, "
+                            "max 64."
+                        ),
+                        "minimum": 1,
+                        "maximum": 64,
+                    },
+                },
+                "required": ["video"],
+                "additionalProperties": False,
+            },
+            executor=_make_look_at_video(user_id),
+        ),
+        ToolSpec(
             name="read_url",
             description=(
                 "Convenience shortcut: browser_set(goto) + close. One-shot "
@@ -808,31 +1078,47 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "  - observe(drain=true): drain XHR responses captured "
                 "since last observe + re-read text/html. Use after "
                 "click/fill/wait, or while polling a live feed.\n"
-                "  - click(selector | x,y, timeout?): page.click or "
-                "page.mouse.click.\n"
-                "  - fill(selector, value): page.fill — set input value.\n"
-                "  - type(selector, text, delay?): page.type — keystrokes.\n"
-                "  - press(selector, key): page.press, e.g. key='Enter'.\n"
+                "  - SNAPSHOT / @REF (the cheap path for 'find a section'): "
+                "snapshot() walks the ARIA tree and returns a compact list "
+                "of @e1, @e2, ... refs for every heading / link / button / "
+                "section / paragraph. Then call text(selector='@e42') to "
+                "read just that section, or click(selector='@e7') to click "
+                "it, or scroll(selector='@e42') to bring it into view. "
+                "PREFER snapshot+@ref over evaluate for navigating long "
+                "pages — it's faster, doesn't require writing JS, and "
+                "doesn't blow up your context. Refs invalidate on any "
+                "goto/reload/back/forward; re-snapshot after navigation.\n"
+                "  - text(selector | @ref): return the inner text of one "
+                "element. Use after snapshot to read a specific section "
+                "instead of dragging the whole page through read_url.\n"
+                "  - scroll(selector | @ref): scroll an element into view.\n"
+                "  - click(selector | @ref | x,y, timeout?).\n"
+                "  - fill(selector | @ref, value): set input value.\n"
+                "  - type(selector | @ref, text, delay?): keystrokes.\n"
+                "  - press(selector | @ref, key): e.g. key='Enter'.\n"
                 "  - screenshot(full_page?): returns base64 PNG.\n"
                 "  - screenshot_describe(full_page?): screenshot piped "
                 "through the vision model; returns a textual description "
                 "(you never see raw bytes). Costs ~5–6s.\n"
                 "  - evaluate(expression): page.evaluate — JS, returns "
-                "JSON-serialised result. Useful for reading window "
-                "globals (window.__INITIAL_STATE__) or computed values.\n"
-                "  - wait_for_selector(selector, timeout?), "
+                "JSON-serialised result. RESERVED for reading window "
+                "globals (window.__INITIAL_STATE__) or computed values "
+                "that snapshot can't expose. DO NOT use evaluate to grep "
+                "page text or scroll to anchors — snapshot + text/scroll "
+                "do that better.\n"
+                "  - wait_for_selector(selector | @ref, timeout?), "
                 "wait_for_load_state(state), wait_for_timeout(timeout).\n"
-                "  - reload, go_back, go_forward.\n"
+                "  - reload, go_back, go_forward (all invalidate @refs).\n"
                 "  - content (HTML), title, url.\n"
                 "  - close(): close the page when done.\n"
                 "Default flow for 'read this URL' is just read_url (a "
-                "shortcut for goto+close). For interactive flows: "
-                "goto → click/fill/wait_for_selector → observe → "
-                "screenshot_describe → ... → close. For live feeds (stock "
-                "tickers, dashboards): goto → observe periodically → "
-                "close. Use web_view(open) instead ONLY when the user "
-                "explicitly asks to SEE the page (replays, login walls, "
-                "manual interaction)."
+                "shortcut for goto+close). For 'find a specific section' "
+                "on an already-loaded page: snapshot → text @eN. For "
+                "interactive flows: goto → snapshot → click @eN → "
+                "snapshot (refs invalidated by nav) → observe → close. "
+                "Use web_view(open) instead ONLY when the user explicitly "
+                "asks to SEE the page (replays, login walls, manual "
+                "interaction)."
             ),
             params_schema={
                 "type": "object",
@@ -846,12 +1132,17 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                             "wait_for_load_state", "wait_for_timeout",
                             "reload", "go_back", "go_forward",
                             "content", "title", "url", "close",
+                            "snapshot", "text", "scroll",
                         ],
                     },
                     "url": {"type": "string", "description": "For goto."},
                     "selector": {
                         "type": "string",
-                        "description": "CSS selector. For click/fill/type/press/wait_for_selector.",
+                        "description": (
+                            "CSS selector OR @e<n> ref from a prior "
+                            "snapshot. For click/fill/type/press/"
+                            "wait_for_selector/text/scroll."
+                        ),
                     },
                     "value": {"type": "string", "description": "For fill."},
                     "text": {"type": "string", "description": "For type."},
@@ -1334,6 +1625,137 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_block_action(user_id),
+        ),
+        ToolSpec(
+            name="start_research",
+            description=(
+                "Enter research mode for an open-ended question that "
+                "needs multi-step investigation. Examples: 'what's your "
+                "opinion of this stock?', 'summarize this article and "
+                "tell me what to focus on', 'compare these two papers', "
+                "'look into X and tell me what you find'. Calling this "
+                "spawns a dedicated research turn (Lane R) with the full "
+                "browser toolkit, ~25 tool-call rounds, and ~90 s of "
+                "wall-clock time. A progress ribbon mounts at the top of "
+                "the canvas so the user sees the planned steps and "
+                "watches them tick off. The research turn synthesizes "
+                "and speaks the answer when done — DO NOT also call "
+                "speak yourself in the same Lane A turn. If you pass "
+                "`page_url` and the user has researched that URL's host "
+                "before, the system replays the saved procedure in ~5-10 s "
+                "instead of running the full ~90 s investigation. Returns "
+                "immediately with {status: 'started', via: 'recipe'|'fresh'} "
+                "or {status: 'already_running'} if a prior research turn "
+                "is still in flight."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "The user's question, restated in your own "
+                            "words. The research turn uses this verbatim "
+                            "as the investigation target."
+                        ),
+                    },
+                    "page_url": {
+                        "type": "string",
+                        "description": (
+                            "Optional. If the user's question is about a "
+                            "specific URL already visible on canvas (a "
+                            "web_view block or a recently read article), "
+                            "pass it here. The research subsystem uses "
+                            "the URL's host to look up saved procedures "
+                            "— a hit replays the synthesis in ~5-10 s "
+                            "instead of ~90 s. Forgetting this is fine "
+                            "(the system also tries to infer it from "
+                            "canvas state) but explicit is faster."
+                        ),
+                    },
+                    "why_this_is_multi_step": {
+                        "type": "string",
+                        "description": (
+                            "Optional. One sentence explaining why a "
+                            "single-tool reply isn't enough. Helps you "
+                            "audit your own decision; not seen by the "
+                            "research loop."
+                        ),
+                    },
+                },
+                "required": ["goal"],
+                "additionalProperties": False,
+            },
+            executor=_make_start_research(user_id),
+        ),
+        ToolSpec(
+            name="research_plan",
+            description=(
+                "Inside research mode ONLY. Record (or revise) the plan "
+                "of 3–7 steps you'll execute to answer the goal. The "
+                "first step you list is marked 'doing'; the rest "
+                "'pending'. The progress ribbon on the user's canvas "
+                "updates immediately. Call this exactly once at the "
+                "start; revise mid-run only when you discover a step is "
+                "unnecessary or one is missing. Returns the current "
+                "plan with each step's index — use those indices in "
+                "research_note calls."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 3,
+                        "maxItems": 7,
+                        "description": (
+                            "Ordered list of step descriptions. Each "
+                            "should be concrete and executable with one "
+                            "or two tool calls (e.g. 'Read price + "
+                            "key stats from page', 'Scan the headlines "
+                            "in the news section')."
+                        ),
+                    },
+                },
+                "required": ["steps"],
+                "additionalProperties": False,
+            },
+            executor=_make_research_plan(user_id),
+        ),
+        ToolSpec(
+            name="research_note",
+            description=(
+                "Inside research mode ONLY. After completing a step, "
+                "call this to record the takeaway. Marks the step as "
+                "done in the canvas ribbon and auto-advances the next "
+                "step to 'doing'. Keep findings concrete: numbers, "
+                "headlines, dates, quotes you actually observed — not "
+                "hand-waving. ≤ 280 chars (longer findings are "
+                "truncated). Set error=true if the step failed (the "
+                "ribbon shows ✕ and you should re-plan or skip)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "step_index": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "0-based index from the current plan.",
+                    },
+                    "finding": {
+                        "type": "string",
+                        "description": "≤ 280 chars. Concrete takeaway from the step.",
+                    },
+                    "error": {
+                        "type": "boolean",
+                        "description": "If true, mark the step as failed (✕).",
+                    },
+                },
+                "required": ["step_index", "finding"],
+                "additionalProperties": False,
+            },
+            executor=_make_research_note(user_id),
         ),
     ]
     # Filter by lane. Any tool not listed in _TOOL_LANES is treated as
