@@ -17,6 +17,7 @@
   publishes: [],
   run(root, bus, cleanup, helpers) {
     var report = helpers && helpers.reportState ? helpers.reportState : function () {};
+    var backend = helpers && helpers.backend ? helpers.backend : null;
     var blockId = (helpers && helpers.blockId) || root.getAttribute('data-block-id') || '__BLOCK_ID__';
     var userId = (typeof localStorage !== 'undefined' && localStorage.getItem('bewithme_user_id')) || '';
 
@@ -145,13 +146,20 @@
       };
       recorder.onstart = function () {
         title.textContent = 'Sharing';
-        status.textContent = sourceName || 'screen';
+        var audioNote = hasSystemAudio ? ' + system audio' : ' (mic via ambient_mic block)';
+        status.textContent = (sourceName || 'screen') + audioNote;
         setColor('active');
         button.textContent = 'STOP';
+        ensureAmbientMicMounted();
         report({
           kind: 'screen_share',
-          content: 'Sharing ' + (sourceName || 'screen'),
-          extra: { active: true, source_name: sourceName, session_id: sessionId },
+          content: 'Sharing ' + (sourceName || 'screen') + audioNote,
+          extra: {
+            active: true,
+            source_name: sourceName,
+            session_id: sessionId,
+            has_system_audio: hasSystemAudio,
+          },
         });
       };
       recorder.onstop = function () {
@@ -178,6 +186,8 @@
       recorder.start(3000); // 3 s timeslice → one ondataavailable per chunk
     };
 
+    var hasSystemAudio = false;
+
     var requestStream = async function () {
       // Prefer Electron desktopCapturer (no OS picker — silent start with
       // the first available screen source). Fall back to getDisplayMedia
@@ -187,23 +197,59 @@
         if (!sources || sources.length === 0) throw new Error('no screen sources');
         var pick = sources.find(function (s) { return s.kind === 'screen'; }) || sources[0];
         sourceName = pick.name || '';
-        return await navigator.mediaDevices.getUserMedia({
-          audio: { mandatory: { chromeMediaSource: 'desktop' } },
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: pick.id,
-              maxWidth: 1280,
-              maxHeight: 720,
-              maxFrameRate: 15,
-            },
+        var videoConstraint = {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: pick.id,
+            maxWidth: 1280,
+            maxHeight: 720,
+            maxFrameRate: 15,
           },
-        });
+        };
+        // Try video+audio; on macOS this typically throws NotFoundError
+        // because system-audio capture needs a loopback driver (BlackHole
+        // etc.) the OS doesn't ship with. Fall back to video-only.
+        try {
+          var s = await navigator.mediaDevices.getUserMedia({
+            audio: { mandatory: { chromeMediaSource: 'desktop' } },
+            video: videoConstraint,
+          });
+          hasSystemAudio = s.getAudioTracks().length > 0;
+          return s;
+        } catch (err) {
+          var name = err && err.name ? err.name : '';
+          if (name !== 'NotFoundError' && name !== 'NotAllowedError' && name !== 'OverconstrainedError') {
+            throw err;
+          }
+          console.warn('[screen_share] system-audio capture unavailable (' + name + '); falling back to video-only');
+          hasSystemAudio = false;
+          return await navigator.mediaDevices.getUserMedia({ video: videoConstraint });
+        }
       }
+      // Browser fallback (non-Electron). getDisplayMedia natively handles
+      // the picker + audio negotiation; whatever the user grants is fine.
       sourceName = 'browser-shared';
-      return await navigator.mediaDevices.getDisplayMedia({
+      var ds = await navigator.mediaDevices.getDisplayMedia({
         video: { width: 1280, height: 720, frameRate: 15 },
         audio: true,
+      });
+      hasSystemAudio = ds.getAudioTracks().length > 0;
+      return ds;
+    };
+
+    // While sharing, the user typically also wants to talk. Mic capture
+    // lives in the ambient_mic block (separate stream → separate
+    // perception path → cleanly interleaved with screen segments by
+    // wall-clock). If ambient_mic isn't already on canvas, mount it so
+    // the user has a one-click path to "voice on" without leaving the
+    // share. Best-effort: if the helper isn't available or the mount
+    // fails, just skip — the user can still mount it manually.
+    var ensureAmbientMicMounted = function () {
+      if (!backend || !backend.mount_template) return;
+      backend.mount_template({ template: 'ambient_mic' }).catch(function (err) {
+        // If the block is already mounted the backend may noop or error;
+        // either is fine. Log and move on.
+        console.log('[screen_share] ambient_mic mount result:', err && err.message ? err.message : 'noop');
       });
     };
 
