@@ -33,7 +33,11 @@ from infra.db import async_session
 from infra.perception import forget_block
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
+from services.persona.routers.dynamic import (
+    enqueue_for_device,
+    enqueue_for_user,
+    mounted_block_ids,
+)
 from silicon_brain.models.canvas_layout import CanvasLayout
 
 
@@ -201,6 +205,23 @@ async def mount_template(
     template = load_template(template_name)
     bid = block_id or template.id_default
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
+
+    # Idempotence: if the block is already mounted on any device for this
+    # user AND the caller didn't ask to replace anything, skip the mount
+    # entirely. Remounting nukes the running block (its `cleanup()` runs,
+    # its acquired streams release, then a fresh instance starts) which
+    # destroys live state — most painfully for ambient_mic, where a
+    # remount-while-listening kills the active VAD and triggers a
+    # NotFoundError as the torn-down mic stream errors out.
+    #
+    # The caller's *intent* in calling mount_template is "make this block
+    # visible." If it already is, intent is already satisfied.
+    if not replace and not params:
+        all_mounted: set[str] = set()
+        for ids in mounted_block_ids(user_id).values():
+            all_mounted.update(ids)
+        if bid in all_mounted:
+            return MountResult(block_id=bid, template=template_name, deleted=[])
 
     rendered = _render_block_source(template, bid, g, params)
 
