@@ -33,6 +33,7 @@ from infra.model.tools import ToolSpec
 
 from tools.browser_set import browser_set
 from tools.look_at_image import look_at_image
+from tools.look_at_video import look_at_video
 from tools.read_document import read_document
 from tools.read_url import read_url
 from tools.speak import speak
@@ -481,6 +482,33 @@ def _make_look_at_image(user_id: UUID):
     return executor
 
 
+def _make_look_at_video(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        video = (args.get("video") or "").strip()
+        if not video:
+            return json.dumps({"error": "video is required"})
+        question_raw = args.get("question")
+        question = (
+            question_raw.strip()
+            if isinstance(question_raw, str) and question_raw.strip()
+            else None
+        )
+        max_frames_raw = args.get("max_frames")
+        try:
+            max_frames = int(max_frames_raw) if max_frames_raw is not None else 24
+        except (TypeError, ValueError):
+            return json.dumps({"error": "max_frames must be an integer"})
+        max_frames = max(1, min(max_frames, 64))
+        try:
+            result = await look_at_video(video, question, max_frames=max_frames)
+        except RuntimeError as e:
+            return json.dumps({"error": str(e)})
+        except Exception as e:
+            return json.dumps({"error": f"video call failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+
 def _make_speak(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
         text = (args.get("text") or "").strip()
@@ -618,6 +646,7 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     "list_media":         {"answer", "background"},   # deprecated
     "request_new_block":  {"answer", "background"},   # engineer LLM, very slow
     "look_at_image":      {"answer", "background"},   # remote vision call, ~5–6s
+    "look_at_video":      {"answer", "background", "research"},   # ffmpeg + N vision calls + Whisper; slow
     "web_view":           {"answer", "background"},   # drives Electron BrowserView, slow IO
     "read_url":           {"answer", "background"},   # silent Playwright fetch, ~3–5s
     "browser_set":        {"answer", "background"},   # full headless Playwright; slow IO
@@ -764,6 +793,55 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_look_at_image(user_id),
+        ),
+        ToolSpec(
+            name="look_at_video",
+            description=(
+                "Delegate video perception to the vision pipeline. Use this "
+                "for video files (mp4/mov/webm/mkv) or audio files (mp3/wav) "
+                "— NOT for single still images, which go through "
+                "`look_at_image`. Pass `video` as a local file path or "
+                "http(s) URL. Optionally pass `question` to steer the "
+                "per-frame prompt (e.g. 'what is the person writing?'). "
+                "Returns `{description: str}` where the description is a "
+                "chronological timeline interleaving visual descriptions "
+                "and speech transcripts, e.g. "
+                "`[00:00.0] vision: ...\\n[00:00.4–00:03.2] speech: \"...\"`. "
+                "Slow: ffmpeg + many vision calls + Whisper transcription; "
+                "expect 10–60s depending on clip length. Caps at "
+                "`max_frames` vision calls (default 24, max 64)."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "video": {
+                        "type": "string",
+                        "description": (
+                            "Local file path or http(s) URL to the video "
+                            "or audio source."
+                        ),
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "Optional. What to look for in each frame. "
+                            "Defaults to a general description."
+                        ),
+                    },
+                    "max_frames": {
+                        "type": "integer",
+                        "description": (
+                            "Optional. Cap on vision calls. Default 24, "
+                            "max 64."
+                        ),
+                        "minimum": 1,
+                        "maximum": 64,
+                    },
+                },
+                "required": ["video"],
+                "additionalProperties": False,
+            },
+            executor=_make_look_at_video(user_id),
         ),
         ToolSpec(
             name="read_url",

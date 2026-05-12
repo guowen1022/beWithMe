@@ -115,6 +115,7 @@ with `include_screenshot=true` are the entry points.
 - Ollama running locally with `nomic-embed-text` model pulled
 - Python 3.9+ with dependencies from `requirements.txt`
 - Node.js for the frontend
+- `ffmpeg` (with `ffprobe`) on PATH — `brew install ffmpeg`. Required by `services/transcribe` and `infra/media` (video understanding).
 
 ## Frontend Note
 

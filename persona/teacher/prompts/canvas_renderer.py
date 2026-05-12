@@ -226,7 +226,23 @@ def _format_block_line(block, device_class=None) -> str:
             head = f"- browser: {content or '(loading)'}"
         elif kind == "upload":
             if state.completed:
-                head = f"- upload widget: FILE UPLOADED ({content}) — upload step is DONE; do not ask user to upload again"
+                media_kind = extra.get("media_kind")
+                server_path = extra.get("server_path")
+                if media_kind and server_path:
+                    # Non-PDF media: tell the LLM exactly which tool to use
+                    # and with what path. The path is the server-side
+                    # absolute path returned by /api/media/upload.
+                    if media_kind == "image":
+                        tool_hint = f'look_at_image(image="{server_path}")'
+                    else:
+                        tool_hint = f'look_at_video(video="{server_path}")'
+                    head = (
+                        f"- upload widget: FILE UPLOADED ({content}) — "
+                        f"media_kind={media_kind}, server_path={server_path} — "
+                        f"to analyze: {tool_hint}"
+                    )
+                else:
+                    head = f"- upload widget: FILE UPLOADED ({content}) — upload step is DONE; do not ask user to upload again"
             else:
                 head = "- upload widget: empty (NO FILE CHOSEN YET — user must click Choose File)"
         elif kind == "launcher":

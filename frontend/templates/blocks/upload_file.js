@@ -37,7 +37,7 @@
     textCol.style.cssText =
       'display:flex; flex-direction:column; flex:1; min-width:0;';
     var title = document.createElement('div');
-    title.textContent = 'Upload a PDF';
+    title.textContent = 'Upload a file';
     title.style.cssText =
       'font-size:13px; font-weight:600; color:var(--bw-ink);' +
       'letter-spacing:-0.005em;';
@@ -54,8 +54,28 @@
     // Hidden native input + styled button label
     var input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'application/pdf';
+    // PDFs still flow through the document/embedding pipeline; video/audio/
+    // image bypass that and go straight to disk (the persona reads them via
+    // look_at_video / look_at_image with the returned server path).
+    input.accept = [
+      'application/pdf',
+      'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska',
+      'audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/ogg', 'audio/flac',
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+      '.pdf,.mp4,.mov,.webm,.mkv,.m4v,.avi,.mp3,.wav,.m4a,.ogg,.oga,.flac,.aac,.jpg,.jpeg,.png,.webp,.gif,.bmp',
+    ].join(',');
     input.style.display = 'none';
+
+    var classifyFile = function (file) {
+      var name = (file.name || '').toLowerCase();
+      var dot = name.lastIndexOf('.');
+      var ext = dot >= 0 ? name.slice(dot) : '';
+      if (ext === '.pdf') return 'pdf';
+      if (['.mp4', '.mov', '.webm', '.mkv', '.m4v', '.avi'].indexOf(ext) >= 0) return 'video';
+      if (['.mp3', '.wav', '.m4a', '.ogg', '.oga', '.flac', '.aac'].indexOf(ext) >= 0) return 'audio';
+      if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].indexOf(ext) >= 0) return 'image';
+      return 'unknown';
+    };
 
     var button = document.createElement('button');
     button.type = 'button';
@@ -92,90 +112,134 @@
       button.style.cursor = busy ? 'wait' : 'pointer';
     };
 
+    // Parse a backend error response: try JSON {detail: ...} first, fall
+    // back to raw text. Keep at most ~160 chars so we don't blow out the
+    // widget's single-line status row.
+    var formatErrorText = function (res) {
+      return res.text().then(function (body) {
+        var detail = body;
+        try {
+          var json = JSON.parse(body);
+          if (json && json.detail) detail = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+        } catch (_) { /* not JSON, keep raw */ }
+        if (detail.length > 160) detail = detail.slice(0, 157) + '…';
+        return res.status + ' ' + detail;
+      }).catch(function () { return String(res.status); });
+    };
+
     var onChange = function (e) {
       var f = e.target.files && e.target.files[0];
       console.log('[upload_file:trace] onChange fired, file:', f && f.name, 'size:', f && f.size);
       if (!f) { console.log('[upload_file:trace] no file in event, bailing'); return; }
+      var fileKind = classifyFile(f);
+      console.log('[upload_file:trace] classified as:', fileKind);
+      if (fileKind === 'unknown') {
+        title.textContent = 'Unsupported file';
+        status.textContent = f.name;
+        icon.style.color = '#E5837C';
+        icon.style.background = 'rgba(229,131,124,0.12)';
+        icon.style.border = '1px solid rgba(229,131,124,0.4)';
+        report({ kind: 'upload', content: 'Unsupported file: ' + f.name });
+        return;
+      }
       status.textContent = f.name;
       title.textContent = 'Uploading…';
       setBusy(true);
-      console.log('[upload_file:trace] backend.upload available?', !!(backend && backend.upload));
       report({ kind: 'upload', content: 'Uploading ' + f.name });
       var fd = new FormData();
       fd.append('file', f);
+
+      var authHeaders = userId ? { 'X-User-Id': userId } : {};
       var p;
-      if (backend && backend.upload) {
-        // helpers.backend resolved from the template manifest. Already
-        // injects auth + device headers + multipart Content-Type.
-        p = backend.upload(fd).then(function (r) {
-          if (!r.ok) throw new Error('upload failed: ' + r.status);
-          return r.data;
-        });
+      if (fileKind === 'pdf') {
+        // PDFs flow through the document pipeline (text extraction + chunks
+        // + embeddings) so the persona can RAG over them via read_document.
+        if (backend && backend.upload) {
+          p = backend.upload(fd).then(function (r) {
+            if (!r.ok) throw new Error('upload failed: ' + r.status);
+            return r.data;
+          });
+        } else {
+          p = fetch('/api/documents/upload', {
+            method: 'POST', headers: authHeaders, body: fd,
+          }).then(function (res) {
+            if (!res.ok) {
+              return formatErrorText(res).then(function (m) {
+                throw new Error('upload failed: ' + m);
+              });
+            }
+            return res.json();
+          });
+        }
       } else {
-        // Backward-compat path: helpers.backend not present (template
-        // wasn't manifest-aware). Fall through to a direct fetch.
-        p = fetch('/api/documents/upload', {
-          method: 'POST',
-          headers: userId ? { 'X-User-Id': userId } : {},
-          body: fd,
+        // Video / audio / image — straight to disk, the persona reads them
+        // via look_at_video / look_at_image with the returned server path.
+        p = fetch('/api/media/upload', {
+          method: 'POST', headers: authHeaders, body: fd,
         }).then(function (res) {
-          if (!res.ok) throw new Error('upload failed: ' + res.status);
+          if (!res.ok) {
+            return formatErrorText(res).then(function (m) {
+              throw new Error('upload failed: ' + m);
+            });
+          }
           return res.json();
         });
       }
+
       p.then(function (json) {
         console.log('[upload_file:trace] upload SUCCESS, response:', json);
         title.textContent = 'Ready';
-        var summary = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
-        status.textContent = summary;
-        // Semantic success — outside the theme accent on purpose. Status
-        // colors stay green/red across themes for universal recognition.
         icon.style.color = '#7ED4A6';
         icon.style.background = 'rgba(126,212,166,0.12)';
         icon.style.border = '1px solid rgba(126,212,166,0.4)';
-        console.log('[upload_file:trace] publishing documents.uploaded topic, id:', json.id);
-        bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
-        // `completed: true` is the trigger signal for the teacher's
-        // event-driven turn. The backend edge-detects the false→true
-        // transition and wakes the tool loop with this state.
-        report({
-          kind: 'upload',
-          content: 'Ready: ' + summary,
-          completed: true,
-          extra: {
-            document_id: json.id,
-            title: json.title,
-            pages: json.pages,
-            filename: json.filename,
-          },
-        });
-        // Deterministically swap to the PDF reader and unmount this
-        // upload widget. Don't leave it on the canvas crowding the user
-        // — the upload step is done and the user shouldn't have to
-        // wait for the teacher's tool loop to clean up. pdf_reader
-        // subscribes to the same documents.uploaded topic; sticky
-        // pub/sub means the value we just published is replayed to it
-        // on subscribe, so no race on doc loading.
-        console.log('[upload_file:trace] backend.mount_template available?', !!(backend && backend.mount_template), 'blockId:', blockId);
-        if (backend && backend.mount_template) {
-          console.log('[upload_file:trace] calling mount_template(pdf_reader, replace=[' + blockId + '])');
-          backend.mount_template({
-            template: 'pdf_reader',
-            replace: [blockId],
-          }).then(function (r) {
-            console.log('[upload_file:trace] mount_template result:', r);
-          }).catch(function (err) {
-            console.warn('[upload_file:trace] mount_template FAILED:', err);
+
+        if (fileKind === 'pdf') {
+          var summary = (json.title || json.filename || json.id) + ' · ' + (json.pages || '?') + ' pages';
+          status.textContent = summary;
+          bus.publish('__DOC_TOPIC__', { id: json.id, title: json.title, pages: json.pages });
+          report({
+            kind: 'upload',
+            content: 'Ready: ' + summary,
+            completed: true,
+            extra: {
+              document_id: json.id,
+              title: json.title,
+              pages: json.pages,
+              filename: json.filename,
+            },
           });
+          if (backend && backend.mount_template) {
+            backend.mount_template({
+              template: 'pdf_reader',
+              replace: [blockId],
+            }).then(function (r) {
+              console.log('[upload_file:trace] mount_template result:', r);
+            }).catch(function (err) {
+              console.warn('[upload_file:trace] mount_template FAILED:', err);
+            });
+          }
         } else {
-          console.warn('[upload_file:trace] DETERMINISTIC SWAP SKIPPED — backend.mount_template not in helpers. Manifest may be missing the entry.');
+          // Media (video / audio / image): expose the server path + kind so
+          // the persona can call the right tool via canvas perception.
+          var summary = (json.filename || json.path) + ' · ' + fileKind;
+          status.textContent = summary;
+          report({
+            kind: 'upload',
+            content: 'Ready: ' + summary,
+            completed: true,
+            extra: {
+              media_kind: json.media_kind,
+              server_path: json.path,
+              filename: json.filename,
+              size: json.size,
+            },
+          });
         }
       })
         .catch(function (err) {
           title.textContent = 'Upload failed';
           var msg = err && err.message ? err.message : String(err);
           status.textContent = msg;
-          // Semantic error — outside the theme accent on purpose.
           icon.style.color = '#E5837C';
           icon.style.background = 'rgba(229,131,124,0.12)';
           icon.style.border = '1px solid rgba(229,131,124,0.4)';
@@ -193,7 +257,7 @@
     // user is actually seeing.
     report({
       kind: 'upload',
-      content: 'Upload a PDF (no file chosen)',
+      content: 'Upload a file (no file chosen)',
       extra: { stage: 'idle' },
     });
   },

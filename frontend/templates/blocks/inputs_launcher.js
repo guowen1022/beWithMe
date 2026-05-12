@@ -147,8 +147,8 @@
     }
 
     buttonRow.appendChild(makeButton(
-      'Upload PDF',
-      'Pick a PDF from your computer.',
+      'Upload file',
+      'PDF, video, audio, or image.',
       'upload_file',
     ));
     buttonRow.appendChild(makeButton(
