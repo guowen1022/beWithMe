@@ -31,8 +31,10 @@ from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockSource, UIUpdate
 from infra.db import async_session
 from infra.perception import forget_block
+from infra.render.rich_card import process as preprocess_rich_card
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
+from workshop.canvas.tools import _template_registry
 from services.persona.routers.dynamic import (
     enqueue_for_device,
     enqueue_for_user,
@@ -233,7 +235,18 @@ async def mount_template(
         if bid in all_mounted:
             return MountResult(block_id=bid, template=template_name, deleted=[])
 
+    # Rich-card preprocessing: persona authors HTML in a constrained
+    # grammar; the backend sanitizes + inlines Mermaid SVGs once so both
+    # web and mobile consume the same final HTML. See infra/render/rich_card.
+    if template_name == "rich_card" and params and isinstance(params.get("content"), str):
+        processed = await preprocess_rich_card(params["content"])
+        params = {**params, "content": processed}
+
     rendered = _render_block_source(template, bid, g, params)
+
+    # Remember which template this block id maps to so push_block_content
+    # can apply the same preprocessor on subsequent content updates.
+    _template_registry.register(bid, template_name)
 
     # Sandbox-validate the rendered source before SSE-fanout. A broken
     # template (placeholder substitution gone wrong, drifted manifest,
@@ -267,6 +280,7 @@ async def mount_template(
             block=BlockSource(id=stale_id, source=""),
         ))
         forget_block(user_id=user_id, block_id=stale_id)
+        _template_registry.forget(stale_id)
 
     deleted: list[str] = []
     if replace:
@@ -278,6 +292,7 @@ async def mount_template(
                 block=BlockSource(id=old_id, source=""),
             ))
             forget_block(user_id=user_id, block_id=old_id)
+            _template_registry.forget(old_id)
             deleted.append(old_id)
 
     await _send(UIUpdate(action="mount", block=block_source))

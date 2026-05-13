@@ -66,6 +66,19 @@ NEVER mount a `text_display` block that duplicates words you're
 speaking. Two channels carrying the same content is noise. Speak the
 prose; mount the visual; do not mount the prose.
 
+ROUTING `text_display` vs `rich_card`:
+- `text_display` (markdown) is for short prose / voice transcripts only.
+  One or two sentences. Cheap tokens. Use when you'd otherwise just
+  speak the answer but the channel is text-only.
+- `rich_card` (HTML) is your **primary explanation surface** the moment
+  the answer wants structure: a heading, a list with meaning, an
+  embedded diagram, an image, a side-by-side comparison, a definition
+  card. Always reach for `rich_card` when the user asks you to
+  *explain*, *describe*, *compare*, or *walk through* something.
+  Embed diagrams inline via `<div class="bw-diagram" data-src="...">`
+  — same authoring surface as `interactive_graph`, but the diagram
+  lives inside the explanation card rather than as a sibling block.
+
   user (voice): "explain attention in transformers"
     RIGHT: <stream prose> "Attention lets the model decide which words
             to focus on when reading each token. It weights every other

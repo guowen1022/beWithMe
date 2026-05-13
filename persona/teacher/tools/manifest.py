@@ -1311,24 +1311,65 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "`upload_file` (PDF/video/audio/image picker), "
                 "`passage_reader` (USER pastes/types their own text — "
                 "input widget, never use for prose you author), "
-                "`pdf_reader` (rendered PDF), `text_display` "
-                "(YOUR authored prose: introductions, summaries, "
-                "explanations — pass `params: {content: '...'}` so it "
-                "lands populated), `screen_share` (live screen-share — "
-                "click START to begin streaming the user's screen + audio "
-                "into perception; use when the user says 'watch me', "
+                "`pdf_reader` (rendered PDF), `rich_card` "
+                "(YOUR PRIMARY EXPLANATION SURFACE — a Wikipedia-like "
+                "card with prose, embedded Mermaid diagrams, inline "
+                "images, highlights, and inline revision marks. Use this "
+                "for ANY explanation longer than a sentence: definitions, "
+                "comparisons, walkthroughs, illustrated concepts. Pass "
+                "`params: {content: '<html>...</html>'}` where the HTML "
+                "uses the rich_card grammar — see worked example below. "
+                "Diagrams embed inline via "
+                "`<div class=\"bw-diagram\" data-src=\"<mermaid source>\"></div>`; "
+                "the backend pre-renders them to SVG and ships the same "
+                "artifact to web and mobile.), `text_display` "
+                "(short authored prose / voice transcripts — cheaper "
+                "tokens than rich_card. Use for one- or two-sentence "
+                "answers only; reach for rich_card the moment you want "
+                "a heading, a list with structure, or any diagram.), "
+                "`screen_share` (live screen-share — click START to "
+                "begin streaming the user's screen + audio into "
+                "perception; use when the user says 'watch me', "
                 "'share my screen', 'see what I'm doing'), "
                 "`inputs_launcher` (three-button starter, auto-mounted on "
                 "empty canvas, rarely needed manually). "
                 "Fast and deterministic. Pass `replace: [...]` to "
-                "atomically swap out an existing surface."
+                "atomically swap out an existing surface.\n\n"
+                "RICH_CARD WORKED EXAMPLE (the grammar you author into "
+                "`params.content`):\n"
+                "```\n"
+                "<div class=\"card card-hero\">\n"
+                "  <h2 class=\"t-display\">Quicksort</h2>\n"
+                "  <p>Divide-and-conquer with a <mark>pivot</mark>.</p>\n"
+                "  <div class=\"bw-diagram\" data-src=\"graph TD; A[unsorted]-->B[pivot]; B-->C[left]; B-->D[right]\"></div>\n"
+                "  <p class=\"t-body\">Then recurse on each half.</p>\n"
+                "  <ul><li>Best: <span class=\"success\">O(n log n)</span></li>\n"
+                "      <li>Worst: <span class=\"danger\">O(n²)</span></li></ul>\n"
+                "</div>\n"
+                "```\n"
+                "Allowed CONTAINERS: card, card-hero, card-callout, "
+                "card-compare, card-timeline, card-definition, row, col, "
+                "gap-{sm,md,lg}, pad-{sm,md,lg}. "
+                "Allowed TONE: accent, accent-soft, muted, danger, warn, "
+                "success, info, bg-surface, bg-surface-2, bg-accent-soft. "
+                "Allowed TYPE: t-display, t-title, t-body, t-caption, "
+                "t-mono, weight-bold, weight-semi, italic. "
+                "Allowed ANNOTATION: revision-add, revision-remove, "
+                "revision-changed (paired with <mark>/<ins>/<del>). "
+                "Allowed MEDIA: bw-diagram (with data-src mermaid), "
+                "bw-image (https:// only) + aspect-{1-1,4-3,16-9,3-4}. "
+                "FORBIDDEN: <script>, <iframe>, <style>, <table>, "
+                "inline `style=` attribute, `http://` URLs, `data:` URLs, "
+                "`onclick` (or any on* handler), author-written <svg>. "
+                "Anything outside the allowlist is stripped silently — "
+                "stick to the vocabulary above for predictable output."
             ),
             params_schema={
                 "type": "object",
                 "properties": {
                     "template": {
                         "type": "string",
-                        "description": "Template filename stem (e.g. 'upload_file').",
+                        "description": "Template filename stem (e.g. 'rich_card').",
                     },
                     "replace": {
                         "type": "array",
@@ -1342,9 +1383,11 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                     "params": {
                         "type": "object",
                         "description": (
-                            "Template-specific values. text_display "
-                            "accepts {content: string} — the prose to "
-                            "display at mount time."
+                            "Template-specific values. `rich_card` and "
+                            "`text_display` both accept {content: string}; "
+                            "rich_card content is HTML following the "
+                            "grammar in the tool description, text_display "
+                            "content is markdown."
                         ),
                     },
                 },

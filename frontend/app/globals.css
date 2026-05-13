@@ -372,3 +372,171 @@ body {
 .graph-flash {
   animation: graph-flash-anim 1.6s ease-out;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   .bw-card — rich_card block surface
+   ─────────────────────────────────────────────────────────────────────────
+   The teacher's primary explanation surface. Persona authors HTML in a
+   constrained grammar (see infra/render/rich_card_grammar.py) and the
+   backend sanitizes + inlines Mermaid SVG before it lands here. Same
+   grammar renders on mobile via mobile/src/canvas/blocks/RichCardBlock —
+   keep these class names in sync (parity test:
+   tests/unit/test_class_allowlist_parity.py).
+*/
+.bw-card {
+  font-family: var(--bw-font-sans);
+  color: var(--bw-ink);
+  font-size: 14px;
+  line-height: 1.7;
+  letter-spacing: -0.005em;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.bw-card > :first-child { margin-top: 0; }
+.bw-card > :last-child  { margin-bottom: 0; }
+
+/* Container variants — share a 1px border + dark surface, vary internal
+   rhythm / accent. Sharp corners by design (matches bw-prose). */
+.bw-card .card,
+.bw-card .card-hero,
+.bw-card .card-callout,
+.bw-card .card-compare,
+.bw-card .card-timeline,
+.bw-card .card-definition {
+  background: var(--bw-surface);
+  border: 1px solid var(--bw-border);
+  padding: 18px 22px;
+  margin: 0.9em 0;
+}
+.bw-card .card-hero {
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--bw-accent) 6%, transparent), transparent 60%),
+    var(--bw-surface);
+  border-color: color-mix(in oklab, var(--bw-accent) 30%, var(--bw-border));
+}
+.bw-card .card-callout {
+  border-left: 3px solid var(--bw-accent);
+}
+.bw-card .card-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.bw-card .card-timeline {
+  border-left: 1px dashed var(--bw-border-strong);
+  padding-left: 22px;
+}
+.bw-card .card-definition {
+  background: var(--bw-surface-2);
+}
+
+/* Layout primitives. */
+.bw-card .row { display: flex; flex-direction: row; flex-wrap: wrap; }
+.bw-card .col { display: flex; flex-direction: column; }
+.bw-card .gap-sm { gap: 6px; }
+.bw-card .gap-md { gap: 12px; }
+.bw-card .gap-lg { gap: 20px; }
+.bw-card .pad-sm { padding: 6px; }
+.bw-card .pad-md { padding: 12px; }
+.bw-card .pad-lg { padding: 20px; }
+.bw-card .center { text-align: center; }
+.bw-card .right  { text-align: right; }
+.bw-card .border        { border: 1px solid var(--bw-border); }
+.bw-card .border-top    { border-top: 1px solid var(--bw-border); }
+.bw-card .border-bottom { border-bottom: 1px solid var(--bw-border); }
+.bw-card .round    { border-radius: 4px; }
+.bw-card .round-lg { border-radius: 8px; }
+
+/* Tone / accent. */
+.bw-card .accent      { color: var(--bw-accent); }
+.bw-card .accent-soft { color: color-mix(in oklab, var(--bw-accent) 80%, var(--bw-ink)); }
+.bw-card .muted       { color: var(--bw-ink-muted); }
+.bw-card .danger      { color: #e06464; }
+.bw-card .warn        { color: #d6a558; }
+.bw-card .success     { color: #62b285; }
+.bw-card .info        { color: var(--bw-accent); }
+.bw-card .bg-surface     { background: var(--bw-surface); }
+.bw-card .bg-surface-2   { background: var(--bw-surface-2); }
+.bw-card .bg-accent-soft { background: var(--bw-accent-soft); }
+
+/* Type scale — orthogonal to heading tags. */
+.bw-card .t-display { font-size: 1.75em; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; }
+.bw-card .t-title   { font-size: 1.25em; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+.bw-card .t-body    { font-size: 1em;    font-weight: 400; line-height: 1.65; }
+.bw-card .t-caption { font-size: 0.78em; font-weight: 600; color: var(--bw-ink-muted);
+                      font-family: var(--bw-font-mono); text-transform: uppercase; letter-spacing: 0.1em; }
+.bw-card .t-mono    { font-family: var(--bw-font-mono); font-size: 0.9em; }
+.bw-card .weight-bold { font-weight: 700; }
+.bw-card .weight-semi { font-weight: 600; }
+.bw-card .italic      { font-family: var(--bw-font-serif); font-style: italic; }
+
+/* Annotation marks — paired with <ins>/<del>/<mark>. */
+.bw-card .revision-add {
+  background: color-mix(in oklab, #62b285 20%, transparent);
+  color: #9bd9b1;
+  padding: 0 4px;
+}
+.bw-card .revision-remove {
+  background: color-mix(in oklab, #e06464 18%, transparent);
+  color: #efa2a2;
+  padding: 0 4px;
+  text-decoration: line-through;
+}
+.bw-card .revision-changed {
+  background: var(--bw-accent-soft);
+  color: var(--bw-accent);
+  padding: 0 4px;
+}
+
+/* Media. */
+.bw-card .bw-diagram {
+  margin: 1.1em 0;
+  padding: 8px;
+  background: var(--bw-surface-2);
+  border: 1px solid var(--bw-border);
+  overflow-x: auto;
+}
+.bw-card .bw-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.bw-card .bw-image { display: block; width: 100%; height: auto; margin: 1em 0; }
+.bw-card .aspect-1-1  { aspect-ratio: 1 / 1;  object-fit: cover; }
+.bw-card .aspect-4-3  { aspect-ratio: 4 / 3;  object-fit: cover; }
+.bw-card .aspect-16-9 { aspect-ratio: 16 / 9; object-fit: cover; }
+.bw-card .aspect-3-4  { aspect-ratio: 3 / 4;  object-fit: cover; }
+
+/* Headings + prose tags — mirror bw-prose so a rich_card with raw
+   headings reads identically to a markdown text_display. */
+.bw-card h1, .bw-card h2, .bw-card h3, .bw-card h4 {
+  font-family: var(--bw-font-sans); color: var(--bw-ink); line-height: 1.2;
+  margin: 1.4em 0 0.5em;
+}
+.bw-card h1 { font-size: 1.6em;  font-weight: 800; letter-spacing: -0.03em; }
+.bw-card h2 { font-size: 1.3em;  font-weight: 700; letter-spacing: -0.02em; }
+.bw-card h3 { font-size: 1.12em; font-weight: 700; }
+.bw-card h4 { font-size: 0.78em; font-weight: 600; color: var(--bw-ink-muted);
+              font-family: var(--bw-font-mono); text-transform: uppercase; letter-spacing: 0.1em; }
+.bw-card p { margin: 0.8em 0; }
+.bw-card strong { color: var(--bw-ink); font-weight: 600; }
+.bw-card em { font-family: var(--bw-font-serif); font-style: italic; font-weight: 400; }
+.bw-card code {
+  font-family: var(--bw-font-mono); font-size: 0.86em;
+  background: var(--bw-accent-soft); color: var(--bw-accent);
+  padding: 1.5px 6px; border: 1px solid color-mix(in oklab, var(--bw-accent) 22%, transparent);
+}
+.bw-card mark { background: color-mix(in oklab, var(--bw-accent) 25%, transparent); color: var(--bw-ink); padding: 0 3px; }
+.bw-card ul, .bw-card ol { padding-left: 1.5em; margin: 0.8em 0; }
+.bw-card ul { list-style: none; padding-left: 1.25em; }
+.bw-card ul > li { position: relative; }
+.bw-card ul > li::before {
+  content: ''; position: absolute; left: -1em; top: 0.7em;
+  width: 4px; height: 4px; background: var(--bw-accent);
+}
+.bw-card ol { list-style: decimal; }
+.bw-card ol > li::marker { color: var(--bw-ink-faint); font-family: var(--bw-font-mono); font-size: 0.85em; }
+.bw-card a { color: var(--bw-accent); text-decoration: underline; text-underline-offset: 2px; }
+.bw-card hr { border: none; border-top: 1px solid var(--bw-border); margin: 1.2em 0; }
+.bw-card blockquote {
+  border-left: 2px solid var(--bw-accent); padding: 0.1em 0.9em; margin: 1em 0;
+  color: var(--bw-ink-muted); font-family: var(--bw-font-serif); font-style: italic;
+}
+.bw-card ins { text-decoration: none; }
+.bw-card del { color: var(--bw-ink-muted); }
