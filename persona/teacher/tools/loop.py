@@ -182,6 +182,7 @@ async def run(
     phases: Optional[Dict[str, Any]] = None,
     timing_origin: Optional[float] = None,
     disable_thinking: bool = False,
+    profile: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
@@ -298,6 +299,7 @@ async def run(
             purpose=purpose,
             user_id=user_id,
             disable_thinking=disable_thinking,
+            profile=profile,
         ):
             kind = evt.get("kind")
             if kind == "delta":

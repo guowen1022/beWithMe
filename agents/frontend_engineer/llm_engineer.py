@@ -512,6 +512,7 @@ async def respond(
             prior_messages=None,
             purpose="delegate-engineer",
             user_id=user_uuid,
+            profile="engineer",
         )
     else:
         chunks: list[str] = []
@@ -522,6 +523,7 @@ async def respond(
             prior_messages=None,
             purpose="delegate-engineer",
             user_id=user_uuid,
+            profile="engineer",
         ):
             if evt["kind"] == "delta":
                 chunks.append(evt["text"])

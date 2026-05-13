@@ -46,6 +46,8 @@ async def generate_cached(
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     return _FAKE_ANSWER, _FAKE_USAGE
 
@@ -56,6 +58,9 @@ async def stream_cached(
     dynamic_user: str,
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Yield deltas word-by-word, then a single 'done' event."""
     # Stream in roughly word-sized chunks so the title parser sees a newline
@@ -148,6 +153,8 @@ async def stream_with_tools(
     tools: Optional[List[ToolSpec]] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Deterministic tool-calling script for tests.
 

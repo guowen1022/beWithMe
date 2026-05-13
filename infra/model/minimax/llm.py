@@ -120,6 +120,8 @@ async def generate_cached(
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[str, dict]:
     """Generate with a single prompt-cache breakpoint at the end of the
     system block. See `_build_request` for the request shape.
@@ -144,6 +146,9 @@ async def stream_cached(
     dynamic_user: str,
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming variant of `generate_cached`.
 
@@ -196,6 +201,8 @@ async def stream_with_tools(
     tools: Optional[List[ToolSpec]] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming chat with Anthropic-style tool calling.
 

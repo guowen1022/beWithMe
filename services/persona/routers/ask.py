@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import time
+from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import StreamingResponse
@@ -280,16 +281,20 @@ async def ask_stream(
     phases["active_channel"] = active_channel
     phases["voice_mode"] = voice_mode
 
-    # Resolve thinking flag. Default for Lane A is OFF (fast TTFT).
-    # Benchmarks can override via X-Lane-Thinking: on.
+    # Lane A uses the "voice" profile (thinking on, reasoning_effort=high).
+    # Brevity is enforced by the lane_a_voice skill prompt; thinking-mode
+    # is now what keeps the reasoning hidden so the visible reply stays
+    # short. Benchmarks can still flip thinking off via X-Lane-Thinking.
     thinking_override = (x_lane_thinking or "").strip().lower()
-    if thinking_override == "on":
-        disable_thinking = False
-    elif thinking_override == "off":
+    lane_a_profile: Optional[str] = "voice"
+    disable_thinking = False
+    if thinking_override == "off":
         disable_thinking = True
-    else:
-        disable_thinking = True  # Lane A default
+        lane_a_profile = None
+    elif thinking_override == "on":
+        disable_thinking = False
     phases["disable_thinking"] = disable_thinking
+    phases["profile"] = lane_a_profile or "(none)"
 
     with_assemble_t0 = time.perf_counter()
     ctx = await assemble_context(
@@ -357,11 +362,11 @@ async def ask_stream(
                 user_id=user_id,
                 phases=phases,
                 timing_origin=timing_origin,
-                # Lane A default: skip the LLM's chain-of-thought for fast
-                # TTFT. Reasoning paths (research, brain-builder, engineer)
-                # keep it on. Orchestration benchmark can override via the
-                # X-Lane-Thinking header.
+                # Lane A uses the "voice" profile (thinking on,
+                # reasoning_effort=high). The X-Lane-Thinking=off override
+                # falls back to plain disable_thinking=True.
                 disable_thinking=disable_thinking,
+                profile=lane_a_profile,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]
@@ -537,8 +542,7 @@ async def ask(
         ctx.parts.static_user_passage,
         ctx.parts.dynamic_user,
         prior_messages=ctx.prior_messages,
-        # Lane A: same rationale as ask_stream — chat path, no CoT.
-        disable_thinking=True,
+        profile="voice",
     )
     title, _ = parse_title(answer)
 

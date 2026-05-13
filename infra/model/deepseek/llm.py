@@ -102,6 +102,8 @@ async def generate_cached(
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Tuple[str, dict]:
     client = _get_client()
     messages = _build_messages(static_system, static_user_passage, dynamic_user, prior_messages)
@@ -110,14 +112,25 @@ async def generate_cached(
         "max_tokens": max_tokens,
         "messages": messages,
     }
+    if model:
+        kwargs["model"] = model
+    extra_body: Dict[str, Any] = {}
     if disable_thinking:
         # DeepSeek's chat models default to thinking-mode-enabled — they
         # emit a chain-of-thought before any visible token, which spikes
-        # TTFT. For chat-style Lane A turns (user voice reply), we opt
-        # out. Heavier paths (research, brain-builder, engineer) leave it
-        # on for reasoning quality. See
+        # TTFT. Disable for paths where the hidden CoT is more expensive
+        # than the brief in-band reasoning. See
         # https://api-docs.deepseek.com/guides/thinking_mode
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        extra_body["thinking"] = {"type": "disabled"}
+    elif reasoning_effort:
+        # Effort is honored only when thinking is on. Documented values:
+        # "high" (default) and "max"; "low"/"medium" silently remap to
+        # "high". Sent via extra_body for OpenAI-SDK compatibility — the
+        # SDK may not list it as a typed kwarg.
+        extra_body["thinking"] = {"type": "enabled"}
+        extra_body["reasoning_effort"] = reasoning_effort
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     response = await client.chat.completions.create(**kwargs)
     text = response.choices[0].message.content or ""
     return text, _usage_dict(response.usage)
@@ -129,6 +142,9 @@ async def stream_cached(
     dynamic_user: str,
     prior_messages: Optional[list] = None,
     max_tokens: int = 4096,
+    disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming variant. Yields delta/done dicts matching minimax's shape."""
     client = _get_client()
@@ -136,13 +152,22 @@ async def stream_cached(
 
     full_text_parts: list[str] = []
     final_usage = None
-    stream = await client.chat.completions.create(
-        model=settings.deepseek_model,
-        max_tokens=max_tokens,
-        messages=messages,
-        stream=True,
-        stream_options={"include_usage": True},
-    )
+    kwargs: Dict[str, Any] = {
+        "model": model or settings.deepseek_model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    extra_body: Dict[str, Any] = {}
+    if disable_thinking:
+        extra_body["thinking"] = {"type": "disabled"}
+    elif reasoning_effort:
+        extra_body["thinking"] = {"type": "enabled"}
+        extra_body["reasoning_effort"] = reasoning_effort
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    stream = await client.chat.completions.create(**kwargs)
     async for chunk in stream:
         if chunk.usage is not None:
             final_usage = chunk.usage
@@ -169,6 +194,8 @@ async def stream_with_tools(
     tools: Optional[List[ToolSpec]] = None,
     max_tokens: int = 4096,
     disable_thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Streaming chat with OpenAI-style tool calling.
 
@@ -193,13 +220,19 @@ async def stream_with_tools(
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if model:
+        kwargs["model"] = model
     if tools:
         kwargs["tools"] = [t.to_openai() for t in tools]
+    extra_body: Dict[str, Any] = {}
     if disable_thinking:
-        # See generate_cached for context. Lane A (user voice reply)
-        # opts out of thinking mode to avoid the invisible CoT prefill
-        # that spikes TTFT. Reasoning paths leave the default on.
-        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        # See generate_cached for context.
+        extra_body["thinking"] = {"type": "disabled"}
+    elif reasoning_effort:
+        extra_body["thinking"] = {"type": "enabled"}
+        extra_body["reasoning_effort"] = reasoning_effort
+    if extra_body:
+        kwargs["extra_body"] = extra_body
 
     full_text_parts: list[str] = []
     final_usage = None

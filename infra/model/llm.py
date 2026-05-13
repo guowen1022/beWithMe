@@ -34,6 +34,7 @@ from uuid import UUID
 
 from infra.config import settings
 from infra.contracts.ui import TeacherThinking
+from infra.model.profiles import resolve as _resolve_profile
 from infra.observability import emit_thinking
 
 _PROVIDER = (settings.llm_provider or "").lower()
@@ -186,7 +187,14 @@ async def generate_cached(
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
     disable_thinking: bool = False,
+    profile: Optional[str] = None,
 ) -> Tuple[str, dict]:
+    # Profile resolves to (model, thinking, effort) and overrides the
+    # per-call flags. Call sites should prefer `profile="voice"` /
+    # `profile="engineer"` over twiddling the individual knobs.
+    p = _resolve_profile(profile)
+    if profile:
+        disable_thinking = not p.thinking
     summary = _summarise_prompt(dynamic_user, static_user_passage)
     started = time.perf_counter()
     await _emit_start(purpose, user_id, summary)
@@ -197,6 +205,8 @@ async def generate_cached(
             static_system, static_user_passage, dynamic_user,
             prior_messages=prior_messages, max_tokens=max_tokens,
             disable_thinking=disable_thinking,
+            reasoning_effort=p.reasoning_effort,
+            model=p.model,
         )
     finally:
         await _emit_end(purpose, user_id, summary, started, text=text, usage=usage)
@@ -212,7 +222,9 @@ async def stream_cached(
     *,
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
+    profile: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
+    p = _resolve_profile(profile)
     summary = _summarise_prompt(dynamic_user, static_user_passage)
     started = time.perf_counter()
     await _emit_start(purpose, user_id, summary)
@@ -222,6 +234,9 @@ async def stream_cached(
         async for evt in _raw_stream_cached(
             static_system, static_user_passage, dynamic_user,
             prior_messages=prior_messages, max_tokens=max_tokens,
+            disable_thinking=not p.thinking,
+            reasoning_effort=p.reasoning_effort,
+            model=p.model,
         ):
             if evt.get("kind") == "done":
                 final_text = evt.get("text", "")
@@ -242,7 +257,11 @@ async def stream_with_tools(
     purpose: Optional[str] = None,
     user_id: Optional[UUID] = None,
     disable_thinking: bool = False,
+    profile: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
+    p = _resolve_profile(profile)
+    if profile:
+        disable_thinking = not p.thinking
     summary = _summarise_prompt(dynamic_user, static_user_passage)
     started = time.perf_counter()
     await _emit_start(purpose, user_id, summary)
@@ -254,6 +273,8 @@ async def stream_with_tools(
             static_system, static_user_passage, dynamic_user,
             prior_messages=prior_messages, tools=tools, max_tokens=max_tokens,
             disable_thinking=disable_thinking,
+            reasoning_effort=p.reasoning_effort,
+            model=p.model,
         ):
             kind = evt.get("kind")
             if kind == "delta":
