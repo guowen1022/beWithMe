@@ -125,11 +125,21 @@ def _render_block_source(
     js = js.replace("__URL_CARD_EXCERPT__", json.dumps(excerpt_value))
 
     manifest_json = json.dumps(template.manifest.to_json(), separators=(",", ":"))
+    # Mobile clients can't eval the block source, so we additionally embed the
+    # template name and the params dict as JSON literals. The web ignores both
+    # fields (the block object literal is just evaluated). Mobile parses them
+    # out of the source string to resolve registry entry + initial props.
+    params_json = json.dumps(params or {}, separators=(",", ":"))
+    template_json = json.dumps(template.name)
     open_idx = js.find("({")
     if open_idx >= 0:
         head = js[: open_idx + 2]
         tail = js[open_idx + 2:]
-        js = f"{head}\n  manifest: {manifest_json},{tail}"
+        js = (
+            f"{head}\n  manifest: {manifest_json},"
+            f"\n  template: {template_json},"
+            f"\n  params: {params_json},{tail}"
+        )
     return js
 
 

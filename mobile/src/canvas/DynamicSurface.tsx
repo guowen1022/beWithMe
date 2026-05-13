@@ -1,0 +1,124 @@
+// The canvas. Renders a grid of blocks for the current device class. Holds
+// the mounted-block list. Subscribes to /api/dynamic/stream and applies
+// UIUpdate events (mount/replace/unmount).
+//
+// Phase 1 auto-mounts ambient_mic on first render — mirroring the web's
+// lets_begin empty-canvas auto-mount. Server-side mounts via UIUpdate also
+// work, just nothing currently triggers them.
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { LayoutChangeEvent, StyleSheet, View } from "react-native";
+import { Block, type BlockInstance } from "./Block";
+import { blockRegistry, resolveBlock } from "./blockRegistry";
+import { gridForDevice, scaleGridForDevice } from "../lib/grid/gridConfig";
+import { getDeviceClass } from "../lib/device/deviceClass";
+import { subscribeToDynamicStream, type DynamicEvent } from "../lib/api/dynamic";
+import { bus } from "../lib/bus/bus";
+import { parseBlockSource, templateFromBlockId } from "./parseBlockSource";
+
+interface DynamicSurfaceProps {
+  // If true, auto-mount the Phase 1 default block (ambient_mic) on first
+  // render. Defaults to true; set false in tests.
+  autoMountDefault?: boolean;
+}
+
+export function DynamicSurface({ autoMountDefault = true }: DynamicSurfaceProps): React.ReactElement {
+  const device = getDeviceClass();
+  const gridSize = gridForDevice(device);
+
+  const [blocks, setBlocks] = useState<BlockInstance[]>(() => {
+    if (!autoMountDefault) return [];
+    const entry = blockRegistry.ambient_mic;
+    if (!entry) return [];
+    const desktopGrid = entry.mobileGrid ?? { x: 0, y: 0, w: 4, h: 9 };
+    return [{ id: "ambient_mic_default", template: "ambient_mic", grid: desktopGrid }];
+  });
+
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const onLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setSize({ w: width, h: height });
+  };
+
+  const streamAbort = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    streamAbort.current = controller;
+
+    subscribeToDynamicStream(handleEvent, controller.signal).catch((err) => {
+      if (controller.signal.aborted) return;
+      console.warn("[DynamicSurface] dynamic stream error:", err);
+    });
+
+    return () => { controller.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleEvent(event: DynamicEvent): void {
+    if (event.type === "ui-update") {
+      const { action, block } = event;
+      if (action === "unmount") {
+        setBlocks((prev) => prev.filter((b) => b.id !== block.id));
+        return;
+      }
+      // mount or replace: pull template + params + grid out of the rendered
+      // source. mount_template.py embeds these as JSON literals at the top of
+      // the object expression so we don't have to eval the body.
+      const parsed = parseBlockSource(block.source);
+      const template = parsed.template ?? templateFromBlockId(block.id);
+      const grid = parsed.grid ?? { x: 0, y: 0, w: 4, h: 9 };
+      const entry = resolveBlock(template);
+      // Per-block override always wins for the mic; everything else uses the
+      // scaled desktop grid coords so layouts the persona authored on web
+      // map predictably onto the phone's 4×9.
+      const isMicDefault = block.id === "ambient_mic_default" || template === "ambient_mic";
+      const mobileGrid = isMicDefault && entry?.mobileGrid ? entry.mobileGrid : scaleGridForDevice(grid, device);
+      setBlocks((prev) => {
+        const existing = prev.findIndex((b) => b.id === block.id);
+        const next = { id: block.id, template, grid: mobileGrid, params: parsed.params };
+        if (existing >= 0) {
+          const copy = prev.slice();
+          copy[existing] = next;
+          return copy;
+        }
+        return [...prev, next];
+      });
+      return;
+    }
+    if (event.type === "block-data") {
+      bus.publish(event.topic, event.value);
+      return;
+    }
+    if (event.type === "block-error") {
+      console.warn("[DynamicSurface] block-error", event.block_id, event.error);
+      return;
+    }
+    // voice-play, block-action, teacher-thinking: routed to bus for whoever
+    // subscribes. Phase 1's AmbientMicBlock doesn't consume them.
+    bus.publish(`__dynamic.${event.type}`, event);
+  }
+
+  const memoBlocks = useMemo(() => blocks, [blocks]);
+
+  return (
+    <View style={styles.surface} onLayout={onLayout}>
+      {size.w > 0 && size.h > 0 && memoBlocks.map((b) => (
+        <Block
+          key={b.id}
+          instance={b}
+          gridSize={gridSize}
+          canvasWidth={size.w}
+          canvasHeight={size.h}
+        />
+      ))}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  surface: {
+    flex: 1,
+    backgroundColor: "#0a0a0f",
+    position: "relative",
+  },
+});
