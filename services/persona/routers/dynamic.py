@@ -422,3 +422,33 @@ async def dynamic_state(
         f"content={(state.content or '')[:60]!r}"
     )
     return {"recorded": True}
+
+
+@router.get("/dynamic/devices")
+async def list_devices(
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """List the user's devices with online status — used by the mobile
+    client's "output device" picker to route phone-input answers to a
+    desktop. Returns every device the user has ever connected with, in
+    last-seen-descending order, with the in-memory `online` flag merged
+    from the SSE registry."""
+    from datetime import datetime as _dt
+    devices = await device_registry.list_for_user(user_id)
+    _epoch = _dt.min
+    devices.sort(
+        key=lambda d: (d.online, d.last_seen or d.first_seen or _epoch),
+        reverse=True,
+    )
+    return {
+        "devices": [
+            {
+                "id": str(d.device_id),
+                "device_class": d.device_class,
+                "online": d.online,
+                "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+                "first_seen": d.first_seen.isoformat() if d.first_seen else None,
+            }
+            for d in devices
+        ]
+    }

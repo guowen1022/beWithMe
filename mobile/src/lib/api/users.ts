@@ -19,3 +19,26 @@ export async function createUser(username: string): Promise<User> {
   }
   return res.json();
 }
+
+export async function listUsers(): Promise<User[]> {
+  const res = await fetch(url("/api/users"), { method: "GET" });
+  if (!res.ok) throw new Error(`listUsers failed (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Create OR reuse a user by username. The backend rejects duplicate
+ * usernames with 409; on that we fetch the existing user from the list
+ * and return it — same behavior as the desktop frontend's UserSelector.
+ */
+export async function ensureUser(username: string): Promise<User> {
+  try {
+    return await createUser(username);
+  } catch (e) {
+    if (!(e instanceof Error) || !/409|already exists/i.test(e.message)) throw e;
+    const users = await listUsers();
+    const match = users.find((u) => u.username === username);
+    if (!match) throw new Error(`user "${username}" exists but not in list`);
+    return match;
+  }
+}

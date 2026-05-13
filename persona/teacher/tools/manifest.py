@@ -179,6 +179,15 @@ def _make_mount_template(user_id: UUID):
             target_uuid = UUID(target_device_id) if target_device_id else None
         except (ValueError, TypeError):
             return json.dumps({"error": "invalid target_device_id"})
+        # If the persona didn't pick a target device but the request carries
+        # an X-Output-Device-Id (e.g. phone routing answers to desktop), use
+        # it as the default. Persona's explicit choice still wins.
+        if target_uuid is None:
+            from infra.contracts.output_routing import get_output_device_id
+            ctx_target = get_output_device_id()
+            if ctx_target is not None:
+                target_uuid = ctx_target
+                _trace(f"[mount_template/exec] using ctx target_device_id={ctx_target}")
 
         # Be lenient about `params`: some LLM providers emit nested
         # objects as JSON-encoded strings instead of structured objects.
@@ -538,6 +547,13 @@ def _make_speak(user_id: UUID):
             target_uuid = UUID(target_device_id) if target_device_id else None
         except (ValueError, TypeError):
             return json.dumps({"error": "invalid target_device_id"})
+        # Cross-device output routing: default to request's X-Output-Device-Id
+        # when persona didn't pick a target.
+        if target_uuid is None:
+            from infra.contracts.output_routing import get_output_device_id
+            ctx_target = get_output_device_id()
+            if ctx_target is not None:
+                target_uuid = ctx_target
         try:
             delivered = await speak(
                 user_id=user_id,

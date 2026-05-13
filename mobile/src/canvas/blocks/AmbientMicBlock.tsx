@@ -9,7 +9,7 @@
 // lives behind the recorder/player/vad stubs and lights up in later steps.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Animated, Easing, Pressable, StyleSheet, View } from "react-native";
+import { Alert, Animated, Easing, Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAppStore } from "../../state/store";
@@ -21,6 +21,7 @@ import { startRecording, type RecorderHandleV2 } from "../../lib/audio/recorder"
 import { ensureMicPermission } from "../../lib/audio/permissions";
 import { runVoiceTurn } from "../../lib/session/voiceTurn";
 import { createSileroVad, type SileroVadHandle } from "../../lib/vad/sileroVad";
+import { stopPlayer } from "../../lib/audio/player";
 import type { BlockProps } from "../blockRegistry";
 import type { RootStackParamList } from "../../navigation/RootNavigator";
 
@@ -40,6 +41,11 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
   // a WAV on stop(); we just dispatch the resulting URI to runVoiceTurn.
   const recorderRef = useRef<RecorderHandleV2 | null>(null);
   const turnAbortRef = useRef<AbortController | null>(null);
+  // Minimum hold for PTT to count as intentional. Sub-threshold taps just
+  // close the recorder and skip the turn entirely so quick clicks don't
+  // queue up empty/hallucinated turns.
+  const pttStartRef = useRef<number>(0);
+  const PTT_MIN_HOLD_MS = 300;
 
   // Ambient capture state: a long-running AudioRecord whose Int16 frames are
   // fed to silero-vad in JS. On each detected phrase, the VAD writes a WAV
@@ -98,23 +104,36 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
     }
     try {
       const vad = await createSileroVad({
+        // Barge-in: when speech begins while a turn is in flight (whether
+        // we're transcribing/thinking/speaking), abort the in-flight turn
+        // and stop the AudioTrack. The subsequent onPhrase will fire the
+        // new turn naturally. AEC + server-side echo dedup keep this from
+        // self-triggering off our own TTS playback.
+        onSpeechStart: () => {
+          if (!ambientTurnInFlight.current) return;
+          turnAbortRef.current?.abort();
+          turnAbortRef.current = null;
+          stopPlayer().catch(() => {});
+          ambientTurnInFlight.current = false;
+        },
         onPhrase: (wavUri) => {
           if (ambientTurnInFlight.current) return;
           ambientTurnInFlight.current = true;
-          // Pause ambient capture for the turn so TTS playback can't loop
-          // back through the mic (AEC helps but echo dedup is the last line).
-          void stopAmbient().then(() => {
-            turnAbortRef.current?.abort();
-            const ctl = new AbortController();
-            turnAbortRef.current = ctl;
-            runVoiceTurn(wavUri, {
-              setMode: setVoiceMode,
-              onError: (err) => console.warn("[ambient_mic] turn error:", err),
-            }, ctl.signal).finally(() => {
-              ambientTurnInFlight.current = false;
-              if (turnAbortRef.current === ctl) turnAbortRef.current = null;
-              if (ambientOnRef.current) { void startAmbient(); }
-            });
+          // VAD + recorder stay running through the turn so we can
+          // barge-in on TTS. AEC removes our speaker output from the mic.
+          turnAbortRef.current?.abort();
+          const ctl = new AbortController();
+          turnAbortRef.current = ctl;
+          runVoiceTurn(wavUri, {
+            setMode: setVoiceMode,
+            onError: (err) => console.warn("[ambient_mic] turn error:", err),
+          }, ctl.signal).finally(() => {
+            ambientTurnInFlight.current = false;
+            if (turnAbortRef.current === ctl) turnAbortRef.current = null;
+            // After the turn, drop back to the ambient resting state if
+            // we're still listening. No restart needed — VAD/recorder
+            // never stopped.
+            if (ambientOnRef.current) setVoiceMode("ambient");
           });
         },
         onError: (err) => console.warn("[ambient_mic] vad error:", err),
@@ -142,7 +161,15 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
 
   const onPressIn = useCallback(async () => {
     if (!micArbiter.acquire("ptt")) return;
+    pttStartRef.current = Date.now();
     setVoiceMode("ptt");
+
+    // Barge-in via PTT: abort any in-flight ambient turn + stop TTS so the
+    // user's PTT utterance lands cleanly without lingering speaker audio.
+    turnAbortRef.current?.abort();
+    turnAbortRef.current = null;
+    stopPlayer().catch(() => {});
+    ambientTurnInFlight.current = false;
 
     // PTT preempts ambient: shut down the long-running AudioRecord + VAD so
     // a fresh PTT session can take the mic. Only one AudioRecord can hold
@@ -175,15 +202,19 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
     const recorder = recorderRef.current;
     recorderRef.current = null;
     micArbiter.release("ptt");
+    const heldMs = Date.now() - pttStartRef.current;
 
     if (!recorder) {
       setVoiceMode(ambientOn ? "ambient" : "idle");
+      if (ambientOn) void startAmbient();
       return;
     }
 
     const wavUri = await recorder.stop();
-    if (!wavUri) {
+    // Drop short presses entirely — they're click-noise, not utterances.
+    if (!wavUri || heldMs < PTT_MIN_HOLD_MS) {
       setVoiceMode(ambientOn ? "ambient" : "idle");
+      if (ambientOn) void startAmbient();
       return;
     }
 
@@ -248,8 +279,10 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
       <Pressable
         onPress={() => navigation.navigate("Settings")}
         hitSlop={16}
-        style={styles.settingsHotspot}
-      />
+        style={styles.settingsButton}
+      >
+        <Text style={styles.settingsGlyph}>⚙</Text>
+      </Pressable>
     </View>
   );
 }
@@ -277,12 +310,19 @@ const styles = StyleSheet.create({
     height: DOT_SIZE,
     borderRadius: DOT_SIZE / 2,
   },
-  settingsHotspot: {
+  settingsButton: {
     position: "absolute",
     top: 12,
     right: 12,
     width: 44,
     height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingsGlyph: {
+    color: "#6b6f7d",
+    fontSize: 22,
+    lineHeight: 24,
   },
 });
 

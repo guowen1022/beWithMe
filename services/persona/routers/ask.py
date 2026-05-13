@@ -22,6 +22,7 @@ from workshop.canvas.tools.request_ui_block import request_ui_block
 from workshop.canvas.tools.mount_template import mount_template
 from infra.templates import list_templates, load_template
 from tools.speak import speak as tool_speak
+from infra.contracts.output_routing import OUTPUT_DEVICE_ID
 
 router = APIRouter()
 
@@ -233,6 +234,7 @@ async def ask_stream(
     user_id: UUID = Depends(get_current_user_id),
     x_device_class: str | None = Header(default=None, alias="X-Device-Class"),
     x_lane_thinking: str | None = Header(default=None, alias="X-Lane-Thinking"),
+    x_output_device_id: str | None = Header(default=None, alias="X-Output-Device-Id"),
 ):
     """SSE endpoint with streaming — detects proxy search events.
 
@@ -242,6 +244,18 @@ async def ask_stream(
     `off` or absent uses the default. Not a public API — debug-only.
     """
     question = body.question or ""
+
+    # Cross-device output routing. If the client (e.g. phone) declared an
+    # output device, set a request-scoped ContextVar so the auto-speak +
+    # mount_template paths default their target_device_id to it. Persona
+    # tool calls that explicitly pass target_device_id still win.
+    output_device_uuid: Optional[UUID] = None
+    if x_output_device_id:
+        try:
+            output_device_uuid = UUID(x_output_device_id.strip())
+        except (ValueError, AttributeError):
+            output_device_uuid = None
+    _output_ctx_token = OUTPUT_DEVICE_ID.set(output_device_uuid)
 
     # Debug shortcut: '/block <description>' bypasses the teacher entirely
     # and goes straight to the engineer. Kept for smoke testing the
@@ -340,10 +354,15 @@ async def ask_stream(
                 # Use the resolved active_channel directly — matches the
                 # speak() tool's channel semantics.
                 speak_channel = "voice" if active_channel == "voice" else "both"
+                # Route to the requester's chosen output device when set.
+                # Defaults to broadcasting (None) so existing single-device
+                # behavior is unchanged.
+                target_device = OUTPUT_DEVICE_ID.get()
                 await tool_speak(
                     user_id=user_id,
                     text=cleaned,
                     channel=speak_channel,
+                    target_device_id=target_device,
                 )
             except Exception as e:
                 print(f"[ask/stream] auto-speak failed: {e}", flush=True)

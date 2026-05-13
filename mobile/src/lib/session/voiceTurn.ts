@@ -11,6 +11,7 @@ import { askStream, type StreamEvent } from "../api/ask";
 import { speakTextStream } from "../api/speak";
 import { SentenceBuffer } from "../audio/sentenceBuffer";
 import { ensurePlayer, writePcm } from "../audio/player";
+import { getOutputDeviceId } from "../../config";
 import type { VoiceMode } from "../../state/mode";
 
 export interface VoiceTurnCallbacks {
@@ -30,7 +31,13 @@ export async function runVoiceTurn(
     const trans = await transcribeAudio({ uri: wavUri, filename: "audio.wav" });
     if (signal?.aborted) return;
     const text = trans.text.trim();
-    if (!text) { cb.setMode("idle"); return; }
+    if (!text || isNoiseTranscript(text)) {
+      // Whisper hallucinates on silence/clicks — common outputs are tiny
+      // filler tokens. Drop these so they don't reach the persona and
+      // trigger spurious "hi, I can help with..." intro turns.
+      cb.setMode("idle");
+      return;
+    }
     cb.onTranscript?.(text);
 
     // Fire perception/utterance for echo dedup + perception cache. Don't
@@ -44,9 +51,14 @@ export async function runVoiceTurn(
 
     cb.setMode("thinking");
     let answerStarted = false;
-    const speakChain = createSpeakChain(cb, signal);
+    // When the user has routed output to a peer device, the backend's
+    // auto-speak path already delivers TTS to that device via voice-play
+    // SSE events. The phone must NOT also play locally — it just waits
+    // for the askStream to complete, then drops back to idle/ambient.
+    const remoteOutput = getOutputDeviceId() !== null;
+    const speakChain = remoteOutput ? null : createSpeakChain(cb, signal);
     const sentenceBuf = new SentenceBuffer((sentence) => {
-      speakChain.enqueue(sentence);
+      speakChain?.enqueue(sentence);
     });
 
     await askStream(
@@ -65,13 +77,29 @@ export async function runVoiceTurn(
       signal,
     );
     sentenceBuf.flush();
-    await speakChain.drain();
+    if (speakChain) await speakChain.drain();
     cb.setMode("idle");
   } catch (err) {
     if (signal?.aborted) return;
     cb.onError?.(err);
     cb.setMode("idle");
   }
+}
+
+// Common Whisper-on-silence hallucinations. If the transcript is just one
+// of these (modulo punctuation/case), the user wasn't really speaking and
+// we shouldn't bother the persona with it.
+const _NOISE_SET = new Set([
+  "", ".", "..", "...", "um", "uh", "mhm", "mm", "hmm", "hm", "yeah",
+  "ok", "okay", "bye", "thank you", "thanks", "you", "hi", "hello",
+  "[blank_audio]", "(blank_audio)", "(silence)", "[silence]",
+]);
+
+function isNoiseTranscript(text: string): boolean {
+  const norm = text.toLowerCase().replace(/[.,!?¿¡。、,]+/g, "").trim();
+  if (!norm) return true;
+  if (norm.length < 3) return true;
+  return _NOISE_SET.has(norm);
 }
 
 // Speak chain: serialize per-sentence /api/speak/stream calls so playback

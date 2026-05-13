@@ -1,7 +1,7 @@
 // Thin fetch wrapper. Adds base URL, auth headers, device headers, and 401
 // handling. Matches frontend/lib/api.ts:authHeaders + deviceHeaders shape.
 
-import { getBaseUrl, getUserId, getDeviceId, clearUserId } from "../../config";
+import { getBaseUrl, getUserId, getDeviceId, clearUserId, getOutputDeviceId } from "../../config";
 import { getDeviceClass } from "../device/deviceClass";
 
 export class UnknownUserError extends Error {
@@ -18,11 +18,16 @@ export function authHeaders(): Record<string, string> {
 export function deviceHeaders(): Record<string, string> {
   const id = getDeviceId();
   if (!id) return {};
-  return {
+  const headers: Record<string, string> = {
     "X-Device-Id": id,
     "X-Device-Class": getDeviceClass(),
     "X-Device-Capabilities": JSON.stringify({ display: true, speaker: true, mic: true }),
   };
+  // Cross-device output routing: phone-input answers delivered to another
+  // device (typically a desktop running the web frontend).
+  const out = getOutputDeviceId();
+  if (out) headers["X-Output-Device-Id"] = out;
+  return headers;
 }
 
 export function url(path: string): string {
