@@ -4,6 +4,7 @@ import SpeakerSink from "@/components/SpeakerSink";
 import TeacherCaption from "@/components/TeacherCaption";
 import DesktopBrowserPerception from "@/components/DesktopBrowserPerception";
 import MermaidLoader from "@/components/MermaidLoader";
+import VadPrewarm from "@/components/VadPrewarm";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -55,6 +56,7 @@ export default function RootLayout({
         <TeacherCaption />
         <DesktopBrowserPerception />
         <MermaidLoader />
+        <VadPrewarm />
       </body>
     </html>
   );

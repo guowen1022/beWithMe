@@ -74,7 +74,14 @@ export function stopAllMicStreams(): void {
 }
 
 export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
+  // Phase-level timing so we can see where the cold start goes.
+  // The dominant costs are (1) the dynamic import + wasm/onnx fetches the
+  // library does internally (VadPrewarm in the root layout should warm
+  // these into the HTTP cache before we get here), and (2) the OS-level
+  // getUserMedia permission negotiation on first mic access.
+  const tInit = performance.now();
   const mod = await import("@ricky0123/vad-web");
+  const tAfterImport = performance.now();
 
   let phraseId = 0;
   let inSpeech = false;
@@ -117,6 +124,7 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
     baseAssetPath: ASSET_BASE,
     onnxWASMBasePath: ASSET_BASE,
     getStream: async () => {
+      const tGum = performance.now();
       ownStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           // Acoustic echo cancellation — the browser/OS subtracts the
@@ -137,6 +145,9 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
           echoCancellationType: { ideal: "system" },
         } as MediaTrackConstraints,
       });
+      console.log(
+        `[vad.init] getUserMedia: ${Math.round(performance.now() - tGum)}ms`
+      );
       _liveStreams.add(ownStream);
       return ownStream;
     },
@@ -213,6 +224,12 @@ export async function createMicVad(opts: MicVadOptions): Promise<MicVadHandle> {
       resetPhrase();
     },
   });
+  const tDone = performance.now();
+  console.log(
+    `[vad.init] import: ${Math.round(tAfterImport - tInit)}ms, ` +
+      `MicVAD.new (incl. getUserMedia + assets): ${Math.round(tDone - tAfterImport)}ms, ` +
+      `total: ${Math.round(tDone - tInit)}ms`
+  );
 
   return {
     start: () => vad.start(),

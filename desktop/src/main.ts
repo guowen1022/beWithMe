@@ -285,10 +285,17 @@ async function ensureMacMediaPermissions(): Promise<void> {
   // returns immediately on already-granted, no-op on non-mac.
   if (process.platform !== "darwin") return;
   try {
+    const t0 = Date.now();
     const status = systemPreferences.getMediaAccessStatus("microphone");
+    console.log(
+      `[main] mic TCC status: ${status} (check took ${Date.now() - t0}ms)`
+    );
     if (status !== "granted") {
+      const tPrompt = Date.now();
       const granted = await systemPreferences.askForMediaAccess("microphone");
-      console.log(`[main] mic access ${granted ? "granted" : "DENIED"}`);
+      console.log(
+        `[main] mic access ${granted ? "granted" : "DENIED"} after ${Date.now() - tPrompt}ms`
+      );
     }
   } catch (err) {
     console.warn("[main] mic access prompt failed:", err);
