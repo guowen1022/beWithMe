@@ -22,6 +22,14 @@ MERMAID_CONFIG: dict = {
     "theme": "dark",
     "securityLevel": "strict",
     "fontFamily": FONT_FAMILY,
+    # `htmlLabels: false` makes mermaid render node text as native SVG
+    # <text> instead of <foreignObject><div><p>...</p></div></foreignObject>.
+    # Required because (a) rich_card scrubs <foreignObject> as a defense, and
+    # (b) react-native-svg on mobile can't render <foreignObject> at all —
+    # so without this, labels would be invisible on both surfaces.
+    # In mermaid 11+ the per-diagram `flowchart.htmlLabels` is deprecated;
+    # the top-level flag is the source of truth.
+    "htmlLabels": False,
     # Same tightening the web client uses so rich_card diagrams and
     # interactive_graph diagrams have matching geometry.
     "flowchart": {"padding": 4, "diagramPadding": 4},
