@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic_settings import BaseSettings
 
+from infra.event_log import log_event
+from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
 
@@ -160,7 +162,9 @@ async def transcribe(
         with open(src_path, "wb") as f:
             f.write(data)
 
+        decode_t0 = time.perf_counter()
         await asyncio.to_thread(_decode_to_wav, src_path, wav_path)
+        decode_ms = round((time.perf_counter() - decode_t0) * 1000, 2)
 
         t0 = time.perf_counter()
         async with _infer_lock:
@@ -169,6 +173,14 @@ async def transcribe(
             )
         duration = time.perf_counter() - t0
 
+        log_event(
+            "transcribe.done",
+            language=language,
+            audio_bytes=len(data),
+            text_len=len(text),
+            decode_ms=decode_ms,
+            whisper_ms=round(duration * 1000, 2),
+        )
         return {"text": text, "duration_seconds": duration}
     finally:
         for p in (src_path, wav_path):
@@ -185,6 +197,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="beWithMe transcribe", lifespan=lifespan)
+install_event_log(app, service="transcribe")
 app.include_router(router, prefix="/api")
 
 

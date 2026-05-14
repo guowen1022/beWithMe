@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from playwright.async_api import async_playwright
 from pydantic import BaseModel, HttpUrl
 
+from infra.event_log_middleware import install_event_log
 from infra.model.vision import describe_image as _describe_image
 from infra.tools.web_fetch import fetch_readable, WebFetchError
 from infra.topology import service_port, upstream_url
@@ -1106,6 +1107,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="beWithMe browser", lifespan=lifespan)
+install_event_log(app, service="browser")
 app.include_router(router, prefix="/api")
 
 

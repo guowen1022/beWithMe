@@ -33,7 +33,12 @@ from uuid import UUID
 #                   and the structural tools so it can mount the
 #                   progress ribbon and any diagrams it produces. ~25
 #                   iterations, ~90 s wall clock, larger token budget.
-Lane = Literal["answer", "user_facing", "background", "research"]
+#   "writer"      — Voice-leads canvas writer: the second pass of a
+#                   voice turn, runs after the spoken answer is done.
+#                   Only `mount_template` is exposed — its single job
+#                   is to render a rich_card derived from the
+#                   transcript.
+Lane = Literal["answer", "user_facing", "background", "research", "writer"]
 
 from infra.contracts.ui import BlockSpec
 from infra.model.tools import ToolSpec
@@ -837,7 +842,7 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # tools that themselves invoke the LLM, do RAG, or duplicate
     # context that's already in the prompt go to Lane B only.
     "speak":              {"answer", "user_facing", "research"},
-    "mount_template":     {"answer", "user_facing", "background", "research"},
+    "mount_template":     {"answer", "user_facing", "background", "research", "writer"},
     "block_action":       {"answer", "user_facing", "background", "research"},
     "push_block_content": {"answer", "user_facing", "background", "research"},
     "point_arrow":        {"answer", "user_facing", "background", "research"},
@@ -871,6 +876,7 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
     - "answer" (default): full set, for /api/ask (typed Q&A).
     - "user_facing": Lane A reflect — only `speak`.
     - "background": Lane B work — everything except `speak`.
+    - "writer": voice-leads canvas writer — only `mount_template`.
     """
     full = [
         ToolSpec(

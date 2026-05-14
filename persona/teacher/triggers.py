@@ -38,10 +38,13 @@ Output of every turn:
 from __future__ import annotations
 
 import asyncio
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
+from infra.event_log import log_event
 from infra.perception import (
     BlockChangeEvent,
     BlockCompletedEvent,
@@ -51,6 +54,21 @@ from infra.perception import (
     VoiceEvent,
     subscribe,
 )
+
+
+# Sentence terminator detector for Lane A voice-leads auto-speak. Mirrors
+# the boundary used in services/persona/routers/ask.py + speak sidecar
+# so the seam where the audio cuts matches what the rest of the system
+# expects.
+_LANE_A_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+
+def _strip_for_speech(text: str) -> str:
+    """Conservative markdown stripper. Voice-mode prompts forbid markdown,
+    but the model occasionally leaks `**bold**` from training bias."""
+    out = text.replace("**", "").replace("__", "")
+    out = re.sub(r"^[\s>*\-]+", "", out)
+    return out.strip()
 
 
 # This persona's name. UserSpeechEvents whose `target_persona` doesn't
@@ -122,6 +140,36 @@ class _LaneAState:
 
 
 _lane_a: Dict[str, _LaneAState] = {}
+
+# Background canvas-writer tasks spawned by Lane A under voice-leads. We
+# hold strong references so the loop's GC doesn't cancel them mid-mount.
+_lane_a_writer_tasks: set = set()
+
+
+def _extract_user_question(events: List[Any]) -> str:
+    """Pick the question we hand to the canvas writer.
+
+    Prefer the most-recent `voice` event's spoken text — that's literally
+    what the user just asked. Fall back to a one-line summary of any other
+    events that fired (block-completed, etc.), or empty string if there's
+    nothing actionable. Callers skip the writer spawn on empty.
+    """
+    voice_texts: List[str] = []
+    other_bits: List[str] = []
+    for e in events:
+        et = getattr(e, "event_type", "") or ""
+        content = (getattr(e, "content", "") or "").strip()
+        if et == "voice" and content:
+            voice_texts.append(content)
+        elif content:
+            other_bits.append(f"[{et}] {content}")
+        elif et:
+            other_bits.append(f"[{et}]")
+    if voice_texts:
+        return voice_texts[-1]
+    if other_bits:
+        return " | ".join(other_bits[-3:])
+    return ""
 
 
 def _state_for(user_id: UUID) -> _LaneAState:
@@ -285,11 +333,25 @@ def _summarise_event(event: _AnyEvent, lane: str) -> Any:
 async def _on_perception_event(event: _AnyEvent) -> None:
     """Cache-listener entry point. Routes by lane."""
     lane = _classify(event)
+    event_type = type(event).__name__
+    user_id = getattr(event, "user_id", None)
     if lane is None:
+        log_event(
+            "triggers.event.dropped",
+            event_type=event_type,
+            user_id=str(user_id) if user_id else None,
+        )
         return
 
-    user_id = event.user_id
     summary = _summarise_event(event, lane)
+    content_len = len(summary.content) if getattr(summary, "content", None) else 0
+    log_event(
+        "triggers.event.classified",
+        event_type=event_type,
+        lane=lane,
+        user_id=str(user_id),
+        content_len=content_len,
+    )
 
     if lane == "lane_a":
         _lane_a_handle(user_id, summary)
@@ -305,11 +367,17 @@ def _lane_a_handle(user_id: UUID, summary: Any) -> None:
     state = _state_for(user_id)
     state.queue.append(summary)
 
+    running = state.task is not None and not state.task.done()
     print(
         f"[teacher.triggers] lane_a queued: user={user_id} "
-        f"running={state.task is not None and not state.task.done()} "
-        f"qsize={len(state.queue)}",
+        f"running={running} qsize={len(state.queue)}",
         flush=True,
+    )
+    log_event(
+        "lane_a.queued",
+        user_id=str(user_id),
+        qsize=len(state.queue),
+        running=running,
     )
 
     # If a turn is currently running, cancel it. The new event makes any
@@ -320,6 +388,11 @@ def _lane_a_handle(user_id: UUID, summary: Any) -> None:
         print(
             f"[teacher.triggers] lane_a preempting running turn for user={user_id}",
             flush=True,
+        )
+        log_event(
+            "lane_a.preempt",
+            user_id=str(user_id),
+            in_flight_count=len(state.in_flight),
         )
         if state.in_flight:
             state.queue = list(state.in_flight) + state.queue
@@ -350,6 +423,11 @@ def _lane_a_fire(user_id: UUID) -> None:
     if state.task is not None and not state.task.done():
         # A turn is still running (cancellation may not have completed).
         # The done-callback below will arm a trailing fire.
+        log_event(
+            "lane_a.fire.deferred",
+            user_id=str(user_id),
+            reason="task_still_running",
+        )
         return
 
     events = list(state.queue)
@@ -357,6 +435,7 @@ def _lane_a_fire(user_id: UUID) -> None:
     if not events:
         return
 
+    raw_count = len(events)
     # Dedupe identical-content events ("hello hello hello hello") to
     # keep the LLM focused on the latest unique phrase.
     if len(events) > 1:
@@ -366,6 +445,13 @@ def _lane_a_fire(user_id: UUID) -> None:
             if key:
                 seen[key] = i
         events = [events[i] for i in sorted(seen.values())]
+
+    log_event(
+        "lane_a.fire",
+        user_id=str(user_id),
+        raw_events=raw_count,
+        deduped_events=len(events),
+    )
 
     loop = asyncio.get_event_loop()
     state.in_flight = list(events)
@@ -396,6 +482,12 @@ def _lane_b_handle(user_id: UUID, summary: Any) -> None:
         f"event_type={summary.event_type} block_id={summary.block_id}",
         flush=True,
     )
+    log_event(
+        "lane_b.fire",
+        user_id=str(user_id),
+        event_type=summary.event_type,
+        block_id=str(summary.block_id) if summary.block_id else None,
+    )
     loop = asyncio.get_event_loop()
     loop.create_task(_execute_background(user_id, summary))
 
@@ -412,13 +504,30 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     new debounced fire run with the merged queue.
     """
     # Late imports to avoid module-import cycles at startup.
+    import os
     from persona.teacher.contexts.reflect import assemble as assemble_reflect
     from persona.teacher.tools.manifest import build_tools
     from persona.teacher.tools.loop import run as run_teacher_tool_loop
+    from persona.teacher.writer import run_canvas_writer
     from services.persona.routers.dynamic import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
 
+    # Voice-leads Phase 1: Lane A is the spoken pass. When the flag is on,
+    # we drop the tool palette here so the LLM streams prose directly into
+    # auto-speak with no tool-arg silence, and spawn a canvas-writer task
+    # after the loop to mount any visuals derived from the transcript.
+    voice_leads_enabled = os.environ.get("BWM_VOICE_LEADS", "0") == "1"
+
     summary = _format_events_summary(events)
+    t0 = time.perf_counter()
+    phases: Dict[str, float] = {}
+    phases["voice_leads"] = voice_leads_enabled
+    log_event(
+        "lane_a.start",
+        user_id=str(user_id),
+        event_count=len(events),
+        voice_leads=voice_leads_enabled,
+    )
 
     await enqueue_for_user(user_id, TeacherThinking(
         phase="start",
@@ -430,15 +539,54 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     tool_calls_seen: List[Dict[str, Any]] = []
     error_text: Optional[str] = None
     preempted = False
+    first_delta_logged = False
+    # Voice-leads auto-speak state. Today Lane A only produces audio
+    # via explicit `speak` tool calls — under voice-leads, no tools fire,
+    # so we stream sentences directly to TTS as deltas arrive.
+    sentence_buffer = ""
+    auto_speak_first_ms: Optional[float] = None
+    auto_speak_count = 0
+    auto_speak_bg_tasks: set = set()
+
+    async def _fire_lane_a_sentence(sentence: str) -> None:
+        nonlocal auto_speak_first_ms, auto_speak_count
+        cleaned = _strip_for_speech(sentence)
+        if not cleaned:
+            return
+        if auto_speak_first_ms is None:
+            auto_speak_first_ms = round((time.perf_counter() - t0) * 1000, 2)
+            phases["auto_speak_first_ms"] = auto_speak_first_ms
+        auto_speak_count += 1
+        phases["auto_speak_count"] = auto_speak_count
+        try:
+            from tools.speak import speak as tool_speak
+            await tool_speak(
+                user_id=user_id,
+                text=cleaned,
+                channel="voice",
+            )
+        except Exception as e:
+            print(f"[teacher.triggers] auto-speak failed: {e}", flush=True)
 
     try:
-        ctx = await assemble_reflect(user_id, events)
+        ctx_t0 = time.perf_counter()
+        ctx = await assemble_reflect(user_id, events, voice_leads=voice_leads_enabled)
+        phases["ctx_assemble_ms"] = round((time.perf_counter() - ctx_t0) * 1000, 2)
+        log_event(
+            "lane_a.ctx_assembled",
+            user_id=str(user_id),
+            elapsed_ms=phases["ctx_assemble_ms"],
+            prior_messages=len(ctx.prior_messages) if ctx.prior_messages else 0,
+        )
+        # Voice-leads: empty tool list; auto-speak streams prose only. The
+        # canvas-writer pass spawned after the loop handles any visuals.
+        lane_a_tools = [] if voice_leads_enabled else build_tools(user_id, lane="user_facing")
         async for evt in run_teacher_tool_loop(
             static_system=ctx.parts.static_system,
             static_user_passage=ctx.parts.static_user_passage,
             dynamic_user=ctx.parts.dynamic_user,
             prior_messages=ctx.prior_messages,
-            tools=build_tools(user_id, lane="user_facing"),
+            tools=lane_a_tools,
             max_tokens=LANE_A_MAX_TOKENS,
             # 2, not 1. The loop's hard-cap at `tools/loop.py:189` breaks
             # BEFORE executing tools on the cap-hit turn — so with cap=1,
@@ -455,7 +603,31 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
         ):
             kind = evt.get("kind")
             if kind == "delta":
-                text_chunks.append(evt.get("text", ""))
+                chunk = evt.get("text", "")
+                if not first_delta_logged:
+                    phases["llm_ttft_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+                    log_event(
+                        "lane_a.llm_first_token",
+                        user_id=str(user_id),
+                        elapsed_ms=phases["llm_ttft_ms"],
+                    )
+                    first_delta_logged = True
+                text_chunks.append(chunk)
+                # Voice-leads: fire each completed sentence to TTS as
+                # soon as it lands. No suppression check needed — tools
+                # are empty so there's no `speak` tool call to race with.
+                if voice_leads_enabled and chunk:
+                    sentence_buffer += chunk
+                    while True:
+                        match = _LANE_A_SENTENCE_BOUNDARY.search(sentence_buffer)
+                        if not match:
+                            break
+                        sentence = sentence_buffer[: match.end()].strip()
+                        sentence_buffer = sentence_buffer[match.end():]
+                        if sentence:
+                            task = asyncio.create_task(_fire_lane_a_sentence(sentence))
+                            auto_speak_bg_tasks.add(task)
+                            task.add_done_callback(auto_speak_bg_tasks.discard)
             elif kind == "tool_call":
                 tool_calls_seen.append({
                     "name": evt.get("name"),
@@ -475,13 +647,36 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
         traceback.print_exc()
         error_text = f"{type(e).__name__}: {e}"
     finally:
-        final_text = "".join(text_chunks).strip()
+        # Flush any trailing prose that didn't end in a sentence
+        # terminator — the user's last word still needs to be heard.
+        if voice_leads_enabled and not preempted:
+            tail = sentence_buffer.strip()
+            if tail:
+                task = asyncio.create_task(_fire_lane_a_sentence(tail))
+                auto_speak_bg_tasks.add(task)
+                task.add_done_callback(auto_speak_bg_tasks.discard)
+                sentence_buffer = ""
+
+        spoken_text = "".join(text_chunks).strip()
+        final_text = spoken_text
         if preempted:
             final_text = "(preempted by newer user_speech)"
         elif error_text:
             final_text = (final_text + "\n\n[error] " + error_text).strip()
         elif not final_text and not tool_calls_seen:
             final_text = "(silent — no response chosen)"
+        phases["total_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        log_event(
+            "lane_a.done",
+            user_id=str(user_id),
+            event_count=len(events),
+            answer_len=len(final_text),
+            tool_call_count=len(tool_calls_seen),
+            tool_names=[t.get("name") for t in tool_calls_seen],
+            preempted=preempted,
+            error=error_text,
+            phases=phases,
+        )
         await enqueue_for_user(user_id, TeacherThinking(
             phase="end",
             trigger="lane-a",
@@ -489,6 +684,30 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
             text=final_text[:500],
             tool_calls=tool_calls_seen,
         ))
+
+        # Voice-leads canvas writer. Spawn only when we actually have a
+        # substantive spoken answer to base the card on — skip preempts,
+        # errors, and the "(silent — no response chosen)" no-op turn.
+        if voice_leads_enabled and not preempted and not error_text and spoken_text:
+            question = _extract_user_question(events)
+            if question:
+                writer_task = asyncio.create_task(run_canvas_writer(
+                    question=question,
+                    transcript=spoken_text,
+                    user_id=user_id,
+                    req_id=None,
+                    origin=t0,
+                    source="lane_a",
+                ))
+                _lane_a_writer_tasks.add(writer_task)
+                writer_task.add_done_callback(_lane_a_writer_tasks.discard)
+                log_event(
+                    "lane_a.voice_done",
+                    user_id=str(user_id),
+                    transcript_len=len(spoken_text),
+                    auto_speak_first_ms=phases.get("auto_speak_first_ms"),
+                    question_len=len(question),
+                )
 
 
 def _build_fallback_synthesis(state: Any, text_chunks: List[str], deadline_hit: bool) -> str:
@@ -674,6 +893,13 @@ async def _execute_research(
     from infra.contracts.ui import TeacherThinking
 
     summary_line = f"research: {goal[:80]}"
+    lane_r_t0 = time.perf_counter()
+    log_event(
+        "lane_r.start",
+        user_id=str(user_id),
+        goal_len=len(goal),
+        goal_url=goal_url,
+    )
 
     await enqueue_for_user(user_id, TeacherThinking(
         phase="start",
@@ -863,6 +1089,18 @@ async def _execute_research(
             final_text = "(research turn hit 90 s wall-clock cap)"
         elif not final_text and not tool_calls_seen:
             final_text = "(silent — no action chosen)"
+        log_event(
+            "lane_r.done",
+            user_id=str(user_id),
+            goal_len=len(goal),
+            answer_len=len(final_text),
+            tool_call_count=len(tool_calls_seen),
+            tool_names=[t.get("name") for t in tool_calls_seen],
+            speak_called=speak_called,
+            deadline_hit=deadline_hit,
+            error=error_text,
+            total_ms=round((time.perf_counter() - lane_r_t0) * 1000, 2),
+        )
         await enqueue_for_user(user_id, TeacherThinking(
             phase="end",
             trigger="lane-r",
@@ -1095,6 +1333,12 @@ async def _execute_background(user_id: UUID, summary: Any) -> None:
     from infra.contracts.ui import TeacherThinking
 
     summary_line = _format_events_summary([summary])
+    t0 = time.perf_counter()
+    log_event(
+        "lane_b.start",
+        user_id=str(user_id),
+        event_type=summary.event_type,
+    )
 
     await enqueue_for_user(user_id, TeacherThinking(
         phase="start",
@@ -1133,6 +1377,16 @@ async def _execute_background(user_id: UUID, summary: Any) -> None:
         error_text = f"{type(e).__name__}: {e}"
     finally:
         final_text = "".join(text_chunks).strip()
+        log_event(
+            "lane_b.done",
+            user_id=str(user_id),
+            event_type=summary.event_type,
+            answer_len=len(final_text),
+            tool_call_count=len(tool_calls_seen),
+            tool_names=[t.get("name") for t in tool_calls_seen],
+            error=error_text,
+            total_ms=round((time.perf_counter() - t0) * 1000, 2),
+        )
         # Build a one-line notice for Lane A to potentially surface.
         # Prefer the LLM's own text; fall back to a tool-call digest.
         notice = ""

@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, type MicVadHandle } from "@/lib/vad";
 import * as micArbiter from "@/lib/micArbiter";
+import { logEvent } from "@/lib/eventLog";
 
 export default function QuestionBar({
   selectedText,
@@ -44,6 +45,11 @@ export default function QuestionBar({
   const onAskRef = useRef(onAsk);
   const questionRef = useRef(question);
   const listeningRef = useRef(listening);
+  // Tracks whether the current value in the input box came from voice
+  // (mic → whisper) so the submit event can tag modality correctly.
+  // Set when listening starts; cleared when the user types or cancels.
+  const wasVoiceRef = useRef(false);
+  const recordStartTsRef = useRef<number | null>(null);
 
   const renderQuestion = useCallback(() => {
     const c = committedRef.current;
@@ -159,10 +165,17 @@ export default function QuestionBar({
       vadRef.current = vad;
       vad.start();
       setListening(true);
+      wasVoiceRef.current = true;
+      recordStartTsRef.current = performance.now();
+      logEvent("ui.voice.record_start", { surface: "question_bar" });
     } catch (err) {
       console.error("mic/vad start failed", err);
       teardownVad();
       setListening(false);
+      logEvent("ui.voice.record_error", {
+        surface: "question_bar",
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }, [speechSupported, handleInterim, handlePhrase, teardownVad]);
 
@@ -185,6 +198,17 @@ export default function QuestionBar({
     setQuestion(renderQuestion());
 
     const final = committedRef.current.trim();
+    const recordMs = recordStartTsRef.current
+      ? Math.round(performance.now() - recordStartTsRef.current)
+      : null;
+    recordStartTsRef.current = null;
+    logEvent("ui.voice.record_end", {
+      surface: "question_bar",
+      auto_send: autoSend,
+      committed_len: final.length,
+      record_ms: recordMs,
+      inflight_phrases: inflight.length,
+    });
     if (autoSend && final) onAskRef.current(final);
   }, [teardownVad, renderQuestion]);
 
@@ -197,6 +221,15 @@ export default function QuestionBar({
     interimInFlightRef.current = false;
     setQuestion("");
     setListening(false);
+    const recordMs = recordStartTsRef.current
+      ? Math.round(performance.now() - recordStartTsRef.current)
+      : null;
+    recordStartTsRef.current = null;
+    wasVoiceRef.current = false;
+    logEvent("ui.voice.record_cancel", {
+      surface: "question_bar",
+      record_ms: recordMs,
+    });
     setTranscribing(false);
   }, [teardownVad]);
 
@@ -204,11 +237,22 @@ export default function QuestionBar({
     if (loading) return;
     if (listeningRef.current) {
       autoSendRef.current = true;
+      logEvent("ui.ask.submit", {
+        modality: "voice",
+        surface: "question_bar",
+        via: "finalize_listening",
+      });
       void finalizeListening(true);
       return;
     }
     const q = questionRef.current.trim();
     if (!q) return;
+    logEvent("ui.ask.submit", {
+      modality: wasVoiceRef.current ? "voice" : "text",
+      surface: "question_bar",
+      question_len: q.length,
+    });
+    wasVoiceRef.current = false;
     onAskRef.current(q);
     setQuestion("");
   }, [loading, finalizeListening]);
@@ -355,6 +399,9 @@ export default function QuestionBar({
             setQuestion(e.target.value);
             committedRef.current = e.target.value;
             interimRef.current = "";
+            // Manual keystroke means the next submit is typed, not voice
+            // — unless they re-trigger the mic.
+            if (!listeningRef.current) wasVoiceRef.current = false;
           }}
           data-no-send
           placeholder={

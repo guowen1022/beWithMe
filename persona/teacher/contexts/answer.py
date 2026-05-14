@@ -26,6 +26,7 @@ from persona.teacher.preferences import boost_query_embedding, get_user_profile
 from persona.teacher.prompts.answer import build as build_answer_prompt
 from persona.teacher.prompts.parts import PromptParts, build_history_messages
 from persona.teacher.prompts.voice_answer import build as build_voice_answer_prompt
+from persona.teacher.prompts.voice_brief import build as build_voice_brief_prompt
 from persona.teacher.schemas import AskRequest
 from persona.teacher.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
@@ -60,6 +61,7 @@ async def assemble(
     client: SiliconBrainClient,
     phases: Optional[dict] = None,
     voice_mode: bool = False,
+    voice_leads: bool = False,
 ) -> TeacherContext:
     """Read silicon_brain (HTTP) + teacher's own DB and build the
     answer-scenario prompt. The full RAG + history pipeline.
@@ -68,11 +70,13 @@ async def assemble(
     milliseconds keyed by `ctx_<step>_ms`. Used by benchmark instrumentation
     to attribute latency to each sequential step.
 
-    When `voice_mode=True`, the prompt is built with
-    `prompts/voice_answer.py:build()` instead of `prompts/answer.py:build()`
-    — same context, but a leaner conversational system prompt (no TITLE
-    / no markdown / no thinking-out-loud) suited to sentence-by-sentence
-    auto-TTS delivery.
+    Prompt builder dispatch:
+      voice_leads=True  → `prompts/voice_brief.py` (no tools, brevity-first
+                          spoken answer; the canvas is painted by a
+                          separate writer pass).
+      voice_mode=True   → `prompts/voice_answer.py` (single-turn voice with
+                          full tool palette — legacy path).
+      otherwise         → `prompts/answer.py` (text mode).
     """
     # 1a. Self-description — silicon_brain user data.
     with _phase(phases, "ctx_profile_ms"):
@@ -193,9 +197,13 @@ async def assemble(
         except Exception as e:
             print(f"[teacher] read_media error (canvas state): {e}", flush=True)
 
-    # 8. Build the prompt. Voice mode uses the leaner voice_answer
-    # builder; text mode uses the full answer_format-aware builder.
-    builder = build_voice_answer_prompt if voice_mode else build_answer_prompt
+    # 8. Build the prompt.
+    if voice_leads:
+        builder = build_voice_brief_prompt
+    elif voice_mode:
+        builder = build_voice_answer_prompt
+    else:
+        builder = build_answer_prompt
     with _phase(phases, "ctx_build_prompt_ms"):
         parts = builder(
             passage=body.passage_text,

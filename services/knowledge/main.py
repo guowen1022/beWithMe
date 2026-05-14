@@ -21,6 +21,7 @@ import persona.teacher.models  # noqa: F401
 from services.knowledge.routers import (
     auth,
     documents,
+    events,
     health,
     media,
     preferences,
@@ -29,11 +30,14 @@ from services.knowledge.routers import (
     talk_preference,
     users,
 )
+from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
 
 app = FastAPI(title="beWithMe knowledge")
+install_event_log(app, service="knowledge")
 app.include_router(health.router, prefix="/api")
+app.include_router(events.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")

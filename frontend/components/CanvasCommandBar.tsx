@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { askStream, type AskRequest } from "@/lib/api";
+import { logEvent } from "@/lib/eventLog";
 
 // Bottom-fixed command bar for the dedicated /canvas page. Visual style
 // mirrors block-canvas/components/CommandBar.tsx (the PoC). On submit,
@@ -110,6 +111,14 @@ export default function CanvasCommandBar() {
     setBusy(true);
     setError(null);
     setDebugText(`> ${addressee === "frontend_engineer" ? "engineer" : "teacher"} ← ${command}\n`);
+    const submitT0 = performance.now();
+    logEvent("ui.ask.submit", {
+      modality: "text",
+      surface: "canvas_command_bar",
+      addressee,
+      question_len: command.length,
+      session_id: sessionIdRef.current,
+    });
     try {
       await askStream(
         {
@@ -132,6 +141,13 @@ export default function CanvasCommandBar() {
             setDebugText((prev) => prev + event.text);
           } else if (event.type === "answer") {
             setDebugText((prev) => `${prev}\n> done\n`);
+            logEvent("ui.ask.answer", {
+              surface: "canvas_command_bar",
+              session_id: sessionIdRef.current,
+              wall_ms: Math.round(performance.now() - submitT0),
+              answer_len: event.answer?.length ?? 0,
+              title: event.title ?? null,
+            });
           }
         },
       );
@@ -139,6 +155,12 @@ export default function CanvasCommandBar() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setDebugText((prev) => `${prev}\n> error: ${err instanceof Error ? err.message : String(err)}\n`);
+      logEvent("ui.ask.error", {
+        surface: "canvas_command_bar",
+        session_id: sessionIdRef.current,
+        error: err instanceof Error ? err.message : String(err),
+        wall_ms: Math.round(performance.now() - submitT0),
+      });
     } finally {
       setBusy(false);
     }

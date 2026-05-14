@@ -22,6 +22,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
+from infra.event_log import log_event
+from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
 
@@ -181,8 +183,18 @@ async def speak(body: SpeakRequest):
     speed = body.speed if body.speed is not None else settings.kokoro_speed
     lang = body.lang or settings.kokoro_lang
 
+    t0 = time.perf_counter()
     async with _infer_lock:
         wav_bytes = await asyncio.to_thread(_synthesize, kokoro, text, voice, speed, lang)
+    log_event(
+        "speak.done",
+        endpoint="speak",
+        text_len=len(text),
+        voice=voice,
+        lang=lang,
+        kokoro_ms=round((time.perf_counter() - t0) * 1000, 2),
+        wav_bytes=len(wav_bytes),
+    )
     return Response(content=wav_bytes, media_type="audio/wav")
 
 
@@ -209,6 +221,15 @@ async def speak_stream(body: SpeakRequest):
             _synthesize_pcm, kokoro, chunks[0], voice, speed, lang
         )
     first_chunk_ms = round((time.perf_counter() - first_chunk_t0) * 1000, 2)
+    log_event(
+        "speak.stream.first_chunk",
+        endpoint="speak/stream",
+        text_len=len(text),
+        chunk_count=len(chunks),
+        voice=voice,
+        lang=lang,
+        first_chunk_ms=first_chunk_ms,
+    )
 
     async def gen():
         yield first_pcm
@@ -258,6 +279,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="beWithMe speak", lifespan=lifespan)
+install_event_log(app, service="speak")
 app.include_router(router, prefix="/api")
 
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from infra.auth import parse_user_id as get_current_user_id
 from infra.contracts.ui import TeacherThinking
+from infra.event_log import log_event
 from infra.perception import is_likely_echo, record_user_speech
 from services.persona.routers.dynamic import enqueue_for_user
 
@@ -67,6 +68,16 @@ async def post_utterance(
         except ValueError:
             raise HTTPException(status_code=400, detail="X-Device-Id not a valid UUID")
 
+    log_event(
+        "perception.utterance.received",
+        user_id=str(user_id),
+        text_len=len(text),
+        language=body.language,
+        audio_duration_s=body.audio_duration_s,
+        target_persona=body.target_persona,
+        device_id=str(device_id) if device_id else None,
+    )
+
     # Echo dedup. The ambient_mic block on the same device as the
     # speakers can pick up the teacher's own TTS through the mic.
     # The transcript that comes back is essentially what the teacher
@@ -79,6 +90,11 @@ async def post_utterance(
             f"[perception_utterance] dropped echo: user={user_id} text={text[:80]!r}",
             flush=True,
         )
+        log_event(
+            "perception.utterance.dropped_echo",
+            user_id=str(user_id),
+            text_len=len(text),
+        )
         return UtteranceResponse(accepted=False, reason="echo", recorded=False)
 
     record_user_speech(
@@ -88,6 +104,12 @@ async def post_utterance(
         audio_duration_s=body.audio_duration_s,
         target_persona=body.target_persona,
         device_id=device_id,
+    )
+    log_event(
+        "perception.utterance.recorded",
+        user_id=str(user_id),
+        text_len=len(text),
+        target_persona=body.target_persona,
     )
 
     # Surface every heard phrase in the existing teacher-thinking debug

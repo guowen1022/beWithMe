@@ -22,6 +22,7 @@ from services.shell.auth import (
     parse_user_header,
     verify_against_knowledge,
 )
+from infra.event_log_middleware import install_event_log
 from infra.topology import route_for_path, service_port, upstream_url
 
 
@@ -61,6 +62,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="beWithMe shell", description="API gateway", lifespan=lifespan)
+
+# Mount FIRST so it wraps every request (Starlette runs middlewares LIFO
+# of add order — last added runs outermost). We want CORS outermost and
+# event-log inside it.
+install_event_log(app, service="shell")
 
 app.add_middleware(
     CORSMiddleware,

@@ -95,6 +95,7 @@ def build(
     talk_preference: dict | None = None,
     recent_user_speech: Optional[List["UserUtterance"]] = None,
     recent_notices: Optional[List[str]] = None,
+    voice_leads: bool = False,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
 
@@ -102,6 +103,12 @@ def build(
     triggered this turn. The reflect_policy.md skill tells the LLM how
     to read them: act on deterministic next steps, otherwise stay
     silent.
+
+    When `voice_leads=True`, the prompt drops every skill that mentions
+    tools (canvas_persona, canvas skills, respond_to_speech) and loads
+    `voice_brief.md` in their place. The Lane A turn becomes a
+    tools-free spoken answer; a separate canvas-writer pass mounts any
+    visuals afterward.
     """
     # ---- STATIC SYSTEM ---------------------------------------------------
     system_parts: List[str] = []
@@ -111,26 +118,41 @@ def build(
         system_parts.append(teaching_principle)
         system_parts.append("")
 
-    canvas_persona = load_skill("teacher/canvas_persona")
-    if canvas_persona:
-        system_parts.append(canvas_persona)
-        system_parts.append("")
-
-    for skill_name in _CANVAS_SKILLS:
-        body = load_skill(skill_name)
-        if body:
-            system_parts.append(body)
+    if voice_leads:
+        # Voice-leads: no tools on this pass. Load only the brevity rules
+        # plus the reflect policy (which governs "stay silent vs. reply"
+        # — still relevant). Skip canvas skills entirely; the writer pass
+        # owns canvas.
+        voice_brief = load_skill("teacher/voice_brief")
+        if voice_brief:
+            system_parts.append(voice_brief)
             system_parts.append("")
 
-    reflect_policy = load_skill("teacher/reflect_policy")
-    if reflect_policy:
-        system_parts.append(reflect_policy)
-        system_parts.append("")
+        reflect_policy = load_skill("teacher/reflect_policy")
+        if reflect_policy:
+            system_parts.append(reflect_policy)
+            system_parts.append("")
+    else:
+        canvas_persona = load_skill("teacher/canvas_persona")
+        if canvas_persona:
+            system_parts.append(canvas_persona)
+            system_parts.append("")
 
-    respond_to_speech = load_skill("teacher/respond_to_speech")
-    if respond_to_speech:
-        system_parts.append(respond_to_speech)
-        system_parts.append("")
+        for skill_name in _CANVAS_SKILLS:
+            body = load_skill(skill_name)
+            if body:
+                system_parts.append(body)
+                system_parts.append("")
+
+        reflect_policy = load_skill("teacher/reflect_policy")
+        if reflect_policy:
+            system_parts.append(reflect_policy)
+            system_parts.append("")
+
+        respond_to_speech = load_skill("teacher/respond_to_speech")
+        if respond_to_speech:
+            system_parts.append(respond_to_speech)
+            system_parts.append("")
 
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))

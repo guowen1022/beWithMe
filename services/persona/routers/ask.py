@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import time
 from typing import Optional
@@ -9,10 +10,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
 from infra.contracts.ui import BlockSpec
+from infra.event_log import log_event
 from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title
 from persona.teacher.silicon_brain_client import SiliconBrainClient
+from persona.teacher.writer import run_canvas_writer
 from infra.model.llm import generate_cached
 from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
@@ -285,6 +288,29 @@ async def ask_stream(
     active_channel = _resolve_active_channel(talk_pref, device_class)
     voice_mode = active_channel in ("voice", "both")
 
+    # Voice-leads two-call pattern (Phase 1). When the env flag is set and
+    # the active channel is voice, the request runs as: (1) a tools-free
+    # voice call that streams brief prose through auto-speak; (2) a
+    # background canvas-writer call spawned after the voice `done` event,
+    # which mounts at most one rich_card derived from the voice transcript.
+    # The non-voice path is unchanged; flag-off keeps the existing
+    # single-turn voice path intact.
+    voice_leads_enabled = voice_mode and os.environ.get("BWM_VOICE_LEADS", "0") == "1"
+
+    req_id = getattr(request.state, "event_req_id", None)
+    log_event(
+        "ask.start",
+        req_id=req_id,
+        user_id=str(user_id),
+        question_len=len(question),
+        addressee=getattr(body, "addressee", None),
+        device_class=device_class,
+        active_channel=active_channel,
+        voice_mode=voice_mode,
+        voice_leads=voice_leads_enabled,
+        x_lane_thinking=x_lane_thinking,
+    )
+
     # Benchmark instrumentation: collect per-phase elapsed milliseconds keyed
     # off a single perf_counter origin. Reported on the terminal SSE event as
     # `phase_timings_ms`. No-op outside the benchmark path — instrumentation
@@ -309,13 +335,17 @@ async def ask_stream(
         disable_thinking = False
     phases["disable_thinking"] = disable_thinking
     phases["profile"] = lane_a_profile or "(none)"
+    phases["voice_leads"] = voice_leads_enabled
 
     with_assemble_t0 = time.perf_counter()
     ctx = await assemble_context(
-        body, user_id, db, client, phases=phases, voice_mode=voice_mode
+        body, user_id, db, client,
+        phases=phases, voice_mode=voice_mode, voice_leads=voice_leads_enabled,
     )
     phases["context_total_ms"] = round((time.perf_counter() - with_assemble_t0) * 1000, 2)
-    teacher_tools = build_teacher_tools(user_id)
+    # Voice-leads: no tools on the voice pass — auto-speak streams the
+    # answer; the canvas-writer pass spawned after `done` handles visuals.
+    teacher_tools = [] if voice_leads_enabled else build_teacher_tools(user_id)
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -486,6 +516,15 @@ async def ask_stream(
                 "usage": usage,
             })
             phases["total_ms"] = round((time.perf_counter() - timing_origin) * 1000, 2)
+            log_event(
+                "ask.done",
+                req_id=req_id,
+                user_id=str(user_id),
+                answer_len=len(answer_body),
+                title=extracted_title,
+                usage=usage,
+                phases=phases,
+            )
             await status_queue.put({
                 "type": "answer",
                 "answer": answer_body,
@@ -493,6 +532,30 @@ async def ask_stream(
                 "related_interaction_ids": [],
                 "phase_timings_ms": phases,
             })
+
+            # Phase 1 voice-leads: spawn the canvas-writer pass now that
+            # the spoken answer is complete. The task runs detached from
+            # the SSE stream — by the time the writer's tool call fires,
+            # the user is already listening to the auto-spoken response,
+            # and the rich_card pops onto the canvas during playback.
+            if voice_leads_enabled and answer_body:
+                writer_task = asyncio.create_task(run_canvas_writer(
+                    question=question,
+                    transcript=answer_body,
+                    user_id=user_id,
+                    req_id=req_id,
+                    origin=timing_origin,
+                    source="ask",
+                ))
+                _background_tasks.add(writer_task)
+                writer_task.add_done_callback(_background_tasks.discard)
+                log_event(
+                    "ask.voice_done",
+                    req_id=req_id,
+                    user_id=str(user_id),
+                    transcript_len=len(answer_body),
+                    auto_speak_first_ms=phases.get("auto_speak_first_ms"),
+                )
         except Exception as e:
             print(f"[ask/stream] error: {e}", flush=True)
             import traceback

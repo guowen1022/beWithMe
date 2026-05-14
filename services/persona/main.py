@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from infra.event_log_middleware import install_event_log
 from infra.observability import register_emit
 from infra.topology import service_port
 from persona.teacher import triggers as teacher_triggers
@@ -59,6 +60,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="beWithMe persona", lifespan=lifespan)
+# Skip /api/dynamic/stream — it's a long-lived SSE channel; logging start
+# per open is fine but we don't need it spamming alongside every request.
+install_event_log(app, service="persona", skip_paths=("/api/dynamic/stream",))
 app.include_router(ask_router.router, prefix="/api")
 app.include_router(interactions_router.router, prefix="/api")
 app.include_router(recommender_router.router, prefix="/api")
