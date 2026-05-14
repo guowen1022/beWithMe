@@ -383,6 +383,15 @@
           heard.textContent = '(no speech detected in phrase #' + phraseCount + ')';
           return null;
         }
+        // Whisper-on-silence filter: drop "uh" / "ok" / "[silence]"
+        // and other ≤2-char fragments before they reach the persona.
+        // Without this, every stray click trips Lane A and the teacher
+        // verbalizes a refusal ("no action needed") via TTS. Mirrors
+        // mobile's isNoiseTranscript in voiceTurn.ts.
+        if (audio.isNoiseTranscript && audio.isNoiseTranscript(text)) {
+          heard.textContent = '(noise — ' + JSON.stringify(text) + ')';
+          return null;
+        }
         // Echo the transcript inline so the user can verify capture
         // mid-turn. Each phrase is rolled into the gate; the persona
         // only sees the merged text after the gate commits.

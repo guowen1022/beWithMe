@@ -18,6 +18,7 @@ import {
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, stopAllMicStreams, type MicVadHandle } from "@/lib/vad";
 import { createEouGate, type EouGate, type EouGateOptions } from "@/lib/eouGate";
+import { isNoiseTranscript } from "@/lib/transcribeFilter";
 import * as micArbiter from "@/lib/micArbiter";
 import { marked } from "marked";
 
@@ -132,6 +133,11 @@ export function Block({ id, source }: Props) {
          * /api/eou model judges the turn complete (or on hard-timeout
          * / max-phrases fallback). Bypassed entirely if EOU is unconfigured. */
         createEouGate(opts: EouGateOptions): EouGate;
+        /** Whisper-on-silence noise filter. Returns true for the common
+         *  hallucinations whisper emits on silence/clicks ("uh", "ok",
+         *  "you", "[silence]", …) so callers can drop the phrase before
+         *  it reaches the persona. Mirrors mobile's filter. */
+        isNoiseTranscript(text: string): boolean;
         /** Defensive: stop every mic track this module ever opened.
          * Used by the ambient_mic block as belt-and-suspenders during
          * mute/cleanup, in case a previous instance leaked. */
@@ -249,6 +255,7 @@ export function Block({ id, source }: Props) {
         return { text, duration_seconds };
       },
       createEouGate(opts) { return createEouGate(opts); },
+      isNoiseTranscript(text) { return isNoiseTranscript(text); },
       stopAll() { stopAllMicStreams(); },
     };
 
