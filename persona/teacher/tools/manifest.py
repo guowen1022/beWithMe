@@ -51,6 +51,7 @@ from tools.read_url import read_url
 from tools.speak import speak
 from tools.web_view import web_view
 from workshop.canvas.tools.block_action import block_action
+from workshop.canvas.tools.edit_rich_card import edit_rich_card
 from workshop.canvas.tools.interactive_graph import interactive_graph
 from workshop.canvas.tools.layout_blocks import layout_blocks
 from workshop.canvas.tools.list_media import list_media
@@ -229,6 +230,72 @@ def _make_mount_template(user_id: UUID):
             "template": result.template,
             "deleted": result.deleted,
         })
+    return executor
+
+
+def _make_edit_rich_card(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        # `_raw_arguments` = LLM truncated mid-stream; surface a retry hint.
+        if "_raw_arguments" in args:
+            return json.dumps({
+                "error": (
+                    "tool arguments were truncated mid-stream — retry with "
+                    "fewer or shorter ops"
+                )
+            })
+
+        block_id = (args.get("block_id") or "").strip()
+        if not block_id:
+            return json.dumps({"error": "block_id is required"})
+
+        ops = args.get("ops")
+        if isinstance(ops, str):
+            # Some providers emit nested arrays as JSON strings. Accept.
+            try:
+                ops = json.loads(ops)
+            except json.JSONDecodeError:
+                return json.dumps({"error": "ops was a string but not valid JSON"})
+        if not isinstance(ops, list):
+            return json.dumps({
+                "error": f"ops must be a list, got {type(ops).__name__}"
+            })
+
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        if target_uuid is None:
+            from infra.contracts.output_routing import get_output_device_id
+            ctx_target = get_output_device_id()
+            if ctx_target is not None:
+                target_uuid = ctx_target
+
+        import time as _t_mod
+        t0 = _t_mod.perf_counter()
+        try:
+            result = await edit_rich_card(
+                user_id=user_id,
+                block_id=block_id,
+                ops=ops,
+                target_device_id=target_uuid,
+            )
+        except Exception as e:
+            return json.dumps({"error": f"{type(e).__name__}: {e}"})
+        wall_ms = round((_t_mod.perf_counter() - t0) * 1000, 2)
+
+        # Log even on error so we can see misses too.
+        from infra.event_log import log_event
+        log_event(
+            "ask.edit_rich_card",
+            user_id=str(user_id),
+            block_id=block_id,
+            wall_ms=wall_ms,
+            ops_count=len(ops) if isinstance(ops, list) else 0,
+            op_names=(result.get("op_names") if isinstance(result, dict) else None),
+            error=(result.get("error") if isinstance(result, dict) else None),
+        )
+        return json.dumps(result)
     return executor
 
 
@@ -843,6 +910,7 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # context that's already in the prompt go to Lane B only.
     "speak":              {"answer", "user_facing", "research"},
     "mount_template":     {"answer", "user_facing", "background", "research", "writer"},
+    "edit_rich_card":     {"answer", "user_facing", "background", "research", "writer"},
     "block_action":       {"answer", "user_facing", "background", "research"},
     "push_block_content": {"answer", "user_facing", "background", "research"},
     "point_arrow":        {"answer", "user_facing", "background", "research"},
@@ -1401,6 +1469,103 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_mount_template(user_id),
+        ),
+        ToolSpec(
+            name="edit_rich_card",
+            description=(
+                "Apply a list of animated edits to an already-mounted "
+                "rich_card. Use this — NOT `mount_template` — when an "
+                "existing rich_card is on the same topic and should "
+                "EVOLVE rather than be wiped and re-mounted. The user "
+                "sees each op animate in place: new content slides in, "
+                "highlights pulse, revisions flash diff colors.\n"
+                "\n"
+                "Op types:\n"
+                "  • `append`  {html: '<p>...</p>'} — add HTML at the "
+                "end of the card body. Animates slide+fade-in.\n"
+                "  • `prepend` {html: '...'} — add at the start.\n"
+                "  • `replace_section` {anchor_text, html} — find the "
+                "first <p>/<h2>/<div> containing anchor_text and swap "
+                "it for new html. Animates cross-fade.\n"
+                "  • `revise` {target_text, new_text} — replace inline "
+                "text matching target_text with new_text, marked with "
+                "<del>/<ins>. Animates revision-flash. Use for "
+                "corrections: 'cuneiform was ~3200 BCE, not 4000'.\n"
+                "  • `highlight` {target_text, duration_ms?} — pulse-"
+                "animate matching text. NO structural change. Use when "
+                "the spoken answer just referenced something already "
+                "shown: 'as I said about the Sumerians'.\n"
+                "  • `arrow_to_text` {target_text, label?, direction?} "
+                "— float a small arrow chip pointing at the matching "
+                "text. Hangs ~3s.\n"
+                "  • `annotate` {target_text, note} — attach a small "
+                "caption near the matching text. Persists until next "
+                "edit turn.\n"
+                "\n"
+                "All html fields run through the same sanitizer as "
+                "mount_template; use the same grammar (cards, t-display, "
+                "<mark>, bw-diagram, etc.). target_text / anchor_text "
+                "must match a substring of the card's visible text — "
+                "exact case, no fuzzy match.\n"
+                "\n"
+                "You can mix ops in one call (e.g. append a new "
+                "paragraph AND highlight a related earlier phrase in "
+                "the same turn). The client animates them roughly "
+                "simultaneously.\n"
+                "\n"
+                "Returns {block_id, ops_applied, op_names} on success, "
+                "{error: '...'} on validation failure (unknown op, "
+                "missing target_text, malformed html). On error, fix "
+                "and retry — DO NOT fall back to mount_template, which "
+                "would wipe the card."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "block_id": {
+                        "type": "string",
+                        "description": "Block id of the rich_card to edit (e.g. 'rich-card').",
+                    },
+                    "ops": {
+                        "type": "array",
+                        "description": "List of operations to apply in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {
+                                    "type": "string",
+                                    "enum": [
+                                        "append", "prepend", "replace_section",
+                                        "revise", "highlight", "arrow_to_text",
+                                        "annotate",
+                                    ],
+                                },
+                                "html": {"type": "string"},
+                                "target_text": {"type": "string"},
+                                "anchor_text": {"type": "string"},
+                                "new_text": {"type": "string"},
+                                "duration_ms": {"type": "integer"},
+                                "label": {"type": "string"},
+                                "direction": {
+                                    "type": "string",
+                                    "enum": ["left", "right", "up", "down"],
+                                },
+                                "note": {"type": "string"},
+                            },
+                            "required": ["op"],
+                            "additionalProperties": False,
+                        },
+                        "minItems": 1,
+                    },
+                    "target_device_id": {
+                        "type": "string",
+                        "description": "Optional UUID; route edits to this device only.",
+                    },
+                },
+                "required": ["block_id", "ops"],
+                "additionalProperties": False,
+            },
+            executor=_make_edit_rich_card(user_id),
         ),
         ToolSpec(
             name="request_new_block",

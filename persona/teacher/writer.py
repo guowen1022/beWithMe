@@ -1,13 +1,23 @@
-"""Canvas-writer pass — voice-leads Phase 1.
+"""Canvas-writer pass — voice-leads Phases 1 and 2.
 
 Runs *after* the spoken pass of a voice turn completes. Given the user's
 question (or trigger summary) and the spoken transcript, builds a small
-prompt exposing only `mount_template` and runs one short tool loop.
+prompt and runs one short tool loop.
+
+Phase 1 exposed only `mount_template` — every visual turn mounted a
+fresh rich_card, replacing any prior card.
+
+Phase 2 also exposes `edit_rich_card` and injects the full cached HTML
+of every currently-mounted rich_card into the writer's prompt. The
+writer chooses among:
+  * mount a new card (`mount_template`) — no rich_card on canvas, or
+    the topic has shifted entirely;
+  * evolve the existing card (`edit_rich_card`) — append a paragraph,
+    revise a fact, highlight what voice just referenced;
+  * do nothing — voice answer is self-contained.
 
 Detached from the SSE stream of the originating request: callers spawn
-this as `asyncio.create_task(run_canvas_writer(...))` and forget. The
-writer's mount fires onto the user's canvas via the same SSE channel
-the existing mount_template tool uses.
+this as `asyncio.create_task(run_canvas_writer(...))` and forget.
 
 Shared between the typed path (`services/persona/routers/ask.py`) and
 the perception/Lane A path (`persona/teacher/triggers.py`).
@@ -16,14 +26,45 @@ from __future__ import annotations
 
 import time
 import traceback
-from typing import Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from infra.event_log import log_event
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_tools
+from workshop.canvas.tools import _rich_card_cache
 from workshop.canvas.tools.read_media import read_media
+
+
+def _collect_existing_rich_cards(canvas_state, user_id: UUID) -> Dict[str, str]:
+    """For every rich_card block visible in `canvas_state`, fetch the
+    cached HTML so we can inject it into the writer prompt.
+
+    Returns a dict of block_id → HTML. Blocks whose state.kind isn't
+    `'rich'` are skipped; blocks present in canvas_state but missing
+    from the cache (race or pre-cache mount) are also skipped — the
+    writer just won't see their content this turn.
+    """
+    out: Dict[str, str] = {}
+    if canvas_state is None:
+        return out
+    canvases = getattr(canvas_state, "canvases", None) or []
+    seen: set[str] = set()
+    for canvas in canvases:
+        for block in getattr(canvas, "blocks", None) or []:
+            bid = getattr(block, "id", None)
+            if not bid or bid in seen:
+                continue
+            seen.add(bid)
+            state = getattr(block, "state", None)
+            kind = getattr(state, "kind", None) if state is not None else None
+            if kind != "rich":
+                continue
+            html = _rich_card_cache.get(user_id, bid)
+            if html:
+                out[bid] = html
+    return out
 
 
 async def run_canvas_writer(
@@ -37,10 +78,10 @@ async def run_canvas_writer(
 ) -> None:
     """Voice-leads canvas pass — runs after the spoken answer completes.
 
-    Builds the writer-only prompt (`prompts/canvas_writer.py`) which
-    exposes just `mount_template`. The model decides whether to mount a
-    rich_card or stay silent. Errors are caught and logged; we never
-    raise — the SSE stream that birthed this task is already closed.
+    Builds the writer prompt with the full HTML of any existing
+    rich_card, exposes `mount_template` + `edit_rich_card`, and runs
+    a short tool loop. Errors are caught and logged; we never raise —
+    the SSE stream that birthed this task is already closed.
     """
     writer_t0 = time.perf_counter()
     canvas_state = None
@@ -49,14 +90,18 @@ async def run_canvas_writer(
     except Exception as e:
         print(f"[writer] read_media error: {e}", flush=True)
 
+    existing_cards = _collect_existing_rich_cards(canvas_state, user_id)
+
     parts = build_canvas_writer_prompt(
         question=question,
         voice_transcript=transcript,
         canvas_state=canvas_state,
+        existing_rich_cards=existing_cards,
     )
     writer_tools = build_tools(user_id, lane="writer")
 
     mount_fired = False
+    edit_ops: List[str] = []
     error: Optional[str] = None
     try:
         async for evt in run_teacher_tool_loop(
@@ -70,8 +115,16 @@ async def run_canvas_writer(
             max_iterations=2,
             profile="voice",
         ):
-            if evt.get("kind") == "tool_call" and evt.get("name") == "mount_template":
+            if evt.get("kind") != "tool_call":
+                continue
+            name = evt.get("name")
+            if name == "mount_template":
                 mount_fired = True
+            elif name == "edit_rich_card":
+                ops = (evt.get("arguments") or {}).get("ops") or []
+                for op in ops:
+                    if isinstance(op, dict) and op.get("op"):
+                        edit_ops.append(op["op"])
     except Exception as e:
         error = str(e)
         print(f"[writer] tool loop error: {e}", flush=True)
@@ -89,6 +142,8 @@ async def run_canvas_writer(
             else None
         ),
         mount_fired=mount_fired,
+        edit_ops=edit_ops or None,
+        cached_cards_seen=len(existing_cards),
         transcript_len=len(transcript),
         error=error,
     )

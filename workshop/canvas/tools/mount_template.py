@@ -34,7 +34,7 @@ from infra.perception import forget_block
 from infra.render.rich_card import process as preprocess_rich_card
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
-from workshop.canvas.tools import _template_registry
+from workshop.canvas.tools import _rich_card_cache, _template_registry
 from services.persona.routers.dynamic import (
     enqueue_for_device,
     enqueue_for_user,
@@ -102,6 +102,10 @@ def _render_block_source(
     # derived from its block_id so the persona can update one without
     # cross-talking to another.
     js = js.replace("__CONTENT_TOPIC__", f"text.{block_id}.content")
+    # Per-block edits topic. Phase 2 voice-leads — rich_card subscribes
+    # here for animated patches (append/highlight/revise/…). Other
+    # templates ignore the placeholder if they don't reference it.
+    js = js.replace("__EDITS_TOPIC__", f"text.{block_id}.edits")
     # Template-specific params. Today: `content` (text_display) and
     # `url`/`title`/`excerpt` (url_card). Each substitutes as a
     # JSON-encoded JS literal — quote/escape safety lives at the
@@ -241,6 +245,9 @@ async def mount_template(
     if template_name == "rich_card" and params and isinstance(params.get("content"), str):
         processed = await preprocess_rich_card(params["content"])
         params = {**params, "content": processed}
+        # Phase 2 voice-leads: cache the rendered HTML so the canvas
+        # writer can compose surgical edits against it on the next turn.
+        _rich_card_cache.set(user_id, bid, processed)
 
     rendered = _render_block_source(template, bid, g, params)
 
@@ -281,6 +288,7 @@ async def mount_template(
         ))
         forget_block(user_id=user_id, block_id=stale_id)
         _template_registry.forget(stale_id)
+        _rich_card_cache.forget(user_id, stale_id)
 
     deleted: list[str] = []
     if replace:
@@ -293,6 +301,7 @@ async def mount_template(
             ))
             forget_block(user_id=user_id, block_id=old_id)
             _template_registry.forget(old_id)
+            _rich_card_cache.forget(user_id, old_id)
             deleted.append(old_id)
 
     await _send(UIUpdate(action="mount", block=block_source))

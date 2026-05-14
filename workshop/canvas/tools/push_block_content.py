@@ -18,7 +18,7 @@ from uuid import UUID
 from infra.contracts.ui import BlockMessage
 from infra.render.rich_card import process as preprocess_rich_card
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from workshop.canvas.tools import _template_registry
+from workshop.canvas.tools import _rich_card_cache, _template_registry
 
 
 async def push_block_content(
@@ -39,8 +39,11 @@ async def push_block_content(
     ):
         if isinstance(value, str):
             value = await preprocess_rich_card(value)
+            _rich_card_cache.set(user_id, block_id, value)
         elif isinstance(value, dict) and isinstance(value.get("content"), str):
-            value = {**value, "content": await preprocess_rich_card(value["content"])}
+            processed = await preprocess_rich_card(value["content"])
+            value = {**value, "content": processed}
+            _rich_card_cache.set(user_id, block_id, processed)
 
     event = BlockMessage(block_id=block_id, topic=topic, value=value)
     if target_device_id is not None:
