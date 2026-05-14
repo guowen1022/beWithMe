@@ -19,8 +19,9 @@ import { buildHelpers } from "../helpers";
 import { ambientMicManifest } from "./AmbientMicBlock.manifest";
 import { startRecording, type RecorderHandleV2 } from "../../lib/audio/recorder";
 import { ensureMicPermission } from "../../lib/audio/permissions";
-import { runVoiceTurn } from "../../lib/session/voiceTurn";
+import { runVoiceTurn, runVoiceTurnFromText, transcribeOnly } from "../../lib/session/voiceTurn";
 import { createSileroVad, type SileroVadHandle } from "../../lib/vad/sileroVad";
+import { createEouGate, type EouGate } from "../../lib/eouGate";
 import { stopPlayer } from "../../lib/audio/player";
 import type { BlockProps } from "../blockRegistry";
 import type { RootStackParamList } from "../../navigation/RootNavigator";
@@ -57,6 +58,13 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
   const ambientUnsubFrameRef = useRef<(() => void) | null>(null);
   const ambientTurnInFlight = useRef(false);
   const ambientOnRef = useRef(false);
+  // EOU gate: silero fires onPhrase every ~640ms of silence, but real
+  // utterances bleed through disfluencies ("what is the... uh..."). The
+  // gate transcribes each phrase, buffers it, and only fires onCommit
+  // when /api/eou judges the merged transcript a real end-of-turn (or
+  // the hard timeout / max-phrases fallback). Falls open if EOU is
+  // unconfigured → behavior matches today.
+  const ambientGateRef = useRef<EouGate | null>(null);
 
   // Pulse / breathe animation depending on state.
   const pulse = useRef(new Animated.Value(0)).current;
@@ -87,6 +95,10 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
     ambientUnsubFrameRef.current = null;
     ambientVadRef.current?.destroy();
     ambientVadRef.current = null;
+    // Drop any buffered EOU phrases — committing them after teardown
+    // would surface a turn the user thought they cancelled.
+    ambientGateRef.current?.reset();
+    ambientGateRef.current = null;
     const rec = ambientRecorderRef.current;
     ambientRecorderRef.current = null;
     if (rec) { try { await rec.stop(); } catch { /* ignore */ } }
@@ -103,12 +115,41 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
       return;
     }
     try {
+      // Build the gate first so onPhrase below can ingest into it.
+      // onCommit fires once the merged user turn is judged complete —
+      // that's the moment we engage the persona.
+      const gate = createEouGate({
+        onCommit: ({ text, totalDurationS }) => {
+          if (ambientTurnInFlight.current) return;
+          ambientTurnInFlight.current = true;
+          turnAbortRef.current?.abort();
+          const ctl = new AbortController();
+          turnAbortRef.current = ctl;
+          runVoiceTurnFromText(text, totalDurationS, {
+            setMode: setVoiceMode,
+            onError: (err) => console.warn("[ambient_mic] turn error:", err),
+          }, ctl.signal).finally(() => {
+            ambientTurnInFlight.current = false;
+            if (turnAbortRef.current === ctl) turnAbortRef.current = null;
+            if (ambientOnRef.current) setVoiceMode("ambient");
+          });
+        },
+        onDecision: (info) => {
+          console.log("[ambient_mic] eou commit:", info);
+        },
+      });
+      ambientGateRef.current = gate;
+
       const vad = await createSileroVad({
         // Barge-in: when speech begins while a turn is in flight (whether
         // we're transcribing/thinking/speaking), abort the in-flight turn
         // and stop the AudioTrack. The subsequent onPhrase will fire the
         // new turn naturally. AEC + server-side echo dedup keep this from
         // self-triggering off our own TTS playback.
+        //
+        // Gate state during barge-in: the gate is already empty (cleared
+        // on the prior commit), so no reset is needed. New phrases will
+        // ingest into a fresh empty gate and start a new turn buffer.
         onSpeechStart: () => {
           if (!ambientTurnInFlight.current) return;
           turnAbortRef.current?.abort();
@@ -116,24 +157,34 @@ export function AmbientMicBlock({ blockId }: BlockProps): React.ReactElement {
           stopPlayer().catch(() => {});
           ambientTurnInFlight.current = false;
         },
-        onPhrase: (wavUri) => {
+        onPhrase: (wavUri, phraseId) => {
+          // While a committed turn is running, don't accept new phrases —
+          // barge-in (onSpeechStart) is the path for interrupting. silero
+          // can still fire onPhrase mid-turn if a short utterance fully
+          // ended before the player even started; drop it.
           if (ambientTurnInFlight.current) return;
-          ambientTurnInFlight.current = true;
-          // VAD + recorder stay running through the turn so we can
-          // barge-in on TTS. AEC removes our speaker output from the mic.
-          turnAbortRef.current?.abort();
-          const ctl = new AbortController();
-          turnAbortRef.current = ctl;
-          runVoiceTurn(wavUri, {
-            setMode: setVoiceMode,
-            onError: (err) => console.warn("[ambient_mic] turn error:", err),
-          }, ctl.signal).finally(() => {
-            ambientTurnInFlight.current = false;
-            if (turnAbortRef.current === ctl) turnAbortRef.current = null;
-            // After the turn, drop back to the ambient resting state if
-            // we're still listening. No restart needed — VAD/recorder
-            // never stopped.
-            if (ambientOnRef.current) setVoiceMode("ambient");
+          setVoiceMode("transcribing");
+          transcribeOnly(wavUri).then((trans) => {
+            if (!trans) return;
+            if (trans.isNoise) {
+              // Whisper hallucination on click/silence — don't ingest.
+              if (ambientOnRef.current && !ambientTurnInFlight.current) {
+                setVoiceMode("ambient");
+              }
+              return;
+            }
+            // Back to listening while the gate decides. The dot stays
+            // green-ambient until the gate commits and runVoiceTurnFromText
+            // flips it to "thinking".
+            if (ambientOnRef.current && !ambientTurnInFlight.current) {
+              setVoiceMode("ambient");
+            }
+            ambientGateRef.current?.ingest(trans.text, phraseId, trans.durationS);
+          }).catch((err) => {
+            console.warn("[ambient_mic] transcribe failed:", err);
+            if (ambientOnRef.current && !ambientTurnInFlight.current) {
+              setVoiceMode("ambient");
+            }
           });
         },
         onError: (err) => console.warn("[ambient_mic] vad error:", err),

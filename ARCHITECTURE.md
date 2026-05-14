@@ -86,7 +86,7 @@ Services don't decide; they execute. Each service is a FastAPI process at a fixe
 | shell | +0 | reverse proxy, auth gate (`X-User-Id` verify, 60s TTL cache), CORS |
 | persona | +1 | the persona's HTTP face — hosts persona endpoints today; will host the generic dispatch tomorrow |
 | knowledge | +2 | silicon-brain HTTP face (CRUD + read/write APIs persona consumes) |
-| transcribe | +3 | local Whisper |
+| transcribe | +3 | local Whisper + LiveKit text turn-detector (`/api/eou`) — co-located perception primitives |
 | speak | +4 | local Kokoro |
 | browser | +5 | Playwright (headless web fetch + handoff) |
 | **frontend-sandbox** (planned) | +6 | runtime UI generation + validation, see § 5 |

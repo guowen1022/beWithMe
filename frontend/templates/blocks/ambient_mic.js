@@ -191,6 +191,13 @@
       // forwards the transcript to the backend before we tear down.
       if (next === 'closed' && mode !== 'closed') {
         if (h && h.flush) { try { h.flush(); } catch (e) { console.warn(e); } }
+        // The VAD flush() fired onPhrase synchronously, but the
+        // transcribe inside is async. Schedule gate.flush() on the
+        // next tick so the gate has a chance to absorb the just-
+        // flushed phrase before committing.
+        if (gate && gate.pending && gate.pending()) {
+          setTimeout(function () { try { gate.flush(); } catch (e) { console.warn(e); } }, 0);
+        }
       }
       mode = next;
       muted = (mode === 'closed');
@@ -318,6 +325,39 @@
     });
 
     var phraseInFlight = 0;
+    // EOU gate: phrases get transcribed and buffered, but the persona
+    // doesn't see them until the gate decides the user is actually done
+    // (or the hard-timeout fires). Lets us absorb disfluencies like
+    // "what is the... uh... difference between... um..." into one
+    // committed turn instead of trip-firing the ask pipeline per "uh".
+    var lastCommittedText = '';
+    var gate = audio.createEouGate ? audio.createEouGate({
+      onCommit: function (info) {
+        // Server runs is_likely_echo on the merged text. If it matches
+        // recent teacher TTS, accepted=false reason=echo → suppress.
+        var text = info && info.text ? info.text : '';
+        if (!text) return;
+        lastCommittedText = text;
+        backend.recordUtterance({
+          text: text,
+          language: null,
+          audio_duration_s: info.totalDurationS || null,
+          target_persona: speakTo,
+        }).then(function (resp) {
+          if (resp && resp.accepted === false && resp.reason === 'echo') {
+            // Quietly clear the inline echo from the panel.
+            if (heard.textContent.indexOf(text.slice(0, 40)) !== -1) {
+              heard.textContent = muted ? 'muted' : 'Listening for speech…';
+            }
+          }
+        }).catch(function (err) {
+          console.warn('[ambient_mic] recordUtterance failed', err);
+        });
+      },
+      onDecision: function (info) {
+        console.log('[ambient_mic] eou commit:', info);
+      },
+    }) : null;
 
     function onSpeechStart() {
       startCount++;
@@ -343,33 +383,25 @@
           heard.textContent = '(no speech detected in phrase #' + phraseCount + ')';
           return null;
         }
-        // Echo the transcript inline so the user can verify capture before
-        // (or independently of) any teacher reaction. If the server
-        // turns around and says it's an echo of our own TTS, we clear
-        // it below — this brief flash is the cost of the round-trip.
+        // Echo the transcript inline so the user can verify capture
+        // mid-turn. Each phrase is rolled into the gate; the persona
+        // only sees the merged text after the gate commits.
         heard.textContent = '“' + text + '”';
-        return backend.recordUtterance({
-          text: text,
-          language: out.language || null,
-          audio_duration_s: out.duration_seconds || null,
-          target_persona: speakTo,
-        }).then(function (resp) {
-          // Server echo dedup: when the perception endpoint identifies
-          // this phrase as the teacher's own TTS bouncing back through
-          // the speakers, it returns accepted=false reason=echo. Hide
-          // the displayed transcript so the panel doesn't fill with
-          // the teacher's own words (matches the server behavior of
-          // suppressing the debug-panel emit). Anything else stays
-          // visible — including legitimate interruptions ("stop",
-          // "wait") that the dedup is designed to let through.
-          if (resp && resp.accepted === false && resp.reason === 'echo') {
-            // Only clear if the user hasn't already started a fresh phrase.
-            if (heard.textContent.indexOf(text) !== -1) {
-              heard.textContent = muted ? 'muted' : 'Listening for speech…';
-            }
-          }
-          return resp;
-        });
+        if (gate) {
+          gate.ingest(text, phraseId, out.duration_seconds || 0);
+        } else {
+          // EOU helper missing (older host shell): fall back to
+          // per-phrase commits — today's behavior.
+          backend.recordUtterance({
+            text: text,
+            language: out.language || null,
+            audio_duration_s: out.duration_seconds || null,
+            target_persona: speakTo,
+          }).catch(function (err) {
+            console.warn('[ambient_mic] fallback recordUtterance failed', err);
+          });
+        }
+        return null;
       }).catch(function (err) {
         console.warn('[ambient_mic] phrase failed', err);
         heard.textContent = 'transcribe error: ' + ((err && err.message) || err);
@@ -437,6 +469,12 @@
       handleRef.current = null;
       if (h && h.stop) {
         try { h.stop(); } catch (_) { /* noop */ }
+      }
+      // Drop any buffered EOU state — the block is going away so there's
+      // no one to consume an onCommit fire-and-forget that lands after
+      // the React tree unmounts.
+      if (gate && gate.reset) {
+        try { gate.reset(); } catch (_) { /* noop */ }
       }
       // Belt-and-suspenders: nuke any leaked mic stream this module
       // opened in case a previous instance's cleanup didn't run after

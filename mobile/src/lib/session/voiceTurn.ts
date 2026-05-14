@@ -2,6 +2,15 @@
 // sentence-buffered speak. The function is mode-agnostic; PTT and ambient
 // both call it with the same payload after their respective phrase ends.
 //
+// Two-stage split:
+//   * `transcribeOnly` — wav → text + duration. Used by ambient_mic so
+//     the EOU gate can score multiple phrases before deciding to commit
+//     the merged turn to the persona.
+//   * `runVoiceTurnFromText` — text → utterance → askStream → speak.
+//     Invoked once the gate fires (or directly by PTT, which doesn't gate).
+//   * `runVoiceTurn` — thin wrapper that does both, preserving the
+//     legacy single-shot signature for PTT.
+//
 // Returns when the speak stream for the final sentence has been queued. Use
 // the returned AbortController to cancel mid-turn (e.g. barge-in).
 
@@ -21,23 +30,36 @@ export interface VoiceTurnCallbacks {
   onError?: (err: unknown) => void;
 }
 
-export async function runVoiceTurn(
+export interface TranscribeResult {
+  text: string;
+  durationS: number;
+  /** True when the transcript is a whisper-on-silence hallucination
+   *  (a tiny filler token like "uh" / "[silence]"). Callers can choose
+   *  to skip the persona side-channel on these. */
+  isNoise: boolean;
+}
+
+export async function transcribeOnly(
   wavUri: string,
+  signal?: AbortSignal,
+): Promise<TranscribeResult | null> {
+  const trans = await transcribeAudio({ uri: wavUri, filename: "audio.wav" });
+  if (signal?.aborted) return null;
+  const text = trans.text.trim();
+  return {
+    text,
+    durationS: trans.duration_seconds,
+    isNoise: !text || isNoiseTranscript(text),
+  };
+}
+
+export async function runVoiceTurnFromText(
+  text: string,
+  durationS: number,
   cb: VoiceTurnCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
   try {
-    cb.setMode("transcribing");
-    const trans = await transcribeAudio({ uri: wavUri, filename: "audio.wav" });
-    if (signal?.aborted) return;
-    const text = trans.text.trim();
-    if (!text || isNoiseTranscript(text)) {
-      // Whisper hallucinates on silence/clicks — common outputs are tiny
-      // filler tokens. Drop these so they don't reach the persona and
-      // trigger spurious "hi, I can help with..." intro turns.
-      cb.setMode("idle");
-      return;
-    }
     cb.onTranscript?.(text);
 
     // Fire perception/utterance for echo dedup + perception cache. Don't
@@ -45,7 +67,7 @@ export async function runVoiceTurn(
     postUtterance({
       text,
       language: "en",
-      audio_duration_s: trans.duration_seconds,
+      audio_duration_s: durationS,
       target_persona: "teacher",
     }).catch((e) => console.warn("[voiceTurn] postUtterance failed:", e));
 
@@ -67,8 +89,8 @@ export async function runVoiceTurn(
         if (signal?.aborted) return;
         if (event.type === "token") {
           if (!answerStarted) { answerStarted = true; }
-          const text = (event as { text?: unknown }).text;
-          if (typeof text === "string") sentenceBuf.append(text);
+          const tok = (event as { text?: unknown }).text;
+          if (typeof tok === "string") sentenceBuf.append(tok);
         } else if (event.type === "answer") {
           const answer = (event as { answer?: unknown }).answer;
           if (typeof answer === "string") cb.onAnswer?.(answer);
@@ -79,6 +101,30 @@ export async function runVoiceTurn(
     sentenceBuf.flush();
     if (speakChain) await speakChain.drain();
     cb.setMode("idle");
+  } catch (err) {
+    if (signal?.aborted) return;
+    cb.onError?.(err);
+    cb.setMode("idle");
+  }
+}
+
+export async function runVoiceTurn(
+  wavUri: string,
+  cb: VoiceTurnCallbacks,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    cb.setMode("transcribing");
+    const trans = await transcribeOnly(wavUri, signal);
+    if (!trans || signal?.aborted) return;
+    if (trans.isNoise) {
+      // Whisper hallucinates on silence/clicks — common outputs are tiny
+      // filler tokens. Drop these so they don't reach the persona and
+      // trigger spurious "hi, I can help with..." intro turns.
+      cb.setMode("idle");
+      return;
+    }
+    await runVoiceTurnFromText(trans.text, trans.durationS, cb, signal);
   } catch (err) {
     if (signal?.aborted) return;
     cb.onError?.(err);

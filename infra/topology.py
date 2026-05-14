@@ -66,6 +66,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "perception":      "persona",   # ambient_mic block → /api/perception/utterance
     # Stateless infra
     "transcribe": "transcribe",
+    "eou":        "transcribe",   # text turn-detector — sibling endpoint
     "speak":      "speak",
     "browser":    "browser",
 }

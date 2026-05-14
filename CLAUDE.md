@@ -83,7 +83,7 @@ Config homes:
 - `config.yaml` (root) — `base_port`, `service_host`
 - `silicon_brain/config.py` — `DATABASE_URL`
 - `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`, `VISION_PROVIDER`, `DOUBAO_*`
-- `services/transcribe/main.py` — `WHISPER_MODEL_PATH`, `WHISPER_THREADS`
+- `services/transcribe/main.py` — `WHISPER_MODEL_PATH`, `WHISPER_THREADS`, `EOU_*`
 - `services/speak/main.py` — `KOKORO_*`
 
 `LLM_PROVIDER` and `VISION_PROVIDER` are independent. The main reasoning LLM stays
@@ -107,6 +107,10 @@ with `include_screenshot=true` are the entry points.
 | `DOUBAO_API_KEY` | Volces Ark API key for Doubao. Required when `VISION_PROVIDER=doubao`. |
 | `DOUBAO_BASE_URL` | Volces Ark endpoint (e.g. `https://ark.cn-beijing.volces.com/api/v3`). Required when `VISION_PROVIDER=doubao`. |
 | `DOUBAO_VISION_MODEL` | Doubao model name (e.g. `doubao-seed-2-0-lite-260428`). Required when `VISION_PROVIDER=doubao`. |
+| `EOU_MODEL_PATH` | Path to the LiveKit turn-detector ONNX file. Unset → `/api/eou` returns 503; ambient gates fail open (today's behavior, no disfluency handling). Fetch with `scripts/fetch_eou_model.sh`. |
+| `EOU_TOKENIZER_PATH` | Path to the EOU tokenizer dir (containing `tokenizer.json`) or the file itself. Required when `EOU_MODEL_PATH` is set. |
+| `EOU_THRESHOLD` | P(end-of-turn) above which the gate commits. Default `0.55` — lower = more eager commits, higher = absorbs more disfluencies. |
+| `EOU_MAX_TOKENS` | Tail-truncate the EOU input to this many tokens. Default `256`. |
 | `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites

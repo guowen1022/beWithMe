@@ -17,6 +17,7 @@ import {
 } from "@/lib/templateManifest";
 import { transcribeAudio } from "@/lib/api";
 import { createMicVad, stopAllMicStreams, type MicVadHandle } from "@/lib/vad";
+import { createEouGate, type EouGate, type EouGateOptions } from "@/lib/eouGate";
 import * as micArbiter from "@/lib/micArbiter";
 import { marked } from "marked";
 
@@ -124,6 +125,13 @@ export function Block({ id, source }: Props) {
           text: string;
           duration_seconds: number;
         }>;
+        /** Create an end-of-utterance gate. The block transcribes each
+         * phrase as today (helpers.audio.transcribe), then calls
+         * `gate.ingest(text, phraseId, durationS)`. The gate buffers
+         * across silero pauses and only invokes `onCommit` when the
+         * /api/eou model judges the turn complete (or on hard-timeout
+         * / max-phrases fallback). Bypassed entirely if EOU is unconfigured. */
+        createEouGate(opts: EouGateOptions): EouGate;
         /** Defensive: stop every mic track this module ever opened.
          * Used by the ambient_mic block as belt-and-suspenders during
          * mute/cleanup, in case a previous instance leaked. */
@@ -240,6 +248,7 @@ export function Block({ id, source }: Props) {
         );
         return { text, duration_seconds };
       },
+      createEouGate(opts) { return createEouGate(opts); },
       stopAll() { stopAllMicStreams(); },
     };
 
