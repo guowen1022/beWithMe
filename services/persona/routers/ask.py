@@ -238,6 +238,7 @@ async def ask_stream(
     x_device_class: str | None = Header(default=None, alias="X-Device-Class"),
     x_lane_thinking: str | None = Header(default=None, alias="X-Lane-Thinking"),
     x_output_device_id: str | None = Header(default=None, alias="X-Output-Device-Id"),
+    x_device_id: str | None = Header(default=None, alias="X-Device-Id"),
 ):
     """SSE endpoint with streaming — detects proxy search events.
 
@@ -248,14 +249,18 @@ async def ask_stream(
     """
     question = body.question or ""
 
-    # Cross-device output routing. If the client (e.g. phone) declared an
-    # output device, set a request-scoped ContextVar so the auto-speak +
-    # mount_template paths default their target_device_id to it. Persona
-    # tool calls that explicitly pass target_device_id still win.
+    # Cross-device output routing. Explicit `X-Output-Device-Id` wins
+    # (phone picker → desktop, etc.); otherwise default to the requesting
+    # device. The old fallback (None → enqueue_for_user broadcast) leaked
+    # auto-spoken answers to every signed-in device — a phone turn would
+    # also play on the desktop. Routing to the requester is the only
+    # sensible default for an interactive turn; persona tool calls that
+    # explicitly pass target_device_id still win.
+    target_raw = x_output_device_id or x_device_id
     output_device_uuid: Optional[UUID] = None
-    if x_output_device_id:
+    if target_raw:
         try:
-            output_device_uuid = UUID(x_output_device_id.strip())
+            output_device_uuid = UUID(target_raw.strip())
         except (ValueError, AttributeError):
             output_device_uuid = None
     _output_ctx_token = OUTPUT_DEVICE_ID.set(output_device_uuid)
