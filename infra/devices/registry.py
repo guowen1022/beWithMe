@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Set
 from uuid import UUID
 
@@ -142,8 +142,23 @@ async def mark_offline(*, user_id: UUID, device_id: UUID) -> None:
     await _write_last_seen(device_id)
 
 
+# Devices not seen for this long AND not currently online are treated as
+# gone — they don't appear in list_for_user(), so the teacher's media
+# inventory stays focused on what the user actually has open. Real devices
+# refresh last_seen on every SSE reconnect (page reload, Electron restart),
+# so a month of silence is a safe "really gone" threshold.
+STALE_DEVICE_DAYS = 30
+
+
 async def list_for_user(user_id: UUID) -> list[Device]:
-    """Every device this user has ever connected with, online flag attached."""
+    """Live and recently-seen devices for this user, online flag attached.
+
+    Filters out devices that are offline AND haven't reported `last_seen`
+    within `STALE_DEVICE_DAYS`. Without this filter, every leaked row
+    (historical bug-minted UUIDs, e2e test residue) shows up in
+    list_media() as a fake canvas/voice for the teacher to address.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_DEVICE_DAYS)
     async with async_session() as session:
         result = await session.execute(
             select(DeviceORM).where(DeviceORM.user_id == user_id)
@@ -152,13 +167,16 @@ async def list_for_user(user_id: UUID) -> list[Device]:
 
     out: list[Device] = []
     for row in rows:
+        online = is_online(user_id, row.device_id)
+        if not online and (row.last_seen is None or row.last_seen < cutoff):
+            continue
         out.append(
             Device(
                 device_id=row.device_id,
                 user_id=row.user_id,
                 device_class=row.device_class,
                 capabilities=DeviceCapabilities.model_validate(row.capabilities or {}),
-                online=is_online(user_id, row.device_id),
+                online=online,
                 first_seen=row.first_seen,
                 last_seen=row.last_seen,
             )

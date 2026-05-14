@@ -25,7 +25,7 @@ import asyncio
 import json
 from collections import defaultdict
 from typing import Any, Set
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -183,13 +183,18 @@ async def dynamic_stream(
     ),
 ):
     """SSE channel for one user+device. Stays open until the client disconnects."""
-    # Tolerate clients that haven't adopted device headers yet — synthesize a
-    # one-shot device_id so they still get a working stream. Multi-device
-    # features won't apply to them, but they don't break.
+    # The earlier tolerance branch — minting a fresh uuid4() when no
+    # X-Device-Id arrived — leaked one permanent `devices` row per request
+    # from buggy clients and per pytest invocation from the e2e harness
+    # (296+ ghost rows for the `default` user). Every real client (the
+    # Next frontend's `deviceHeaders()`, Electron through it, e2e tests)
+    # already sends the header. Reject the few that don't, loudly.
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="X-Device-Id header required")
     try:
-        device_id = UUID(x_device_id) if x_device_id else uuid4()
+        device_id = UUID(x_device_id)
     except ValueError:
-        device_id = uuid4()
+        raise HTTPException(status_code=400, detail="X-Device-Id must be a UUID")
     device_class = _parse_device_class(x_device_class)
     capabilities = _parse_capabilities(x_device_capabilities)
 
@@ -227,9 +232,9 @@ async def dynamic_stream(
     async def gen():
         try:
             # Initial hello — proves the channel is open even before any
-            # block ships. Carries the device_id back so the client can
-            # confirm what the server registered (matters when the client
-            # didn't send one and we minted a fresh UUID).
+            # block ships. Echoes the device_id back as a sanity check;
+            # the server now refuses connects without it, so this just
+            # confirms the round-trip.
             yield f"data: {json.dumps({'type': 'open', 'device_id': did_s})}\n\n"
             while True:
                 if await request.is_disconnected():
