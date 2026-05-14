@@ -20,11 +20,13 @@ import uuid
 import httpx
 import pytest
 
+from tests.e2e.conftest import E2E_DEVICE_ID
+
 
 def _device_headers(user_id: str, device_id: str | None = None) -> dict[str, str]:
     return {
         "X-User-Id": user_id,
-        "X-Device-Id": device_id or str(uuid.uuid4()),
+        "X-Device-Id": device_id or E2E_DEVICE_ID,
         "X-Device-Class": "desktop",
         "X-Device-Capabilities": json.dumps({"display": True, "speaker": True, "mic": False}),
     }

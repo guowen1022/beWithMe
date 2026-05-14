@@ -22,6 +22,8 @@ import threading
 import time
 import uuid
 
+from tests.e2e.conftest import E2E_DEVICE_ID
+
 import httpx
 import pytest
 
@@ -386,7 +388,7 @@ def test_block_change_event_is_dropped(monkeypatch, test_user_id: str):
 def _device_headers(user_id: str, device_id: str | None = None) -> dict[str, str]:
     return {
         "X-User-Id": user_id,
-        "X-Device-Id": device_id or str(uuid.uuid4()),
+        "X-Device-Id": device_id or E2E_DEVICE_ID,
         "X-Device-Class": "desktop",
         "X-Device-Capabilities": json.dumps({"display": True, "speaker": True, "mic": False}),
     }

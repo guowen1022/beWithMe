@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import threading
-import uuid
 
 import httpx
 import pytest
+
+from tests.e2e.conftest import E2E_DEVICE_ID, E2E_DEVICE_ID_ALT
 
 
 def _device_headers(user_id: str, device_id: str | None = None,
@@ -20,7 +21,7 @@ def _device_headers(user_id: str, device_id: str | None = None,
     caps = capabilities or {"display": True, "speaker": True, "mic": False}
     return {
         "X-User-Id": user_id,
-        "X-Device-Id": device_id or str(uuid.uuid4()),
+        "X-Device-Id": device_id or E2E_DEVICE_ID,
         "X-Device-Class": device_class,
         "X-Device-Capabilities": json.dumps(caps),
     }
@@ -68,7 +69,7 @@ def test_device_registers_on_sse_connect(
     After the stream closes, `/api/dynamic/media` should still list the
     device (last-seen) but with `online=false`.
     """
-    device_id = str(uuid.uuid4())
+    device_id = E2E_DEVICE_ID
     headers = _device_headers(test_user_id, device_id=device_id)
     _open_stream_and_close(shell_url, headers)
 
@@ -93,11 +94,11 @@ def test_two_devices_show_as_two_canvases(
 ):
     """Same user, two distinct device_ids → two canvases in list_media."""
     laptop_headers = _device_headers(
-        test_user_id, device_class="desktop",
+        test_user_id, device_id=E2E_DEVICE_ID, device_class="desktop",
         capabilities={"display": True, "speaker": True, "mic": False},
     )
     phone_headers = _device_headers(
-        test_user_id, device_class="phone",
+        test_user_id, device_id=E2E_DEVICE_ID_ALT, device_class="phone",
         capabilities={"display": True, "speaker": True, "mic": True},
     )
     _open_stream_and_close(shell_url, laptop_headers)
@@ -128,7 +129,7 @@ def test_canvas_layout_populated_by_block_mount(
     """
     import time as _t
 
-    device_id = str(uuid.uuid4())
+    device_id = E2E_DEVICE_ID
     headers = _device_headers(test_user_id, device_id=device_id)
 
     open_seen = threading.Event()

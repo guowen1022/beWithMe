@@ -26,6 +26,8 @@ import uuid
 import httpx
 import pytest
 
+from tests.e2e.conftest import E2E_DEVICE_ID
+
 
 # ---- Helpers (mirror test_media_inventory.py) ------------------------------
 
@@ -36,7 +38,7 @@ def _device_headers(user_id: str, device_id: str | None = None,
     caps = capabilities or {"display": True, "speaker": True, "mic": False}
     return {
         "X-User-Id": user_id,
-        "X-Device-Id": device_id or str(uuid.uuid4()),
+        "X-Device-Id": device_id or E2E_DEVICE_ID,
         "X-Device-Class": device_class,
         "X-Device-Capabilities": json.dumps(caps),
     }

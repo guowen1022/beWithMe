@@ -84,6 +84,8 @@ def services() -> Iterator[dict]:
     # Use the deterministic fake LLM so e2e exercises the real DB path
     # without burning real API quota or hitting network.
     env["LLM_PROVIDER"] = "fake"
+    # Disable note disk persistence so tests don't write to data/notes/.
+    env["NOTES_PERSIST"] = "0"
 
     procs: list[tuple[str, int, subprocess.Popen]] = []
 
@@ -157,6 +159,14 @@ def http(shell_url: str) -> Iterator[httpx.Client]:
 
 
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
+
+# Stable device ids used by _device_headers() helpers across e2e tests so
+# the `devices` table doesn't grow one row per request. register() UPSERTs
+# by device_id, so reusing these means each pytest run just bumps last_seen
+# on the same rows instead of leaving dozens of new ghosts behind. Tests
+# that need to verify multi-device behaviour pass explicit distinct ids.
+E2E_DEVICE_ID = "11111111-1111-1111-1111-111111111111"
+E2E_DEVICE_ID_ALT = "22222222-2222-2222-2222-222222222222"
 
 
 @pytest.fixture(scope="session")
