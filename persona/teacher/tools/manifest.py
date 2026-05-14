@@ -48,6 +48,7 @@ from tools.look_at_image import look_at_image
 from tools.look_at_video import look_at_video
 from tools.read_document import read_document
 from tools.read_url import read_url
+from tools.search_notes import search_notes
 from tools.speak import speak
 from tools.web_view import web_view
 from workshop.canvas.tools.block_action import block_action
@@ -166,13 +167,29 @@ def _make_mount_template(user_id: UUID):
             except Exception:
                 pass
 
-        # `_raw_arguments` is the explicit fallback shape from the LLM
-        # provider when the model truncated its tool-args mid-stream and
-        # the JSON didn't parse. We can't recover useful args from it —
-        # surface a clear error so the next turn knows to retry shorter.
+        # `_raw_arguments` is the LLM provider's fallback shape when the
+        # tool-arg stream didn't get parsed into structured fields. Some
+        # providers (DeepSeek's tool channel observed in 2026-05) emit a
+        # COMPLETE valid JSON object inside this string even on successful
+        # calls. Try to recover: if it parses to a dict, treat it as the
+        # real args. Only bail when it's truly unparseable (truncation).
         if "_raw_arguments" in args:
-            _trace("[mount_template/exec] BAILING: _raw_arguments shape (model truncated args)")
-            return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+            raw = args["_raw_arguments"]
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        _trace("[mount_template/exec] recovered args from _raw_arguments JSON string")
+                        args = parsed
+                    else:
+                        _trace("[mount_template/exec] BAILING: _raw_arguments parsed to non-dict")
+                        return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+                except json.JSONDecodeError:
+                    _trace("[mount_template/exec] BAILING: _raw_arguments not valid JSON (truncated)")
+                    return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+            else:
+                _trace("[mount_template/exec] BAILING: _raw_arguments not a string")
+                return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
 
         template_name = (args.get("template") or "").strip()
         if not template_name:
@@ -208,10 +225,17 @@ def _make_mount_template(user_id: UUID):
         if params is not None and not isinstance(params, dict):
             return json.dumps({"error": f"params must be an object, got {type(params).__name__}"})
 
+        # `slug` is the canonical name for note templates — it doubles as
+        # the canvas block_id, the on-disk filename, and the note_id in
+        # `note_chunks`. For other templates, `slug` is ignored (their
+        # block_id stays the template's id_default).
+        raw_slug = args.get("slug")
+        slug = raw_slug.strip() if isinstance(raw_slug, str) else None
         try:
             result = await mount_template(
                 user_id=user_id,
                 template_name=template_name,
+                block_id=slug or None,
                 replace=replace,
                 target_device_id=target_uuid,
                 params=params,
@@ -235,14 +259,22 @@ def _make_mount_template(user_id: UUID):
 
 def _make_edit_note(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
-        # `_raw_arguments` = LLM truncated mid-stream; surface a retry hint.
+        # `_raw_arguments` fallback: same shape as mount_template — some
+        # providers wrap a complete JSON object inside this string. Recover
+        # if it parses to a dict; bail only on truly unparseable truncation.
         if "_raw_arguments" in args:
-            return json.dumps({
-                "error": (
-                    "tool arguments were truncated mid-stream — retry with "
-                    "fewer or shorter ops"
-                )
-            })
+            raw = args["_raw_arguments"]
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                    else:
+                        return json.dumps({"error": "tool arguments were truncated mid-stream — retry with fewer or shorter ops"})
+                except json.JSONDecodeError:
+                    return json.dumps({"error": "tool arguments were truncated mid-stream — retry with fewer or shorter ops"})
+            else:
+                return json.dumps({"error": "tool arguments were truncated mid-stream — retry with fewer or shorter ops"})
 
         block_id = (args.get("block_id") or "").strip()
         if not block_id:
@@ -673,6 +705,25 @@ def _make_read_document(user_id: UUID):
     return executor
 
 
+def _make_search_notes(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return json.dumps({"error": "query is required"})
+        top_k_raw = args.get("top_k")
+        try:
+            top_k = int(top_k_raw) if top_k_raw is not None else 5
+        except (TypeError, ValueError):
+            return json.dumps({"error": "top_k must be an integer"})
+        result = await search_notes(
+            user_id=user_id,
+            query=query,
+            top_k=max(1, min(20, top_k)),
+        )
+        return json.dumps(result)
+    return executor
+
+
 def _make_layout_blocks(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
         layouts = args.get("layouts")
@@ -920,6 +971,11 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # Lane R needs all of these — that's the point of research mode.
     "read_media":         {"answer", "background", "research"},   # canvas state already in prompt
     "read_document":      {"answer", "background", "research"},   # vector RAG, slow
+    # search_notes IS exposed to user_facing (Lane A) even though it's vector
+    # RAG: the whole point is voice-driven recall ("remind me what we covered…").
+    # ~50–100ms is acceptable inside Lane A's budget when the LLM actually
+    # decides to call it; the LLM only invokes it when relevant.
+    "search_notes":       {"answer", "user_facing", "background", "research"},
     "list_media":         {"answer", "background", "research"},   # deprecated
     "request_new_block":  {"answer", "background"},               # engineer LLM, too slow for Lane R
     "look_at_image":      {"answer", "background", "research"},   # remote vision call, ~5–6s
@@ -1037,6 +1093,53 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_read_document(user_id),
+        ),
+        ToolSpec(
+            name="search_notes",
+            description=(
+                "Recall passages from notes YOU previously authored with "
+                "this user. When the user mentions a topic you've taught "
+                "before — even loosely — call this to surface the relevant "
+                "note(s) so you can build on what was already covered "
+                "instead of starting from scratch. Vector search runs "
+                "across all of this user's notes, not just the current "
+                "session.\n"
+                "\n"
+                "Returns up to `top_k` hits, each tagged with: "
+                "`note_id` (the block id the note was originally mounted "
+                "under — pass to `mount_template(replace=[...])` or "
+                "`edit_note(block_id=...)` if you want to re-surface or "
+                "extend it), `block_start`/`block_end` (0-based indices "
+                "into the note's top-level markdown blocks — useful to "
+                "cite a specific span), `text` (the chunk's markdown, "
+                "prefixed with the nearest preceding heading for "
+                "context), and `score` (cosine similarity).\n"
+                "\n"
+                "Worked examples: user asks 'remind me how attention "
+                "works?' → `search_notes(query='self-attention "
+                "transformer')`. User says 'going back to that thing "
+                "about gradients' → `search_notes(query='gradient "
+                "descent backprop')`. Use a topic phrase, not a verbatim "
+                "user sentence — terser queries embed better."
+            ),
+            params_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Topic phrase to match against your notes.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Max hits to return. Default 5.",
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            executor=_make_search_notes(user_id),
         ),
         ToolSpec(
             name="look_at_image",
@@ -1434,7 +1537,32 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "for diagrams. Inline HTML is allowed for special cases "
                 "(`<mark>`, `<ins>`, `<del>`, `<strong>` etc.) but you "
                 "should reach for markdown syntax first. Legacy "
-                "`params.content` (HTML grammar) still works."
+                "`params.content` (HTML grammar) still works.\n\n"
+                "**NAMING NOTES (`slug`, required for `note`):** Each note "
+                "you mount needs a stable topic-derived name so it can be "
+                "recalled later via `search_notes` and re-edited via "
+                "`edit_note`. Pass `slug` as a kebab-case identifier "
+                "(lowercase letters, digits, '-'; e.g. `sumer-mesopotamia`, "
+                "`transformer-attention`, `quicksort-algorithm`). "
+                "Guidelines: 2–4 words, derived from the topic — NOT the "
+                "user's question, NOT the date, NOT a number. If you "
+                "forget to pass `slug`, it auto-derives from your first "
+                "markdown heading.\n\n"
+                "**THREE WAYS TO MOUNT A NOTE:**\n"
+                "1. **Author new** — pass `slug` + `params.markdown`. "
+                "Writes a fresh note. WARNING: if `slug` already exists "
+                "in storage, this OVERWRITES the prior content — only do "
+                "this when intentionally rewriting.\n"
+                "2. **Re-display stored** — pass `slug` ONLY, no `params`. "
+                "Hydrates the saved HTML from disk and brings the note "
+                "back to canvas. Use this when `search_notes` (or the "
+                "`=== RELATED STORED NOTES ===` section) shows a stored "
+                "slug that already covers the topic. Cheap (no LLM "
+                "authoring), no overwrite, the user sees their prior "
+                "note again.\n"
+                "3. **Extend in place** — use `edit_note(block_id=slug, "
+                "ops=[…])` to append/revise/highlight a note that's "
+                "already on canvas. Does NOT use `mount_template`."
             ),
             params_schema={
                 "type": "object",
@@ -1442,6 +1570,17 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                     "template": {
                         "type": "string",
                         "description": "Template filename stem (e.g. 'note').",
+                    },
+                    "slug": {
+                        "type": "string",
+                        "description": (
+                            "Topic-derived kebab-case identifier for `note` "
+                            "templates (e.g. 'sumer-mesopotamia'). Doubles "
+                            "as block_id, filename, and note_id. Reusing a "
+                            "slug REPLACES the prior note's content — use "
+                            "`edit_note` to extend instead. Auto-derived "
+                            "from the first markdown heading if omitted."
+                        ),
                     },
                     "replace": {
                         "type": "array",
@@ -1529,7 +1668,11 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "properties": {
                     "block_id": {
                         "type": "string",
-                        "description": "Block id of the note to edit (e.g. 'note').",
+                        "description": (
+                            "Slug of the note to edit (the same slug that "
+                            "was passed to `mount_template` when this note "
+                            "was created, e.g. 'sumer-mesopotamia')."
+                        ),
                     },
                     "ops": {
                         "type": "array",

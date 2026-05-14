@@ -24,6 +24,7 @@ from services.knowledge.routers import (
     events,
     health,
     media,
+    notes,
     preferences,
     profile,
     retrieval,
@@ -45,6 +46,7 @@ app.include_router(preferences.router, prefix="/api")
 app.include_router(talk_preference.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
+app.include_router(notes.router, prefix="/api")
 app.include_router(retrieval.router, prefix="/api")
 
 

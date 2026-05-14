@@ -37,6 +37,7 @@ def build(
     voice_transcript: str,
     canvas_state: object = None,
     existing_notes: Optional[Dict[str, str]] = None,
+    related_notes: Optional[List[dict]] = None,
 ) -> PromptParts:
     system_parts: List[str] = []
 
@@ -71,6 +72,42 @@ def build(
                 f"=== CURRENT note BLOCK_ID={bid} (MARKDOWN) ===\n"
                 f"{source.strip()}\n"
                 "=== END ==="
+            )
+
+    # Related notes from storage that are NOT currently on canvas. When
+    # a related slug clearly matches the topic, the writer should
+    # RE-DISPLAY it (mount with no params hydrates the stored HTML from
+    # disk) — that way the user sees their prior note again instead of an
+    # empty canvas. Authoring a NEW note with `params.markdown` and the
+    # same slug would silently overwrite the stored content; only do that
+    # when intentionally rewriting from scratch.
+    if related_notes:
+        chunks: List[str] = []
+        for n in related_notes:
+            slug = n.get("slug", "")
+            score = n.get("score", 0.0)
+            text = (n.get("text") or "").strip()
+            if not slug or not text:
+                continue
+            if len(text) > 600:
+                text = text[:597] + "…"
+            chunks.append(f"[slug={slug}, similarity={score:.2f}]\n{text}")
+        if chunks:
+            joined = "\n---\n".join(chunks)
+            dynamic_parts.append(
+                "=== RELATED STORED NOTES (not currently on canvas) ===\n"
+                "(Semantic matches from the user's prior notes. If one "
+                "clearly covers the topic the spoken answer just "
+                "addressed: **RE-DISPLAY it** so the user sees it again. "
+                "Call `mount_template(template='note', slug='<that-slug>')` "
+                "with NO `params` — that hydrates the stored HTML from "
+                "disk and re-mounts the note (no re-author, no overwrite). "
+                "Only author a brand-new note (`params.markdown=…`) when "
+                "the topic is genuinely different from every stored slug "
+                "here. Authoring with the SAME slug would silently "
+                "overwrite the stored content — avoid that unless you "
+                "intentionally want to rewrite from scratch.)\n"
+                f"{joined}"
             )
 
     dynamic_parts.append(f"=== USER QUESTION ===\n{question}")

@@ -18,7 +18,7 @@ from uuid import UUID
 
 import httpx
 
-from infra.contracts import DocumentChunkDTO, ProfileDTO, UserProfileDTO
+from infra.contracts import DocumentChunkDTO, NoteHitDTO, ProfileDTO, UserProfileDTO
 from infra.topology import upstream_url
 
 
@@ -108,6 +108,23 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    async def search_notes(
+        self,
+        user_id: UUID,
+        query: str,
+        *,
+        top_k: int = 5,
+    ) -> list[NoteHitDTO]:
+        """Find note chunks semantically related to `query`. The knowledge
+        sidecar applies nomic's `search_query:` task prefix internally."""
+        resp = await self._http.get(
+            "/api/notes/search",
+            headers=_user_headers(user_id),
+            params={"q": query, "top_k": top_k},
+        )
+        resp.raise_for_status()
+        return [NoteHitDTO.model_validate(x) for x in resp.json()]
 
     async def get_document_page(
         self, user_id: UUID, document_id: UUID, page_number: int,

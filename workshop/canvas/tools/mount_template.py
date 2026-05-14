@@ -35,7 +35,8 @@ from infra.render.note import process as preprocess_note
 from infra.render.note_md import render_markdown as render_note_markdown
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
-from workshop.canvas.tools import _note_cache, _template_registry
+from workshop.canvas.tools import _note_cache, _note_index, _template_registry
+from workshop.canvas.tools._slug import is_valid_slug, slug_from_markdown
 from services.persona.routers.dynamic import (
     enqueue_for_device,
     enqueue_for_user,
@@ -115,6 +116,25 @@ def _render_block_source(
     if params and isinstance(params.get("content"), str):
         content_value = params["content"]
     js = js.replace("__CONTENT__", json.dumps(content_value))
+    # Note-specific: whether the initial mount should typewriter-reveal
+    # (true for fresh authoring) or appear instantly (false when we
+    # hydrated saved content from disk). Default true so fresh mounts
+    # without an explicit flag keep their reveal animation.
+    animate_value = True
+    if params and "animate" in params:
+        animate_value = bool(params.get("animate"))
+    js = js.replace("__ANIMATE__", "true" if animate_value else "false")
+    # Note timestamps (ISO strings). Empty string means "unknown / hide
+    # subtitle." Other templates ignore the placeholders.
+    created_value = ""
+    updated_value = ""
+    if params:
+        if isinstance(params.get("created_at"), str):
+            created_value = params["created_at"]
+        if isinstance(params.get("updated_at"), str):
+            updated_value = params["updated_at"]
+    js = js.replace("__CREATED_AT__", json.dumps(created_value))
+    js = js.replace("__UPDATED_AT__", json.dumps(updated_value))
     # url_card params — default to empty strings so unrelated templates
     # don't break when these placeholders aren't present.
     url_value = ""
@@ -220,7 +240,27 @@ async def mount_template(
     in memory + browser; on reload it disappears.
     """
     template = load_template(template_name)
-    bid = block_id or template.id_default
+    # Notes have stable, topic-named identities — the slug doubles as the
+    # canvas block_id, the on-disk filename, and the note_id in
+    # `note_chunks`. Resolve in priority order:
+    #   1. explicit block_id from the caller (must be a valid slug),
+    #   2. first markdown heading slugified ("## Sumer …" → "sumer"),
+    #   3. fall back to the template's id_default ("note") — last-resort
+    #      shared slot; prior content will be overwritten.
+    if template_name == "note":
+        if block_id is not None:
+            if not is_valid_slug(block_id):
+                raise ValueError(
+                    f"note block_id must be a kebab-case slug "
+                    f"(a-z, 0-9, '-'; no leading/trailing '-'); got {block_id!r}"
+                )
+            bid = block_id
+        else:
+            md_for_slug = (params or {}).get("markdown")
+            derived = slug_from_markdown(md_for_slug) if isinstance(md_for_slug, str) else None
+            bid = derived or template.id_default
+    else:
+        bid = block_id or template.id_default
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
 
     # Idempotence: if the block is already mounted on any device for this
@@ -240,26 +280,64 @@ async def mount_template(
         if bid in all_mounted:
             return MountResult(block_id=bid, template=template_name, deleted=[])
 
-    # Rich-card preprocessing. Two authoring surfaces, both end up as
-    # sanitized HTML for the client:
+    # Note authoring surfaces — three paths, all end up shipping HTML to
+    # the client:
     #   * `params.markdown` (preferred, Phase 2.5+) — markdown-it-py
     #     renders via infra.render.note_md, then the same sanitize
     #     + diagram pipeline runs. We cache BOTH the md source (so
-    #     edit_note can mutate it cleanly) and the final HTML
-    #     (what the client renders).
+    #     edit_note can mutate it cleanly) and the final HTML.
     #   * `params.content` (legacy) — already-authored HTML; runs
     #     through the sanitize pipeline only. md cache stays None.
-    if template_name == "note" and params:
+    #   * NO content + known slug — hydrate from cache/disk. This is the
+    #     "bring the stored note back to canvas" path: writer/persona
+    #     calls `mount_template(template="note", slug="<slug>")` to
+    #     re-display a note it took in a prior session. No new content
+    #     is generated, no re-embed runs.
+    if template_name == "note":
+        if params is None:
+            params = {}
         md_source = params.get("markdown")
+        content_in = params.get("content")
         if isinstance(md_source, str) and md_source.strip():
             processed = await render_note_markdown(md_source)
             params = {**params, "content": processed}
             params.pop("markdown", None)  # don't ship the source to the client
             _note_cache.set(user_id, bid, html=processed, md=md_source)
-        elif isinstance(params.get("content"), str):
-            processed = await preprocess_note(params["content"])
+            _note_index.enqueue_reembed(user_id, bid, md_source)
+            # Fresh authoring: typewriter-reveal the new content.
+            params.setdefault("animate", True)
+        elif isinstance(content_in, str) and content_in.strip():
+            processed = await preprocess_note(content_in)
             params = {**params, "content": processed}
             _note_cache.set(user_id, bid, html=processed)
+            params.setdefault("animate", True)
+        else:
+            # Hydrate path. Cache lazily loads from disk on miss.
+            cached_html = _note_cache.get_html(user_id, bid)
+            cached_md = _note_cache.get_md(user_id, bid)
+            if not cached_html and cached_md:
+                cached_html = await render_note_markdown(cached_md)
+                _note_cache.set(user_id, bid, html=cached_html)
+            if cached_html:
+                params = {**params, "content": cached_html}
+                # Re-display existing note — skip the reveal animation
+                # so the user sees the full note immediately. The
+                # typewriter animation is for fresh authoring only.
+                params.setdefault("animate", False)
+            else:
+                raise ValueError(
+                    f"note slug {bid!r} has no stored content yet — pass "
+                    "params.markdown to author a new note, or pick a slug "
+                    "that exists (use search_notes to find stored slugs)"
+                )
+        # Attach created/updated timestamps for the header subtitle.
+        # Note: get_meta lazily falls back to mtime for legacy notes
+        # that predate the .meta.json sidecar.
+        meta = _note_cache.get_meta(user_id, bid)
+        if meta.get("created_at"):
+            params.setdefault("created_at", meta["created_at"])
+        if meta.get("updated_at"):
+            params.setdefault("updated_at", meta["updated_at"])
 
     rendered = _render_block_source(template, bid, g, params)
 
@@ -300,7 +378,12 @@ async def mount_template(
         ))
         forget_block(user_id=user_id, block_id=stale_id)
         _template_registry.forget(stale_id)
-        _note_cache.forget(user_id, stale_id)
+        # NOTE: do NOT call `_note_cache.forget` (it deletes the .md from
+        # disk) or `_note_index.enqueue_clear` (it wipes `note_chunks`).
+        # Canvas unmount ≠ delete. The note's content + index persist so
+        # `search_notes` can recall it across sessions. The cache entry
+        # stays warm and is harmlessly stale — `_note_cache.set` overwrites
+        # it on the next mount.
 
     deleted: list[str] = []
     if replace:
@@ -313,7 +396,8 @@ async def mount_template(
             ))
             forget_block(user_id=user_id, block_id=old_id)
             _template_registry.forget(old_id)
-            _note_cache.forget(user_id, old_id)
+            # See note above: don't delete note .md from disk or wipe
+            # note_chunks on canvas unmount.
             deleted.append(old_id)
 
     await _send(UIUpdate(action="mount", block=block_source))

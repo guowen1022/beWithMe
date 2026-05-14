@@ -24,5 +24,6 @@ data/canvases/
 data/uploads/
 data/web_view_port.json
 data/diagrams/
+data/notes/
 benchmark/results/
 .*.swp

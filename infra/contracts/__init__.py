@@ -80,6 +80,22 @@ class DocumentChunkDTO(BaseModel):
     page_number: Optional[int] = None
 
 
+class NoteHitDTO(BaseModel):
+    """One semantic-search hit from the teacher's authored notes.
+
+    `note_id` matches the canvas block_id the note was mounted under, so
+    the persona can reference it back ("see the note we took, block 3").
+    `block_start`/`block_end` are 0-based indices into the note's
+    top-level markdown blocks — useful for highlighting a span.
+    """
+    model_config = _CFG
+    note_id: str
+    block_start: int
+    block_end: int
+    text: str
+    score: float
+
+
 class SummaryDTO(BaseModel):
     model_config = _CFG
     session_id: UUID
@@ -170,6 +186,7 @@ __all__ = [
     "ConceptDTO",
     "InteractionDTO",
     "DocumentChunkDTO",
+    "NoteHitDTO",
     "SummaryDTO",
     "BrainStateDTO",
     "RecommendationDTO",

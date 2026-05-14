@@ -63,6 +63,7 @@ async def assemble(
     # 3. Self-description + per-device talk preference from silicon_brain.
     self_description = ""
     talk_preference: dict | None = None
+    related_notes: list = []
     client = SiliconBrainClient()
     try:
         try:
@@ -74,6 +75,25 @@ async def assemble(
             talk_preference = await client.get_talk_preference(user_id)
         except Exception as e:
             print(f"[teacher.reflect] get_talk_preference error: {e}", flush=True)
+
+        # 3b. Semantically related notes from this user's prior teaching.
+        # Query is the recent user-speech text (joined, capped). The
+        # knowledge sidecar applies nomic's `search_query:` prefix
+        # internally; matches use cosine similarity against chunks indexed
+        # with the `search_document:` prefix.
+        try:
+            snapshot = read_perception(user_id)
+            log = snapshot.get("user_speech_log") or []
+            recent_texts = [u.text for u in list(log)[-3:] if getattr(u, "text", None)]
+            query_text = " ".join(reversed(recent_texts))[:300].strip()
+            if query_text:
+                hits = await client.search_notes(user_id, query_text, top_k=3)
+                related_notes = [
+                    {"slug": h.note_id, "score": h.score, "text": h.text}
+                    for h in hits if h.score >= 0.40
+                ]
+        except Exception as e:
+            print(f"[teacher.reflect] search_notes error: {e}", flush=True)
     finally:
         try:
             await client.aclose()
@@ -111,6 +131,7 @@ async def assemble(
         talk_preference=talk_preference,
         recent_user_speech=recent_user_speech,
         recent_notices=recent_notices,
+        related_notes=related_notes,
         voice_leads=voice_leads,
     )
 

@@ -23,6 +23,13 @@
     // literal at substitution time — already sanitized + SVG-inlined by
     // the backend preprocessor (infra/render/note.process).
     var initial = __CONTENT__;
+    // Whether to typewriter-reveal the initial content. True for fresh
+    // authoring (LLM just wrote this); false for hydrate (we loaded a
+    // stored note from disk — show it instantly).
+    var animateInitial = __ANIMATE__;
+    // Note timestamps for the header subtitle. Empty strings = unknown.
+    var createdAtIso = __CREATED_AT__;
+    var updatedAtIso = __UPDATED_AT__;
 
     // ---- Header ---------------------------------------------------------
     var header = document.createElement('div');
@@ -40,12 +47,28 @@
       'color:var(--bw-accent); background:var(--bw-accent-soft);' +
       'padding:3px 8px; letter-spacing:.08em; text-transform:uppercase;';
 
+    var headerTitleWrap = document.createElement('div');
+    headerTitleWrap.style.cssText =
+      'flex:1; min-width:0; display:flex; flex-direction:column; gap:1px;';
+
     var headerTitle = document.createElement('div');
     headerTitle.textContent = 'Explanation';
     headerTitle.style.cssText =
-      'flex:1; font-size:11.5px; font-weight:600;' +
+      'font-size:11.5px; font-weight:600;' +
       'color:var(--bw-ink); white-space:nowrap;' +
       'overflow:hidden; text-overflow:ellipsis;';
+
+    // Subtitle line: created / last-updated timestamps. Hidden when
+    // both timestamps are unknown (legacy mounts without meta).
+    var headerSubtitle = document.createElement('div');
+    headerSubtitle.style.cssText =
+      'font-family:var(--bw-font-mono); font-size:9.5px;' +
+      'color:var(--bw-ink-faint); white-space:nowrap;' +
+      'overflow:hidden; text-overflow:ellipsis;' +
+      'letter-spacing:.04em;';
+
+    headerTitleWrap.appendChild(headerTitle);
+    headerTitleWrap.appendChild(headerSubtitle);
 
     var headerMeta = document.createElement('div');
     headerMeta.style.cssText =
@@ -54,9 +77,44 @@
       'text-transform:uppercase; letter-spacing:.08em;';
 
     header.appendChild(idChip);
-    header.appendChild(headerTitle);
+    header.appendChild(headerTitleWrap);
     header.appendChild(headerMeta);
     root.appendChild(header);
+
+    // Format the timestamps once and write to the subtitle. Re-fired
+    // whenever an edit lands so "updated" reflects the latest write.
+    function _formatShort(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      var now = new Date();
+      var sameDay = d.toDateString() === now.toDateString();
+      var hh = String(d.getHours()).padStart(2, '0');
+      var mm = String(d.getMinutes()).padStart(2, '0');
+      if (sameDay) return hh + ':' + mm;
+      var mo = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      return mo + ' ' + hh + ':' + mm;
+    }
+    function _relativeShort(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      var seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (seconds < 60) return 'just now';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+      return _formatShort(iso);
+    }
+    function renderSubtitle() {
+      var created = _formatShort(createdAtIso);
+      var updated = _relativeShort(updatedAtIso);
+      var parts = [];
+      if (created) parts.push('created ' + created);
+      if (updated && updatedAtIso !== createdAtIso) parts.push('updated ' + updated);
+      headerSubtitle.textContent = parts.join(' · ');
+      headerSubtitle.style.display = parts.length ? '' : 'none';
+    }
+    renderSubtitle();
 
     // ---- Body -----------------------------------------------------------
     // Backend has sanitized this HTML against the note grammar AND
@@ -286,8 +344,10 @@
 
     // Phase 2.6: animate the initial mount + any subsequent full-content
     // swap from push_block_content. Reveal types in at TTS rate so the
-    // canvas pace matches the spoken pass.
-    setHtml(initial, { animate: true });
+    // canvas pace matches the spoken pass. The `animateInitial` flag is
+    // false when mount_template hydrated stored content from disk — the
+    // user already had this note, so we show it instantly.
+    setHtml(initial, { animate: animateInitial });
 
     // Subscribe so push_block_content can replace the card body in place.
     // Payload is the already-preprocessed HTML (workshop runs it through

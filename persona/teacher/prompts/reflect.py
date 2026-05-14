@@ -95,6 +95,7 @@ def build(
     talk_preference: dict | None = None,
     recent_user_speech: Optional[List["UserUtterance"]] = None,
     recent_notices: Optional[List[str]] = None,
+    related_notes: Optional[List[dict]] = None,
     voice_leads: bool = False,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
@@ -189,6 +190,30 @@ def build(
             "naturally only if relevant to the user's last utterance.)\n"
             f"{notices_lines}"
         )
+
+    if related_notes:
+        chunks: List[str] = []
+        for n in related_notes:
+            slug = n.get("slug", "")
+            score = n.get("score", 0.0)
+            text = (n.get("text") or "").strip()
+            if not slug or not text:
+                continue
+            if len(text) > 600:
+                text = text[:597] + "…"
+            chunks.append(f"[slug={slug}, similarity={score:.2f}]\n{text}")
+        if chunks:
+            joined = "\n---\n".join(chunks)
+            dynamic_parts.append(
+                "=== RELATED NOTES (from your prior teaching with this user) ===\n"
+                "(Retrieved by semantic similarity to the user's recent speech. "
+                "These notes may or may not be currently visible on canvas — "
+                "they live in storage. Build on them when relevant: reference "
+                "what you've already taught, cite the slug, or let a writer "
+                "pass extend the matching note via `edit_note` instead of "
+                "mounting a duplicate.)\n"
+                f"{joined}"
+            )
 
     events_section = _format_events(events)
     if events_section:

@@ -19,7 +19,7 @@ from infra.contracts.ui import BlockMessage
 from infra.render.note import process as preprocess_note
 from infra.render.note_md import render_markdown as render_note_markdown
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from workshop.canvas.tools import _note_cache, _template_registry
+from workshop.canvas.tools import _note_cache, _note_index, _template_registry
 
 
 async def push_block_content(
@@ -52,6 +52,7 @@ async def push_block_content(
             # working unchanged.
             value = {**{k: v for k, v in value.items() if k != "markdown"}, "content": processed}
             _note_cache.set(user_id, block_id, html=processed, md=md_source)
+            _note_index.enqueue_reembed(user_id, block_id, md_source)
         elif isinstance(value, str):
             value = await preprocess_note(value)
             _note_cache.set(user_id, block_id, html=value)

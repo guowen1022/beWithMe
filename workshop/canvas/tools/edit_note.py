@@ -49,7 +49,7 @@ from infra.render.note_md import (
     render_markdown_fragment as render_note_markdown_fragment,
 )
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from workshop.canvas.tools import _note_cache, _template_registry
+from workshop.canvas.tools import _note_cache, _note_index, _template_registry
 
 
 # Block-level elements the writer can target with replace_section /
@@ -372,6 +372,7 @@ async def _edit_via_markdown(
     # the client gets the final form.
     new_html = await render_note_markdown(md)
     _note_cache.set(user_id, block_id, html=new_html, md=md)
+    _note_index.enqueue_reembed(user_id, block_id, md)
 
     # Convert each structural op's `md` to an HTML snippet before
     # fan-out, so the client doesn't need a markdown renderer. Use

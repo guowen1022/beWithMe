@@ -31,6 +31,7 @@ from uuid import UUID
 
 from infra.event_log import log_event
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
+from persona.teacher.silicon_brain_client import SiliconBrainClient
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_tools
 from workshop.canvas.tools import _note_cache
@@ -93,12 +94,36 @@ async def run_canvas_writer(
         print(f"[writer] read_media error: {e}", flush=True)
 
     existing_cards = _collect_existing_notes(canvas_state, user_id)
+    existing_slugs = set(existing_cards.keys())
+
+    # Semantically related notes from the user's prior teaching — even if
+    # they're not currently on canvas. Lets the writer decide between
+    # `edit_note` (slug already exists in storage) vs `mount_template`
+    # (topic is genuinely new). Drop hits already in `existing_cards` so
+    # we don't double-show them.
+    related_notes: List[dict] = []
+    try:
+        sb = SiliconBrainClient()
+        try:
+            probe = f"{question}\n{transcript}".strip()
+            if probe:
+                hits = await sb.search_notes(user_id, probe, top_k=3)
+                related_notes = [
+                    {"slug": h.note_id, "score": h.score, "text": h.text}
+                    for h in hits
+                    if h.score >= 0.40 and h.note_id not in existing_slugs
+                ]
+        finally:
+            await sb.aclose()
+    except Exception as e:
+        print(f"[writer] search_notes error: {e}", flush=True)
 
     parts = build_canvas_writer_prompt(
         question=question,
         voice_transcript=transcript,
         canvas_state=canvas_state,
         existing_notes=existing_cards,
+        related_notes=related_notes,
     )
     writer_tools = build_tools(user_id, lane="writer")
 
