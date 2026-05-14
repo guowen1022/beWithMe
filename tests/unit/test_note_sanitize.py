@@ -1,9 +1,9 @@
-"""Sanitizer table tests for the rich_card preprocessor.
+"""Sanitizer table tests for the note preprocessor.
 
 These tests deliberately do NOT exercise the Mermaid render path (which is
 slow and requires a browser) — they feed input with NO `bw-diagram` divs so
 `process()` short-circuits the renderer. Pipeline-level coverage (with
-diagrams) is in test_rich_card_pipeline.py.
+diagrams) is in test_note_pipeline.py.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from infra.render.rich_card import process
+from infra.render.note import process
 
 
 def _run(html: str) -> str:

@@ -1,9 +1,9 @@
 """Server-side Mermaid → SVG renderer with on-disk cache.
 
-The `rich_card` block ships pre-rendered SVG to both web and mobile so neither
+The `note` block ships pre-rendered SVG to both web and mobile so neither
 surface needs to embed mermaid.js or run a WebView per diagram. The persona
 authors Mermaid source inside a `<div class="bw-diagram" data-src="...">`
-element; the rich_card preprocessor calls `render_mermaid(source)` to get the
+element; the note preprocessor calls `render_mermaid(source)` to get the
 SVG and inlines it.
 
 Why Playwright instead of mermaid-cli: playwright is already a project dep

@@ -10,8 +10,8 @@ import type React from "react";
 import type { GridCoords } from "../lib/grid/gridConfig";
 import { AmbientMicBlock } from "./blocks/AmbientMicBlock";
 import { ambientMicManifest } from "./blocks/AmbientMicBlock.manifest";
-import { RichCardBlock } from "./blocks/RichCardBlock";
-import { richCardManifest } from "./blocks/RichCardBlock.manifest";
+import { NoteBlock } from "./blocks/NoteBlock";
+import { noteManifest } from "./blocks/NoteBlock.manifest";
 import { TextDisplayBlock } from "./blocks/TextDisplayBlock";
 import { textDisplayManifest } from "./blocks/TextDisplayBlock.manifest";
 import { UrlCardBlock } from "./blocks/UrlCardBlock";
@@ -61,9 +61,9 @@ export const blockRegistry: Record<string, RegistryEntry> = {
     component: TextDisplayBlock,
     manifest: textDisplayManifest,
   },
-  rich_card: {
-    component: RichCardBlock,
-    manifest: richCardManifest,
+  note: {
+    component: NoteBlock,
+    manifest: noteManifest,
   },
   url_card: {
     component: UrlCardBlock,

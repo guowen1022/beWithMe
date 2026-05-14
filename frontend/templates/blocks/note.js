@@ -21,7 +21,7 @@
     var report = helpers && helpers.reportState ? helpers.reportState : function () {};
     // mount_template replaces __CONTENT__ with a JSON-encoded string
     // literal at substitution time — already sanitized + SVG-inlined by
-    // the backend preprocessor (infra/render/rich_card.process).
+    // the backend preprocessor (infra/render/note.process).
     var initial = __CONTENT__;
 
     // ---- Header ---------------------------------------------------------
@@ -59,9 +59,9 @@
     root.appendChild(header);
 
     // ---- Body -----------------------------------------------------------
-    // Backend has sanitized this HTML against the rich_card grammar AND
+    // Backend has sanitized this HTML against the note grammar AND
     // inlined the Mermaid SVGs. We trust the bytes and set innerHTML
-    // directly — no DOMPurify pass here. See infra/render/rich_card.py
+    // directly — no DOMPurify pass here. See infra/render/note.py
     // for the sanitization contract.
     var body = document.createElement('div');
     body.className = 'bw-card';
@@ -101,10 +101,153 @@
       });
     }
 
-    function setHtml(html) {
+    // ---- Phase 2.6: block-by-block reveal at 2x speaking rate ---------
+    // Reading is faster than listening. Instead of char-by-char (which
+    // matches speech rate but drags for the eye), reveal one block at
+    // a time — heading, paragraph, list item, diagram — with each
+    // block appearing as a unit. Pacing budget = 2x Kokoro speed, so
+    // a block of N chars schedules the next reveal at N / 44 seconds.
+    // Mermaid SVG content stays intact (we never touch its text nodes;
+    // the whole diagram is one block).
+    var DISPLAY_CPS = 44;            // 2 × Kokoro speed=1.0
+    var MIN_BLOCK_INTERVAL_MS = 150; // floor so tiny blocks don't stack
+    var BLOCK_FADE_MS = 400;         // per-block fade-in duration
+    var BLOCK_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, .bw-diagram, .bw-image';
+
+    // Single in-flight reveal handle. New reveals cancel the prior one
+    // (which snaps remaining blocks visible so the DOM never gets stuck).
+    var activeReveal = null;
+
+    function _collectBlocks(roots) {
+      var out = [];
+      var seen = new Set();
+      for (var i = 0; i < roots.length; i++) {
+        var r = roots[i];
+        if (!r || r.nodeType !== 1) continue;
+        // If the root itself matches, include it.
+        if (r.matches && r.matches(BLOCK_SELECTOR) && !seen.has(r)) {
+          seen.add(r); out.push(r);
+        }
+        if (r.querySelectorAll) {
+          var matches = r.querySelectorAll(BLOCK_SELECTOR);
+          for (var k = 0; k < matches.length; k++) {
+            var m = matches[k];
+            // Skip text nodes that live inside an svg — those belong
+            // to mermaid diagrams. Our selector doesn't match those,
+            // but a `<text>` inside an SVG would never match the
+            // selector anyway. This is a belt-and-suspenders skip.
+            if (m.closest && m.closest('svg')) continue;
+            if (!seen.has(m)) { seen.add(m); out.push(m); }
+          }
+        }
+      }
+      // Sort by document order so the reveal walks top → bottom.
+      out.sort(function (a, b) {
+        if (a === b) return 0;
+        var pos = a.compareDocumentPosition(b);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        return 1;
+      });
+      return out;
+    }
+
+    function _hideBlock(el) {
+      // Inline transitions so we don't depend on any global stylesheet.
+      el.style.transition =
+        'opacity ' + BLOCK_FADE_MS + 'ms ease-out, transform ' +
+        BLOCK_FADE_MS + 'ms ease-out';
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(-6px)';
+    }
+
+    function _revealBlock(el) {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+    }
+
+    // Reveal `roots` block-by-block. Schedule each block to appear
+    // after a delay proportional to the PREVIOUS block's character
+    // count (so paragraphs hang longer than headings). Each individual
+    // block fades + slides in via inline transition.
+    function blockReveal(roots) {
+      var blocks = _collectBlocks(roots);
+      if (!blocks.length) {
+        return { promise: Promise.resolve(), cancel: function () {} };
+      }
+
+      // Hide everything first, in one pass.
+      for (var i = 0; i < blocks.length; i++) _hideBlock(blocks[i]);
+
+      var cancelled = false;
+      var timers = [];
+      var doneResolve;
+      var promise = new Promise(function (r) { doneResolve = r; });
+
+      function snapAllVisible() {
+        for (var k = 0; k < blocks.length; k++) _revealBlock(blocks[k]);
+      }
+
+      // Schedule reveals. t accumulates over prior blocks.
+      var t = 0;
+      blocks.forEach(function (el, idx) {
+        var chars = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+        // Diagrams / images have ~no text but should still hang briefly.
+        if (chars < 12) chars = 12;
+        var thisDelay = t;
+        var holdAfter = Math.max(MIN_BLOCK_INTERVAL_MS, (chars * 1000) / DISPLAY_CPS);
+        timers.push(window.setTimeout(function () {
+          if (cancelled) return;
+          _revealBlock(el);
+          if (idx === blocks.length - 1) {
+            // Last block — resolve after its fade completes.
+            window.setTimeout(function () {
+              if (!cancelled) doneResolve();
+              if (activeReveal && activeReveal._handle === handleRef) activeReveal = null;
+            }, BLOCK_FADE_MS);
+          }
+        }, thisDelay));
+        t += holdAfter;
+      });
+
+      var handleRef = {};
+      var handle = {
+        _handle: handleRef,
+        promise: promise,
+        cancel: function () {
+          if (cancelled) return;
+          cancelled = true;
+          for (var k = 0; k < timers.length; k++) clearTimeout(timers[k]);
+          snapAllVisible();
+          doneResolve();
+          if (activeReveal && activeReveal._handle === handleRef) activeReveal = null;
+        },
+      };
+      return handle;
+    }
+
+    function startReveal(roots) {
+      if (activeReveal) {
+        try { activeReveal.cancel(); } catch (_) {}
+      }
+      var handle = blockReveal(roots);
+      activeReveal = handle;
+      return handle.promise;
+    }
+
+    cleanup(function () {
+      if (activeReveal) {
+        try { activeReveal.cancel(); } catch (_) {}
+        activeReveal = null;
+      }
+    });
+
+    function setHtml(html, opts) {
       currentHtml = (typeof html === 'string') ? html : '';
       body.innerHTML = currentHtml;
       currentSelection = '';
+      if (opts && opts.animate && currentHtml) {
+        startReveal([body]);
+      }
       publishState();
     }
 
@@ -141,22 +284,25 @@
       document.removeEventListener('selectionchange', onSelectMaybe);
     });
 
-    setHtml(initial);
+    // Phase 2.6: animate the initial mount + any subsequent full-content
+    // swap from push_block_content. Reveal types in at TTS rate so the
+    // canvas pace matches the spoken pass.
+    setHtml(initial, { animate: true });
 
     // Subscribe so push_block_content can replace the card body in place.
     // Payload is the already-preprocessed HTML (workshop runs it through
-    // infra.render.rich_card.process before fan-out).
+    // infra.render.note.process before fan-out).
     var unsub = bus.subscribe('__CONTENT_TOPIC__', function (payload) {
       if (typeof payload === 'string') {
-        setHtml(payload);
+        setHtml(payload, { animate: true });
       } else if (payload && typeof payload.content === 'string') {
-        setHtml(payload.content);
+        setHtml(payload.content, { animate: true });
       }
     });
     cleanup(function () { unsub(); });
 
     // ---- Phase 2 voice-leads: animated edits --------------------------
-    // The canvas writer's `edit_rich_card` tool fans out one BlockMessage
+    // The canvas writer's `edit_note` tool fans out one BlockMessage
     // per call on `text.<block_id>.edits` with `{ops: [...], new_html}`.
     // We animate each op against the live DOM, then reconcile body to
     // new_html so future edits operate on the server's truth.
@@ -169,35 +315,30 @@
     cleanup(function () { unsubEdits(); });
 
     function applyEdits(ops, newHtml) {
-      var anyStructural = false;
+      // Phase 2.6: structural ops now typewriter their new content in
+      // place. The old "wait 700ms then reconcile via setHtml(newHtml)"
+      // belt-and-suspenders pass is dropped — it would re-type text
+      // we just finished typing. Op handlers leave the DOM matching
+      // newHtml on their own.
       for (var i = 0; i < ops.length; i++) {
         var op = ops[i] || {};
         try {
           switch (op.op) {
-            case 'append':           anyStructural = true; animateBoundary('end',   op.html); break;
-            case 'prepend':          anyStructural = true; animateBoundary('start', op.html); break;
-            case 'replace_section':  anyStructural = true; animateReplaceSection(op.anchor_text, op.html); break;
-            case 'revise':           anyStructural = true; animateRevise(op.target_text, op.new_text); break;
+            case 'append':           animateBoundary('end',   op.html || op.md); break;
+            case 'prepend':          animateBoundary('start', op.html || op.md); break;
+            case 'replace_section':  animateReplaceSection(op.anchor_text, op.html || op.md); break;
+            case 'revise':           animateRevise(op.target_text, op.new_text); break;
             case 'highlight':        animateHighlight(op.target_text, op.duration_ms); break;
             case 'arrow_to_text':    animateArrow(op.target_text, op.label, op.direction); break;
             case 'annotate':         animateAnnotate(op.target_text, op.note); break;
           }
         } catch (e) {
-          // Animation failure is best-effort. The reconcile below still
-          // gives the user the final DOM.
           if (typeof console !== 'undefined' && console.warn) {
-            console.warn('[rich_card] edit op failed:', op, e);
+            console.warn('[note] edit op failed:', op, e);
           }
         }
       }
-      // Reconcile body to authoritative new_html AFTER animations have
-      // had a moment to play. Skip when no structural ops fired so the
-      // pulse/arrow/annotate overlays survive long enough to be seen.
-      if (anyStructural && typeof newHtml === 'string' && newHtml.length) {
-        window.setTimeout(function () { setHtml(newHtml); }, 700);
-      } else {
-        publishState();
-      }
+      publishState();
     }
 
     // ---- DOM-locator helpers ----
@@ -236,7 +377,7 @@
     function animateBoundary(where, html) {
       if (typeof html !== 'string' || !html) return;
       // Render the new HTML into a detached container so we can attach
-      // the enter class to its top-level children.
+      // it to the live tree once we know where to put it.
       var tmp = document.createElement('div');
       tmp.innerHTML = html;
       var newNodes = [];
@@ -246,10 +387,14 @@
       var host = body.querySelector('.card') || body;
       for (var i = 0; i < newNodes.length; i++) {
         var n = newNodes[i];
-        if (n.nodeType === 1) n.classList.add('bw-edit-enter');
         if (where === 'end') host.appendChild(n);
         else host.insertBefore(n, host.firstChild);
       }
+      // Phase 2.6: block-by-block reveal. The reveal hides each
+      // matching block via inline opacity then fades them in one at a
+      // time at 2x speaking rate. No .bw-edit-enter class — its CSS
+      // keyframe would fight the inline transition.
+      startReveal(newNodes);
     }
 
     function animateReplaceSection(anchorText, html) {
@@ -259,7 +404,7 @@
       tmp.innerHTML = html;
       var nodes = [];
       while (tmp.firstChild) nodes.push(tmp.firstChild), tmp.removeChild(tmp.firstChild);
-      // Fade old out, fade new in.
+      // Fade old out.
       target.classList.add('bw-edit-exit');
       var parent = target.parentNode;
       window.setTimeout(function () {
@@ -267,11 +412,12 @@
         var anchor = target;
         for (var i = 0; i < nodes.length; i++) {
           var n = nodes[i];
-          if (n.nodeType === 1) n.classList.add('bw-edit-enter');
           parent.insertBefore(n, anchor.nextSibling);
           anchor = n;
         }
         parent.removeChild(target);
+        // Phase 2.6: block-by-block reveal of the new section.
+        startReveal(nodes);
       }, 250);
     }
 
@@ -295,6 +441,9 @@
       node.nodeValue = before;
       parent.insertBefore(span, node.nextSibling);
       parent.insertBefore(afterNode, span.nextSibling);
+      // Phase 2.6: typewriter only the <ins> text. The <del> stays
+      // intact during the flash so the diff is visible.
+      startReveal([ins]);
     }
 
     function animateHighlight(targetText, durationMs) {
@@ -360,9 +509,9 @@
 
     // ---- One-shot style sheet ----
     function ensureEditStyles() {
-      if (document.getElementById('bw-rich-card-edit-style')) return;
+      if (document.getElementById('bw-note-edit-style')) return;
       var s = document.createElement('style');
-      s.id = 'bw-rich-card-edit-style';
+      s.id = 'bw-note-edit-style';
       s.textContent =
         '@keyframes bw-edit-enter { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }' +
         '@keyframes bw-edit-exit  { from { opacity:1; } to { opacity:0; transform:translateY(6px); } }' +

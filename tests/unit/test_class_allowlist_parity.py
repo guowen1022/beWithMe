@@ -1,9 +1,9 @@
-"""Parity test for the rich_card class allowlist.
+"""Parity test for the note class allowlist.
 
-The Python source of truth (`infra/render/rich_card_grammar.ALLOWED_CLASSES`)
+The Python source of truth (`infra/render/note_grammar.ALLOWED_CLASSES`)
 must match the class names declared in the web CSS (`.bw-card` rules in
 `frontend/app/globals.css`) and the mobile StyleSheet (`STYLES` map in
-`mobile/src/canvas/blocks/RichCardBlock.styles.ts`).
+`mobile/src/canvas/blocks/NoteBlock.styles.ts`).
 
 Both web and mobile files are written by hand; this test fails when they
 drift, so a missing class on either side is caught before it ships a
@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from infra.render.rich_card_grammar import ALLOWED_CLASSES
+from infra.render.note_grammar import ALLOWED_CLASSES
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WEB_CSS = _ROOT / "frontend" / "app" / "globals.css"
-_MOBILE_STYLES = _ROOT / "mobile" / "src" / "canvas" / "blocks" / "RichCardBlock.styles.ts"
+_MOBILE_STYLES = _ROOT / "mobile" / "src" / "canvas" / "blocks" / "NoteBlock.styles.ts"
 
 
 _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -32,7 +32,7 @@ _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 def _classes_from_web_css(text: str) -> set[str]:
     """Extract class names from selectors scoped to `.bw-card`.
 
-    Strips CSS comments first (so file paths like `infra/.../rich_card.py`
+    Strips CSS comments first (so file paths like `infra/.../note.py`
     inside doc comments don't show up as classes). Then looks for every
     `.bw-card`-containing selector and collects every `.<name>` token
     inside it.
@@ -49,7 +49,7 @@ def _classes_from_web_css(text: str) -> set[str]:
 
 
 def _classes_from_mobile_styles(text: str) -> set[str]:
-    """Extract keys from the `STYLES` StyleSheet in RichCardBlock.styles.ts.
+    """Extract keys from the `STYLES` StyleSheet in NoteBlock.styles.ts.
 
     The file has two StyleSheets — `TAG_STYLES` (tag-driven primitives)
     and `STYLES` (the class vocabulary the persona may emit). Only the

@@ -1,7 +1,7 @@
-// StyleSheet realization of the rich_card class vocabulary.
+// StyleSheet realization of the note class vocabulary.
 //
 // Mirrors the .bw-card ruleset in frontend/app/globals.css and the
-// ALLOWED_CLASSES set in infra/render/rich_card_grammar.py — the
+// ALLOWED_CLASSES set in infra/render/note_grammar.py — the
 // parity test (tests/unit/test_class_allowlist_parity.py) diffs the
 // keys here against the Python source of truth.
 //
@@ -61,7 +61,7 @@ export const TAG_STYLES = StyleSheet.create({
 });
 
 // Class vocabulary — keys here must equal the set in
-// infra/render/rich_card_grammar.ALLOWED_CLASSES. Parity test enforces.
+// infra/render/note_grammar.ALLOWED_CLASSES. Parity test enforces.
 export const STYLES = StyleSheet.create({
   // containers
   "card":            { backgroundColor: BW.surface, borderWidth: 1, borderColor: BW.border, padding: 18, marginVertical: 8 },

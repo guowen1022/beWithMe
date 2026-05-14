@@ -25,4 +25,6 @@ tokenizers>=0.19.0   # HF tokenizer for the EOU model, no torch dep
 Pillow>=10.0.0
 imagehash>=4.3.1
 webrtcvad-wheels>=2.0.14
-nh3>=0.2.18  # HTML sanitizer used by infra/render/rich_card.py — Rust-backed ammonia bindings
+nh3>=0.2.18  # HTML sanitizer used by infra/render/note.py — Rust-backed ammonia bindings
+markdown-it-py>=3.0.0,<4.0.0  # writer authors in markdown; note_md.py renders to HTML
+mdit-py-plugins>=0.4.0,<0.5.0  # ==mark== highlight plugin + future extensions

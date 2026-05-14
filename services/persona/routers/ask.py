@@ -292,7 +292,7 @@ async def ask_stream(
     # the active channel is voice, the request runs as: (1) a tools-free
     # voice call that streams brief prose through auto-speak; (2) a
     # background canvas-writer call spawned after the voice `done` event,
-    # which mounts at most one rich_card derived from the voice transcript.
+    # which mounts at most one note derived from the voice transcript.
     # The non-voice path is unchanged; flag-off keeps the existing
     # single-turn voice path intact.
     voice_leads_enabled = voice_mode and os.environ.get("BWM_VOICE_LEADS", "0") == "1"
@@ -537,7 +537,7 @@ async def ask_stream(
             # the spoken answer is complete. The task runs detached from
             # the SSE stream — by the time the writer's tool call fires,
             # the user is already listening to the auto-spoken response,
-            # and the rich_card pops onto the canvas during playback.
+            # and the note pops onto the canvas during playback.
             if voice_leads_enabled and answer_body:
                 writer_task = asyncio.create_task(run_canvas_writer(
                     question=question,

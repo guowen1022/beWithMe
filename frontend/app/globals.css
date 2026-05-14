@@ -374,12 +374,12 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   .bw-card — rich_card block surface
+   .bw-card — note block surface
    ─────────────────────────────────────────────────────────────────────────
    The teacher's primary explanation surface. Persona authors HTML in a
-   constrained grammar (see infra/render/rich_card_grammar.py) and the
+   constrained grammar (see infra/render/note_grammar.py) and the
    backend sanitizes + inlines Mermaid SVG before it lands here. Same
-   grammar renders on mobile via mobile/src/canvas/blocks/RichCardBlock —
+   grammar renders on mobile via mobile/src/canvas/blocks/NoteBlock —
    keep these class names in sync (parity test:
    tests/unit/test_class_allowlist_parity.py).
 */
@@ -405,17 +405,20 @@ body {
 .bw-card .card-definition {
   background: var(--bw-surface);
   border: 1px solid var(--bw-border);
-  padding: 18px 22px;
-  margin: 0.9em 0;
+  padding: 14px 18px;
+  margin: 0.6em 0;
 }
+/* Hero gets a bit more breathing room; it's the top-level wrapper. */
 .bw-card .card-hero {
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--bw-accent) 6%, transparent), transparent 60%),
     var(--bw-surface);
   border-color: color-mix(in oklab, var(--bw-accent) 30%, var(--bw-border));
+  padding: 18px 22px;
 }
 .bw-card .card-callout {
   border-left: 3px solid var(--bw-accent);
+  padding: 12px 16px;
 }
 .bw-card .card-compare {
   display: grid;
@@ -503,18 +506,23 @@ body {
 .bw-card .aspect-16-9 { aspect-ratio: 16 / 9; object-fit: cover; }
 .bw-card .aspect-3-4  { aspect-ratio: 3 / 4;  object-fit: cover; }
 
-/* Headings + prose tags — mirror bw-prose so a rich_card with raw
-   headings reads identically to a markdown text_display. */
+/* Headings + prose tags — mirror bw-prose so a note with raw
+   headings reads identically to a markdown text_display.
+   Spacing tuned for markdown-authored cards where ## H2 / ### H3 are
+   the primary section dividers (no nested .card-callout boxes). */
 .bw-card h1, .bw-card h2, .bw-card h3, .bw-card h4 {
   font-family: var(--bw-font-sans); color: var(--bw-ink); line-height: 1.2;
-  margin: 1.4em 0 0.5em;
+  margin: 0.9em 0 0.35em;
 }
 .bw-card h1 { font-size: 1.6em;  font-weight: 800; letter-spacing: -0.03em; }
 .bw-card h2 { font-size: 1.3em;  font-weight: 700; letter-spacing: -0.02em; }
-.bw-card h3 { font-size: 1.12em; font-weight: 700; }
+.bw-card h3 { font-size: 1.08em; font-weight: 700; }
 .bw-card h4 { font-size: 0.78em; font-weight: 600; color: var(--bw-ink-muted);
               font-family: var(--bw-font-mono); text-transform: uppercase; letter-spacing: 0.1em; }
-.bw-card p { margin: 0.8em 0; }
+.bw-card p { margin: 0.5em 0; }
+.bw-card ul, .bw-card ol { margin: 0.4em 0; padding-left: 1.5em; }
+.bw-card li { margin: 0.2em 0; }
+.bw-card li > p { margin: 0.15em 0; }
 .bw-card strong { color: var(--bw-ink); font-weight: 600; }
 .bw-card em { font-family: var(--bw-font-serif); font-style: italic; font-weight: 400; }
 .bw-card code {

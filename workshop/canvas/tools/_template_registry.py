@@ -3,7 +3,7 @@
 Mount-time scratch: `mount_template` records the template name it
 mounted under each block id; `push_block_content` consults this when
 deciding whether to run the value through a per-template preprocessor
-(today: only `rich_card` HTML).
+(today: only `note` HTML).
 
 In-process only. Mounts are already ephemeral (no DB, no git), so a
 workshop restart drops both the mounts and this registry consistently.

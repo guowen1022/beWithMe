@@ -1,12 +1,12 @@
 """Canvas-writer prompt — second pass of the voice-leads turn.
 
 Receives the voice pass's transcript, the user's original question, and
-(Phase 2) the full cached HTML of every rich_card currently on canvas.
+(Phase 2) the full cached HTML of every note currently on canvas.
 Emits ONE tool call:
 
-  * `mount_template(rich_card, ...)` — no rich_card on canvas yet, or
+  * `mount_template(note, ...)` — no note on canvas yet, or
     the existing one is on an unrelated topic;
-  * `edit_rich_card(block_id, ops=[...])` — an existing rich_card is
+  * `edit_note(block_id, ops=[...])` — an existing note is
     on-topic and should evolve in place (append / highlight / revise);
   * nothing — the spoken answer was self-contained and a card would
     just be noise.
@@ -36,7 +36,7 @@ def build(
     question: str,
     voice_transcript: str,
     canvas_state: object = None,
-    existing_rich_cards: Optional[Dict[str, str]] = None,
+    existing_notes: Optional[Dict[str, str]] = None,
 ) -> PromptParts:
     system_parts: List[str] = []
 
@@ -61,15 +61,15 @@ def build(
     if canvas_section:
         dynamic_parts.append(canvas_section)
 
-    # Phase 2: inject the FULL cached HTML of every existing rich_card so
-    # the writer can pick between mount / edit / no-op with full context.
-    # Without this the writer would only see a 200-char plaintext preview
-    # via the canvas summary above and might overwrite real content.
-    if existing_rich_cards:
-        for bid, html in existing_rich_cards.items():
+    # Phase 2.5: inject the cached MARKDOWN source of every existing
+    # note. Markdown is the source of truth; the client renders HTML.
+    # The writer reads md and emits md ops back, keeping a clean diff
+    # surface and a small tool-args payload.
+    if existing_notes:
+        for bid, source in existing_notes.items():
             dynamic_parts.append(
-                f"=== CURRENT rich_card BLOCK_ID={bid} (HTML) ===\n"
-                f"{html.strip()}\n"
+                f"=== CURRENT note BLOCK_ID={bid} (MARKDOWN) ===\n"
+                f"{source.strip()}\n"
                 "=== END ==="
             )
 
@@ -80,16 +80,16 @@ def build(
         f"{voice_transcript.strip()}"
     )
 
-    if existing_rich_cards:
+    if existing_notes:
         dynamic_parts.append(
-            "Decide: mount a new rich_card, EDIT the existing one via "
-            "edit_rich_card (append / highlight / revise), or do nothing. "
+            "Decide: mount a new note, EDIT the existing one via "
+            "edit_note (append / highlight / revise), or do nothing. "
             "Prefer edit when the topic continues; mount only when the "
             "topic is wholly different."
         )
     else:
         dynamic_parts.append(
-            "Mount the rich_card (or do nothing if the spoken answer is "
+            "Mount the note (or do nothing if the spoken answer is "
             "complete on its own). Emit only the tool call."
         )
 

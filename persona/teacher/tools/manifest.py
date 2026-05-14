@@ -36,7 +36,7 @@ from uuid import UUID
 #   "writer"      — Voice-leads canvas writer: the second pass of a
 #                   voice turn, runs after the spoken answer is done.
 #                   Only `mount_template` is exposed — its single job
-#                   is to render a rich_card derived from the
+#                   is to render a note derived from the
 #                   transcript.
 Lane = Literal["answer", "user_facing", "background", "research", "writer"]
 
@@ -51,7 +51,7 @@ from tools.read_url import read_url
 from tools.speak import speak
 from tools.web_view import web_view
 from workshop.canvas.tools.block_action import block_action
-from workshop.canvas.tools.edit_rich_card import edit_rich_card
+from workshop.canvas.tools.edit_note import edit_note
 from workshop.canvas.tools.interactive_graph import interactive_graph
 from workshop.canvas.tools.layout_blocks import layout_blocks
 from workshop.canvas.tools.list_media import list_media
@@ -233,7 +233,7 @@ def _make_mount_template(user_id: UUID):
     return executor
 
 
-def _make_edit_rich_card(user_id: UUID):
+def _make_edit_note(user_id: UUID):
     async def executor(args: Dict[str, Any]) -> str:
         # `_raw_arguments` = LLM truncated mid-stream; surface a retry hint.
         if "_raw_arguments" in args:
@@ -274,7 +274,7 @@ def _make_edit_rich_card(user_id: UUID):
         import time as _t_mod
         t0 = _t_mod.perf_counter()
         try:
-            result = await edit_rich_card(
+            result = await edit_note(
                 user_id=user_id,
                 block_id=block_id,
                 ops=ops,
@@ -287,7 +287,7 @@ def _make_edit_rich_card(user_id: UUID):
         # Log even on error so we can see misses too.
         from infra.event_log import log_event
         log_event(
-            "ask.edit_rich_card",
+            "ask.edit_note",
             user_id=str(user_id),
             block_id=block_id,
             wall_ms=wall_ms,
@@ -910,7 +910,7 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # context that's already in the prompt go to Lane B only.
     "speak":              {"answer", "user_facing", "research"},
     "mount_template":     {"answer", "user_facing", "background", "research", "writer"},
-    "edit_rich_card":     {"answer", "user_facing", "background", "research", "writer"},
+    "edit_note":     {"answer", "user_facing", "background", "research", "writer"},
     "block_action":       {"answer", "user_facing", "background", "research"},
     "push_block_content": {"answer", "user_facing", "background", "research"},
     "point_arrow":        {"answer", "user_facing", "background", "research"},
@@ -1385,21 +1385,24 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "`upload_file` (PDF/video/audio/image picker), "
                 "`passage_reader` (USER pastes/types their own text — "
                 "input widget, never use for prose you author), "
-                "`pdf_reader` (rendered PDF), `rich_card` "
+                "`pdf_reader` (rendered PDF), `note` "
                 "(YOUR PRIMARY EXPLANATION SURFACE — a Wikipedia-like "
                 "card with prose, embedded Mermaid diagrams, inline "
                 "images, highlights, and inline revision marks. Use this "
                 "for ANY explanation longer than a sentence: definitions, "
-                "comparisons, walkthroughs, illustrated concepts. Pass "
-                "`params: {content: '<html>...</html>'}` where the HTML "
-                "uses the rich_card grammar — see worked example below. "
-                "Diagrams embed inline via "
-                "`<div class=\"bw-diagram\" data-src=\"<mermaid source>\"></div>`; "
-                "the backend pre-renders them to SVG and ships the same "
-                "artifact to web and mobile.), `text_display` "
+                "comparisons, walkthroughs, illustrated concepts. **Pass "
+                "`params: {markdown: '## H\\n\\nprose…'}`** — the server "
+                "renders markdown to HTML using markdown-it with the "
+                "==highlight== extension. Use `## Heading` for sections, "
+                "`**bold**`, `==hi==` for highlights, `- bullet` for "
+                "lists, and ` ```mermaid ` fenced code blocks for "
+                "diagrams. Don't author raw `<div class=\"card-…\">` — "
+                "headings + paragraphs get styled automatically. Legacy "
+                "`params.content` (raw HTML) still works for back-compat "
+                "but is discouraged.), `text_display` "
                 "(short authored prose / voice transcripts — cheaper "
-                "tokens than rich_card. Use for one- or two-sentence "
-                "answers only; reach for rich_card the moment you want "
+                "tokens than note. Use for one- or two-sentence "
+                "answers only; reach for note the moment you want "
                 "a heading, a list with structure, or any diagram.), "
                 "`screen_share` (live screen-share — click START to "
                 "begin streaming the user's screen + audio into "
@@ -1409,41 +1412,36 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "empty canvas, rarely needed manually). "
                 "Fast and deterministic. Pass `replace: [...]` to "
                 "atomically swap out an existing surface.\n\n"
-                "RICH_CARD WORKED EXAMPLE (the grammar you author into "
-                "`params.content`):\n"
+                "NOTE MARKDOWN WORKED EXAMPLE "
+                "(author into `params.markdown`):\n"
                 "```\n"
-                "<div class=\"card card-hero\">\n"
-                "  <h2 class=\"t-display\">Quicksort</h2>\n"
-                "  <p>Divide-and-conquer with a <mark>pivot</mark>.</p>\n"
-                "  <div class=\"bw-diagram\" data-src=\"graph TD; A[unsorted]-->B[pivot]; B-->C[left]; B-->D[right]\"></div>\n"
-                "  <p class=\"t-body\">Then recurse on each half.</p>\n"
-                "  <ul><li>Best: <span class=\"success\">O(n log n)</span></li>\n"
-                "      <li>Worst: <span class=\"danger\">O(n²)</span></li></ul>\n"
-                "</div>\n"
+                "## Quicksort\n"
+                "\n"
+                "Divide-and-conquer with a ==pivot==.\n"
+                "\n"
+                "```mermaid\n"
+                "graph TD; A[unsorted]-->B[pivot]; B-->C[left]; B-->D[right]\n"
                 "```\n"
-                "Allowed CONTAINERS: card, card-hero, card-callout, "
-                "card-compare, card-timeline, card-definition, row, col, "
-                "gap-{sm,md,lg}, pad-{sm,md,lg}. "
-                "Allowed TONE: accent, accent-soft, muted, danger, warn, "
-                "success, info, bg-surface, bg-surface-2, bg-accent-soft. "
-                "Allowed TYPE: t-display, t-title, t-body, t-caption, "
-                "t-mono, weight-bold, weight-semi, italic. "
-                "Allowed ANNOTATION: revision-add, revision-remove, "
-                "revision-changed (paired with <mark>/<ins>/<del>). "
-                "Allowed MEDIA: bw-diagram (with data-src mermaid), "
-                "bw-image (https:// only) + aspect-{1-1,4-3,16-9,3-4}. "
-                "FORBIDDEN: <script>, <iframe>, <style>, <table>, "
-                "inline `style=` attribute, `http://` URLs, `data:` URLs, "
-                "`onclick` (or any on* handler), author-written <svg>. "
-                "Anything outside the allowlist is stripped silently — "
-                "stick to the vocabulary above for predictable output."
+                "\n"
+                "Then recurse on each half.\n"
+                "\n"
+                "- Best: **O(n log n)**\n"
+                "- Worst: **O(n²)**\n"
+                "```\n"
+                "Syntax: `## H2` / `### H3` for sections, `**bold**`, "
+                "`*italic*`, `==highlight==` (renders as <mark>), bullet "
+                "and numbered lists, ` ```mermaid ` fenced code blocks "
+                "for diagrams. Inline HTML is allowed for special cases "
+                "(`<mark>`, `<ins>`, `<del>`, `<strong>` etc.) but you "
+                "should reach for markdown syntax first. Legacy "
+                "`params.content` (HTML grammar) still works."
             ),
             params_schema={
                 "type": "object",
                 "properties": {
                     "template": {
                         "type": "string",
-                        "description": "Template filename stem (e.g. 'rich_card').",
+                        "description": "Template filename stem (e.g. 'note').",
                     },
                     "replace": {
                         "type": "array",
@@ -1457,11 +1455,12 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                     "params": {
                         "type": "object",
                         "description": (
-                            "Template-specific values. `rich_card` and "
-                            "`text_display` both accept {content: string}; "
-                            "rich_card content is HTML following the "
-                            "grammar in the tool description, text_display "
-                            "content is markdown."
+                            "Template-specific values.\n"
+                            "• `note`: prefer `{markdown: '## H\\n\\n…'}` "
+                            "(see worked example above). Legacy `{content: "
+                            "'<html>...'}` still accepted.\n"
+                            "• `text_display`: `{content: 'markdown'}`.\n"
+                            "• Other templates: see their own docs."
                         ),
                     },
                 },
@@ -1471,22 +1470,24 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
             executor=_make_mount_template(user_id),
         ),
         ToolSpec(
-            name="edit_rich_card",
+            name="edit_note",
             description=(
                 "Apply a list of animated edits to an already-mounted "
-                "rich_card. Use this — NOT `mount_template` — when an "
-                "existing rich_card is on the same topic and should "
+                "note. Use this — NOT `mount_template` — when an "
+                "existing note is on the same topic and should "
                 "EVOLVE rather than be wiped and re-mounted. The user "
                 "sees each op animate in place: new content slides in, "
                 "highlights pulse, revisions flash diff colors.\n"
                 "\n"
                 "Op types:\n"
-                "  • `append`  {html: '<p>...</p>'} — add HTML at the "
-                "end of the card body. Animates slide+fade-in.\n"
-                "  • `prepend` {html: '...'} — add at the start.\n"
-                "  • `replace_section` {anchor_text, html} — find the "
-                "first <p>/<h2>/<div> containing anchor_text and swap "
-                "it for new html. Animates cross-fade.\n"
+                "  • `append`  {md: '### New section\\n\\nprose'} — "
+                "add markdown at the end of the card body. Animates "
+                "slide+fade-in. (Legacy `html` field still accepted.)\n"
+                "  • `prepend` {md: '…'} — add at the start.\n"
+                "  • `replace_section` {anchor_text, md} — find the "
+                "first heading whose text contains anchor_text, replace "
+                "the section (heading + body until next equal-or-higher "
+                "heading) with new markdown. Animates cross-fade.\n"
                 "  • `revise` {target_text, new_text} — replace inline "
                 "text matching target_text with new_text, marked with "
                 "<del>/<ins>. Animates revision-flash. Use for "
@@ -1502,29 +1503,33 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "caption near the matching text. Persists until next "
                 "edit turn.\n"
                 "\n"
-                "All html fields run through the same sanitizer as "
-                "mount_template; use the same grammar (cards, t-display, "
-                "<mark>, bw-diagram, etc.). target_text / anchor_text "
-                "must match a substring of the card's visible text — "
-                "exact case, no fuzzy match.\n"
+                "`md` fields use the same markdown grammar as "
+                "`mount_template`'s `params.markdown` (## headings, "
+                "**bold**, ==hi==, lists, ```mermaid fences). The server "
+                "applies ops to the cached markdown and re-renders to "
+                "HTML. `target_text` / `anchor_text` must match a "
+                "substring of the card's visible text exactly "
+                "(case-sensitive). Match against the RENDERED text, not "
+                "the markdown source — strip `**`/`==` etc. when "
+                "specifying.\n"
                 "\n"
                 "You can mix ops in one call (e.g. append a new "
-                "paragraph AND highlight a related earlier phrase in "
-                "the same turn). The client animates them roughly "
-                "simultaneously.\n"
+                "section AND highlight a related earlier phrase in "
+                "the same call). The client animates them roughly "
+                "simultaneously. **Cap: 3 ops per call; at most 1 "
+                "highlight per turn.**\n"
                 "\n"
-                "Returns {block_id, ops_applied, op_names} on success, "
-                "{error: '...'} on validation failure (unknown op, "
-                "missing target_text, malformed html). On error, fix "
-                "and retry — DO NOT fall back to mount_template, which "
-                "would wipe the card."
+                "Returns {block_id, ops_applied, op_names, mode} on "
+                "success, {error: '...'} on validation failure. On "
+                "error, fix and retry — DO NOT fall back to "
+                "mount_template, which would wipe the card."
             ),
             params_schema={
                 "type": "object",
                 "properties": {
                     "block_id": {
                         "type": "string",
-                        "description": "Block id of the rich_card to edit (e.g. 'rich-card').",
+                        "description": "Block id of the note to edit (e.g. 'note').",
                     },
                     "ops": {
                         "type": "array",
@@ -1540,6 +1545,7 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                                         "annotate",
                                     ],
                                 },
+                                "md": {"type": "string"},
                                 "html": {"type": "string"},
                                 "target_text": {"type": "string"},
                                 "anchor_text": {"type": "string"},
@@ -1565,7 +1571,7 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
                 "required": ["block_id", "ops"],
                 "additionalProperties": False,
             },
-            executor=_make_edit_rich_card(user_id),
+            executor=_make_edit_note(user_id),
         ),
         ToolSpec(
             name="request_new_block",

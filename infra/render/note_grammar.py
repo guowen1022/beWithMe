@@ -1,9 +1,9 @@
-"""Canonical allowlist for rich_card content.
+"""Canonical allowlist for note content.
 
 This is the single source of truth for what HTML the persona is allowed to
-emit inside a `rich_card` block. The web sanitizer (`infra/render/rich_card.py`),
+emit inside a `note` block. The web sanitizer (`infra/render/note.py`),
 the web CSS (`frontend/app/globals.css` `.bw-card` ruleset), and the mobile
-renderer (`mobile/src/canvas/blocks/RichCardBlock.styles.ts`) must all stay
+renderer (`mobile/src/canvas/blocks/NoteBlock.styles.ts`) must all stay
 in sync with these sets — `tests/test_class_allowlist_parity.py` enforces it.
 
 Why so tight: the persona is an LLM and the output is shown on the user's
@@ -46,7 +46,7 @@ ALLOWED_ATTRS: dict[str, set[str]] = {
 # both go through this.
 ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"https"})
 
-# The design vocabulary. Mirrored in mobile/src/canvas/blocks/RichCardBlock.styles.ts
+# The design vocabulary. Mirrored in mobile/src/canvas/blocks/NoteBlock.styles.ts
 # and in the .bw-card CSS rules. Adding a class here without adding it in
 # both other places will fail the parity test.
 ALLOWED_CLASSES: frozenset[str] = frozenset(

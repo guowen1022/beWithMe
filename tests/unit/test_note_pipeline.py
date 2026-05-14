@@ -1,4 +1,4 @@
-"""End-to-end test of the rich_card preprocessor with real Mermaid renders.
+"""End-to-end test of the note preprocessor with real Mermaid renders.
 
 Slow — boots a headless Chromium via Playwright. Splits into a single
 module-scoped session so the browser only starts once.
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from infra.render import mermaid as mermaid_mod
-from infra.render.rich_card import process
+from infra.render.note import process
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -76,7 +76,7 @@ def test_pipeline_drops_diagram_on_render_failure(monkeypatch) -> None:
     async def boom(_src: str) -> str:
         raise RuntimeError("mermaid blew up")
 
-    monkeypatch.setattr("infra.render.rich_card.render_mermaid", boom)
+    monkeypatch.setattr("infra.render.note.render_mermaid", boom)
     html = '<div class="card"><div class="bw-diagram" data-src="not real"></div><p>survives</p></div>'
     out = _run(html)
     assert "<svg" not in out

@@ -10,7 +10,7 @@ grid:
   h: 8
 ---
 
-Use `rich_card` whenever you're *explaining* something — definitions,
+Use `note` whenever you're *explaining* something — definitions,
 comparisons, walkthroughs, illustrated concepts. It's the Wikipedia-like
 surface: a structured card with prose, embedded diagrams, images, and
 inline annotation that renders identically on web and mobile.
@@ -20,8 +20,8 @@ answers and voice transcripts (cheaper tokens, simpler).
 
 ## What you author
 
-Pass `params.content` as an HTML string conforming to the rich_card
-grammar (`infra/render/rich_card_grammar.py`). The backend sanitizes,
+Pass `params.content` as an HTML string conforming to the note
+grammar (`infra/render/note_grammar.py`). The backend sanitizes,
 resolves Mermaid sources, and inlines SVGs before either web or mobile
 sees the bytes.
 

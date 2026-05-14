@@ -1,5 +1,5 @@
 // Teacher's primary explanation surface on mobile. Mirrors the web
-// block at frontend/templates/blocks/rich_card.js — same content topic
+// block at frontend/templates/blocks/note.js — same content topic
 // (`text.<id>.content`), same HTML grammar, but rendered through
 // native View/Text/Image/SvgXml instead of innerHTML. Backend sanitizes
 // + pre-renders Mermaid SVG before either surface sees it, so this
@@ -10,9 +10,9 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { bus } from "../../lib/bus/bus";
 import type { BlockProps } from "../blockRegistry";
-import { renderRichCardHtml } from "./richCardMapper";
+import { renderNoteHtml } from "./noteMapper";
 
-export function RichCardBlock({ blockId, params }: BlockProps): React.ReactElement {
+export function NoteBlock({ blockId, params }: BlockProps): React.ReactElement {
   const initial = useMemo(() => {
     const c = params?.content;
     return typeof c === "string" ? c : "";
@@ -32,12 +32,12 @@ export function RichCardBlock({ blockId, params }: BlockProps): React.ReactEleme
     return () => { unsub(); };
   }, [contentTopic]);
 
-  const rendered = useMemo(() => renderRichCardHtml(html), [html]);
+  const rendered = useMemo(() => renderNoteHtml(html), [html]);
 
   // Header meta — count diagrams/images in the rendered tree by
   // scanning the source HTML (cheap, doesn't need to walk the React
   // tree). Stays in sync with what the user actually sees because
-  // renderRichCardHtml is deterministic on the same HTML.
+  // renderNoteHtml is deterministic on the same HTML.
   const counts = useMemo(() => {
     if (!html) return { chars: 0, diagrams: 0, images: 0 };
     const diagrams = (html.match(/<div[^>]*\bbw-diagram\b/g) || []).length;

@@ -1,7 +1,7 @@
-// Pure HTML → React Native mapper for the rich_card block.
+// Pure HTML → React Native mapper for the note block.
 //
-// Persona authors HTML in the rich_card grammar (see
-// infra/render/rich_card_grammar.py); the backend pre-renders Mermaid
+// Persona authors HTML in the note grammar (see
+// infra/render/note_grammar.py); the backend pre-renders Mermaid
 // diagrams to inline <svg> and sanitizes the payload before either
 // surface sees it. This mapper walks the resulting tree and produces a
 // React Native element tree built from View / Text / Image / SvgXml —
@@ -19,7 +19,7 @@ import React from "react";
 import { Image, Linking, Text, View } from "react-native";
 import { SvgXml } from "react-native-svg";
 
-import { STYLES, TAG_STYLES } from "./RichCardBlock.styles";
+import { STYLES, TAG_STYLES } from "./NoteBlock.styles";
 
 type StyleObj = Record<string, unknown>;
 
@@ -222,8 +222,8 @@ function renderBlockChildren(parent: Element): React.ReactNode[] {
   return out;
 }
 
-/** Entry point: parse a sanitized rich_card HTML string into a RN tree. */
-export function renderRichCardHtml(html: string): React.ReactNode[] {
+/** Entry point: parse a sanitized note HTML string into a RN tree. */
+export function renderNoteHtml(html: string): React.ReactNode[] {
   _key = 0;
   if (!html || !html.trim()) return [];
   const doc = parseDocument(html, { lowerCaseTags: false });

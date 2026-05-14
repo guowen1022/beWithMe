@@ -31,10 +31,11 @@ from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockSource, UIUpdate
 from infra.db import async_session
 from infra.perception import forget_block
-from infra.render.rich_card import process as preprocess_rich_card
+from infra.render.note import process as preprocess_note
+from infra.render.note_md import render_markdown as render_note_markdown
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
-from workshop.canvas.tools import _rich_card_cache, _template_registry
+from workshop.canvas.tools import _note_cache, _template_registry
 from services.persona.routers.dynamic import (
     enqueue_for_device,
     enqueue_for_user,
@@ -102,7 +103,7 @@ def _render_block_source(
     # derived from its block_id so the persona can update one without
     # cross-talking to another.
     js = js.replace("__CONTENT_TOPIC__", f"text.{block_id}.content")
-    # Per-block edits topic. Phase 2 voice-leads — rich_card subscribes
+    # Per-block edits topic. Phase 2 voice-leads — note subscribes
     # here for animated patches (append/highlight/revise/…). Other
     # templates ignore the placeholder if they don't reference it.
     js = js.replace("__EDITS_TOPIC__", f"text.{block_id}.edits")
@@ -239,15 +240,26 @@ async def mount_template(
         if bid in all_mounted:
             return MountResult(block_id=bid, template=template_name, deleted=[])
 
-    # Rich-card preprocessing: persona authors HTML in a constrained
-    # grammar; the backend sanitizes + inlines Mermaid SVGs once so both
-    # web and mobile consume the same final HTML. See infra/render/rich_card.
-    if template_name == "rich_card" and params and isinstance(params.get("content"), str):
-        processed = await preprocess_rich_card(params["content"])
-        params = {**params, "content": processed}
-        # Phase 2 voice-leads: cache the rendered HTML so the canvas
-        # writer can compose surgical edits against it on the next turn.
-        _rich_card_cache.set(user_id, bid, processed)
+    # Rich-card preprocessing. Two authoring surfaces, both end up as
+    # sanitized HTML for the client:
+    #   * `params.markdown` (preferred, Phase 2.5+) — markdown-it-py
+    #     renders via infra.render.note_md, then the same sanitize
+    #     + diagram pipeline runs. We cache BOTH the md source (so
+    #     edit_note can mutate it cleanly) and the final HTML
+    #     (what the client renders).
+    #   * `params.content` (legacy) — already-authored HTML; runs
+    #     through the sanitize pipeline only. md cache stays None.
+    if template_name == "note" and params:
+        md_source = params.get("markdown")
+        if isinstance(md_source, str) and md_source.strip():
+            processed = await render_note_markdown(md_source)
+            params = {**params, "content": processed}
+            params.pop("markdown", None)  # don't ship the source to the client
+            _note_cache.set(user_id, bid, html=processed, md=md_source)
+        elif isinstance(params.get("content"), str):
+            processed = await preprocess_note(params["content"])
+            params = {**params, "content": processed}
+            _note_cache.set(user_id, bid, html=processed)
 
     rendered = _render_block_source(template, bid, g, params)
 
@@ -288,7 +300,7 @@ async def mount_template(
         ))
         forget_block(user_id=user_id, block_id=stale_id)
         _template_registry.forget(stale_id)
-        _rich_card_cache.forget(user_id, stale_id)
+        _note_cache.forget(user_id, stale_id)
 
     deleted: list[str] = []
     if replace:
@@ -301,7 +313,7 @@ async def mount_template(
             ))
             forget_block(user_id=user_id, block_id=old_id)
             _template_registry.forget(old_id)
-            _rich_card_cache.forget(user_id, old_id)
+            _note_cache.forget(user_id, old_id)
             deleted.append(old_id)
 
     await _send(UIUpdate(action="mount", block=block_source))

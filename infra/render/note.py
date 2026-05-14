@@ -1,4 +1,4 @@
-"""Preprocess + sanitize persona-authored HTML for the rich_card block.
+"""Preprocess + sanitize persona-authored HTML for the note block.
 
 Pipeline:
     persona HTML
@@ -8,7 +8,7 @@ Pipeline:
       → replace each diagram div with `<div class="bw-diagram"
         data-diagram-id="N"></div>` (empty body, no data-src)
       → serialize, sanitize via nh3 with the grammar in
-        infra/render/rich_card_grammar.py
+        infra/render/note_grammar.py
       → re-parse, find divs with data-diagram-id, splice the rendered SVG
         in as their inner content (SVGs come from our own renderer, so
         they bypass the sanitizer; mermaid is configured with
@@ -31,7 +31,7 @@ import nh3
 from lxml import etree, html as lxml_html
 
 from infra.render.mermaid import render_mermaid
-from infra.render.rich_card_grammar import (
+from infra.render.note_grammar import (
     ALLOWED_ATTRS,
     ALLOWED_CLASSES,
     ALLOWED_TAGS,

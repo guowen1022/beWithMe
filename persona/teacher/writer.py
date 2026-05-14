@@ -5,14 +5,14 @@ question (or trigger summary) and the spoken transcript, builds a small
 prompt and runs one short tool loop.
 
 Phase 1 exposed only `mount_template` — every visual turn mounted a
-fresh rich_card, replacing any prior card.
+fresh note, replacing any prior card.
 
-Phase 2 also exposes `edit_rich_card` and injects the full cached HTML
-of every currently-mounted rich_card into the writer's prompt. The
+Phase 2 also exposes `edit_note` and injects the full cached HTML
+of every currently-mounted note into the writer's prompt. The
 writer chooses among:
-  * mount a new card (`mount_template`) — no rich_card on canvas, or
+  * mount a new card (`mount_template`) — no note on canvas, or
     the topic has shifted entirely;
-  * evolve the existing card (`edit_rich_card`) — append a paragraph,
+  * evolve the existing card (`edit_note`) — append a paragraph,
     revise a fact, highlight what voice just referenced;
   * do nothing — voice answer is self-contained.
 
@@ -33,18 +33,20 @@ from infra.event_log import log_event
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_tools
-from workshop.canvas.tools import _rich_card_cache
+from workshop.canvas.tools import _note_cache
 from workshop.canvas.tools.read_media import read_media
 
 
-def _collect_existing_rich_cards(canvas_state, user_id: UUID) -> Dict[str, str]:
-    """For every rich_card block visible in `canvas_state`, fetch the
-    cached HTML so we can inject it into the writer prompt.
+def _collect_existing_notes(canvas_state, user_id: UUID) -> Dict[str, str]:
+    """For every note block visible in `canvas_state`, fetch the
+    cached MARKDOWN (Phase 2.5) so we can inject it into the writer
+    prompt. Falls back to HTML when md is unavailable (legacy mounts).
 
-    Returns a dict of block_id → HTML. Blocks whose state.kind isn't
-    `'rich'` are skipped; blocks present in canvas_state but missing
-    from the cache (race or pre-cache mount) are also skipped — the
-    writer just won't see their content this turn.
+    Returns a dict of block_id → source-of-truth content (md preferred,
+    html fallback). Blocks whose state.kind isn't `'rich'` are skipped;
+    blocks present in canvas_state but missing from the cache (race or
+    pre-cache mount) are also skipped — the writer just won't see
+    their content this turn.
     """
     out: Dict[str, str] = {}
     if canvas_state is None:
@@ -61,9 +63,9 @@ def _collect_existing_rich_cards(canvas_state, user_id: UUID) -> Dict[str, str]:
             kind = getattr(state, "kind", None) if state is not None else None
             if kind != "rich":
                 continue
-            html = _rich_card_cache.get(user_id, bid)
-            if html:
-                out[bid] = html
+            source = _note_cache.get_md(user_id, bid) or _note_cache.get_html(user_id, bid)
+            if source:
+                out[bid] = source
     return out
 
 
@@ -79,7 +81,7 @@ async def run_canvas_writer(
     """Voice-leads canvas pass — runs after the spoken answer completes.
 
     Builds the writer prompt with the full HTML of any existing
-    rich_card, exposes `mount_template` + `edit_rich_card`, and runs
+    note, exposes `mount_template` + `edit_note`, and runs
     a short tool loop. Errors are caught and logged; we never raise —
     the SSE stream that birthed this task is already closed.
     """
@@ -90,13 +92,13 @@ async def run_canvas_writer(
     except Exception as e:
         print(f"[writer] read_media error: {e}", flush=True)
 
-    existing_cards = _collect_existing_rich_cards(canvas_state, user_id)
+    existing_cards = _collect_existing_notes(canvas_state, user_id)
 
     parts = build_canvas_writer_prompt(
         question=question,
         voice_transcript=transcript,
         canvas_state=canvas_state,
-        existing_rich_cards=existing_cards,
+        existing_notes=existing_cards,
     )
     writer_tools = build_tools(user_id, lane="writer")
 
@@ -112,7 +114,15 @@ async def run_canvas_writer(
             tools=writer_tools,
             purpose="canvas-writer",
             user_id=user_id,
-            max_iterations=2,
+            # One iteration only. With 2 iterations the writer would
+            # re-fire edit_note on iteration 1 (it doesn't see
+            # iteration 0's effect in any updated context), producing
+            # duplicate appends and runaway highlight spam — observed
+            # in production logs as edit_ops=['append','append'] and
+            # edit_ops=['highlight'×7,'arrow_to_text'] turns.
+            # The writer's job is decisive: one mount or one edit per
+            # turn, packed into a single tool call.
+            max_iterations=1,
             profile="voice",
         ):
             if evt.get("kind") != "tool_call":
@@ -120,7 +130,7 @@ async def run_canvas_writer(
             name = evt.get("name")
             if name == "mount_template":
                 mount_fired = True
-            elif name == "edit_rich_card":
+            elif name == "edit_note":
                 ops = (evt.get("arguments") or {}).get("ops") or []
                 for op in ops:
                     if isinstance(op, dict) and op.get("op"):
