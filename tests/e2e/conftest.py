@@ -50,6 +50,90 @@ def _port_is_free(port: int) -> bool:
             return False
 
 
+DEFAULT_USER_UUID_STR = "00000000-0000-0000-0000-000000000000"
+
+
+def _wipe_dedicated_user_state() -> None:
+    """Reset rows for the dedicated test user so each session starts clean.
+
+    The e2e suite reuses DEFAULT_USER_ID (and a small set of stable device
+    UUIDs) across runs to avoid filling the `devices` table with one ghost
+    row per test invocation. But that reuse also means accumulated state
+    from prior runs (devices that registered, canvas_layout rows, voice/note
+    debris) survives — and tests that expect a clean slate fail.
+
+    Uses a one-shot asyncpg connection in its own event loop. We avoid
+    `infra.db.async_session` because importing it caches an engine whose
+    connection pool is bound to whatever loop we run cleanup on — that
+    pool then leaks into subsequent tests running in their own loops and
+    triggers "Future attached to a different loop" errors deep inside
+    SQLAlchemy.
+    """
+    import asyncio
+    import os
+    from urllib.parse import urlparse
+
+    # Re-parse DATABASE_URL from .env (infra.config has already populated
+    # os.environ for us via its module-load load_dotenv()).
+    import infra.config  # noqa: F401
+
+    raw_url = os.environ.get("DATABASE_URL", "")
+    if not raw_url:
+        return
+    sync_url = raw_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parsed = urlparse(sync_url)
+    if not parsed.hostname or not parsed.path:
+        return
+
+    try:
+        import asyncpg
+    except ImportError:
+        return
+
+    async def _run() -> None:
+        conn = await asyncpg.connect(
+            host=parsed.hostname,
+            port=parsed.port or 5432,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/"),
+        )
+        try:
+            # Tables that grow per-run for the dedicated user. A missing
+            # table is fine — fresh DBs skip it silently. Each DELETE
+            # autocommits since asyncpg.execute outside a transaction is
+            # autocommit.
+            for tbl in ("canvas_layout", "note_chunks", "interactions", "devices"):
+                try:
+                    await conn.execute(
+                        f"DELETE FROM {tbl} WHERE user_id = $1",
+                        DEFAULT_USER_UUID_STR,
+                    )
+                except asyncpg.exceptions.UndefinedTableError:
+                    pass
+        finally:
+            await conn.close()
+
+    # New loop, closed promptly so SQLAlchemy's per-loop pool isn't
+    # contaminated.
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_run())
+    except Exception as e:
+        print(f"[e2e/wipe] DB cleanup skipped: {e}", flush=True)
+    finally:
+        loop.close()
+
+    # Also wipe the engineer's per-user git workspace. Without this,
+    # `_has_blocks_for(user_id)` stays truthy from previous runs and
+    # `engineer_build()` suppresses the hello-stub fallback — the
+    # request_new_block test then sees no mount event because the engineer
+    # returns `[]` thinking the canvas is already populated.
+    workspace = REPO_ROOT / "data" / "canvases" / DEFAULT_USER_UUID_STR
+    if workspace.exists():
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
 def _wait_listening(port: int, timeout: float, name: str) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -86,6 +170,14 @@ def services() -> Iterator[dict]:
     env["LLM_PROVIDER"] = "fake"
     # Disable note disk persistence so tests don't write to data/notes/.
     env["NOTES_PERSIST"] = "0"
+    # Force the single-turn voice path even if the developer has
+    # BWM_VOICE_LEADS=1 in .env for normal dev. The teacher_tools e2e tests
+    # exercise the LLM tool-loop directly; voice-leads strips the tool
+    # palette on the spoken pass and would make them all fail. The flag is
+    # already explicit in `services/persona/routers/ask.py:303` — overriding
+    # in os.environ wins over .env because load_dotenv() respects existing
+    # env by default.
+    env["BWM_VOICE_LEADS"] = "0"
 
     procs: list[tuple[str, int, subprocess.Popen]] = []
 
@@ -115,6 +207,13 @@ def services() -> Iterator[dict]:
                 raise RuntimeError(
                     f"{name} on :{port} failed to start. Tail of log:\n{snippet}"
                 )
+
+        # Wipe accumulated rows for the dedicated test user before any test
+        # runs. e2e reuses DEFAULT_USER_ID across runs (idempotent device
+        # ids etc.), but tests like test_media_empty_inventory_for_fresh_user
+        # need a known-empty starting state. UPSERTS in register() recreate
+        # the rows tests actually need, so wiping is safe.
+        _wipe_dedicated_user_state()
 
         yield {
             "base_port": base_port,
@@ -187,3 +286,22 @@ def test_user_id(http: httpx.Client) -> str:
 def auth(test_user_id: str) -> dict[str, str]:
     """Headers for an authenticated request."""
     return {"X-User-Id": test_user_id}
+
+
+@pytest.fixture
+def fresh_engineer_workspace(test_user_id: str) -> None:
+    """Wipe the dedicated user's per-user git workspace before this test.
+
+    Some tests (notably `test_teacher_tool_request_new_block_mounts_block`)
+    rely on the engineer's "hello-stub fallback" path, which only triggers
+    when `agents.frontend_engineer.build._has_blocks_for(user_id)` is
+    False. By the time those tests run, earlier tests in the same session
+    have populated the workspace with blocks, so the fallback is
+    suppressed and no mount event fires. This fixture restores the
+    empty-workspace precondition.
+
+    Function-scoped so it only fires for tests that explicitly opt in.
+    """
+    workspace = REPO_ROOT / "data" / "canvases" / test_user_id
+    if workspace.exists():
+        shutil.rmtree(workspace, ignore_errors=True)

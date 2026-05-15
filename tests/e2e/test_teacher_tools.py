@@ -125,11 +125,15 @@ def test_teacher_tool_block_action_emits_sse_event(
 
 
 def test_teacher_tool_request_new_block_mounts_block(
-    shell_url: str, test_user_id: str
+    shell_url: str, test_user_id: str, fresh_engineer_workspace: None
 ):
     """A question containing 'request_new_block' triggers the fake
     provider's scripted call → engineer mounts the hello block → SSE
-    'ui-update mount' fans out."""
+    'ui-update mount' fans out.
+
+    Requires a fresh per-user git workspace so the engineer's hello-stub
+    fallback fires (the fake LLM never authors a real block).
+    """
     headers = _device_headers(test_user_id)
     dynamic_events: list[dict] = []
     open_seen = threading.Event()
