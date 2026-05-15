@@ -177,9 +177,32 @@ function renderBlock(node: Element): React.ReactElement | null {
         ) as Element | undefined;
         if (!svgEl) return null;
         const xml = serializeSvg(svgEl);
+        // Parse viewBox → aspectRatio so the View has a real height.
+        // Also: pin width to the parent (alignSelf:stretch + width:100%)
+        // and clip overflow — Android RN's default overflow is "visible",
+        // which lets SvgXml draw past its bounds when its intrinsic width
+        // exceeds the screen. preserveAspectRatio="xMidYMid meet" tells
+        // the SVG to scale into the box.
+        const vb = (svgEl.attribs?.viewBox || "").trim().split(/[\s,]+/).map(Number);
+        const aspect = vb.length === 4 && vb[2] > 0 && vb[3] > 0
+          ? { aspectRatio: vb[2] / vb[3] }
+          : null;
         return (
-          <View key={k} style={[STYLES["bw-diagram"], ...css.filter((s) => s !== STYLES["bw-diagram"])]}>
-            <SvgXml xml={xml} width="100%" />
+          <View
+            key={k}
+            style={[
+              STYLES["bw-diagram"],
+              ...css.filter((s) => s !== STYLES["bw-diagram"]),
+              { width: "100%", alignSelf: "stretch", overflow: "hidden" },
+              aspect,
+            ]}
+          >
+            <SvgXml
+              xml={xml}
+              width="100%"
+              height="100%"
+              preserveAspectRatio="xMidYMid meet"
+            />
           </View>
         );
       }

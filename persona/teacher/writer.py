@@ -87,9 +87,22 @@ async def run_canvas_writer(
     the SSE stream that birthed this task is already closed.
     """
     writer_t0 = time.perf_counter()
+
+    # Filter canvas state to the originating/output device so the writer's
+    # view of "what's already mounted" matches what that specific device
+    # will see. Without this, a card mounted on desktop in a prior session
+    # would make the writer skip mount on a fresh mobile turn — the mobile
+    # device never sees the card. OUTPUT_DEVICE_ID is set by ask.py from
+    # X-Device-Id (or X-Output-Device-Id) and inherited via contextvars.
+    from infra.contracts.output_routing import get_output_device_id
+    target_device_id = get_output_device_id()
+
     canvas_state = None
     try:
-        canvas_state = await read_media(user_id)
+        canvas_state = await read_media(
+            user_id,
+            device_ids=[target_device_id] if target_device_id else None,
+        )
     except Exception as e:
         print(f"[writer] read_media error: {e}", flush=True)
 

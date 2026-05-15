@@ -68,11 +68,12 @@ export function DynamicSurface({ autoMountDefault = true }: DynamicSurfaceProps)
       const template = parsed.template ?? templateFromBlockId(block.id);
       const grid = parsed.grid ?? { x: 0, y: 0, w: 4, h: 9 };
       const entry = resolveBlock(template);
-      // Per-block override always wins for the mic; everything else uses the
-      // scaled desktop grid coords so layouts the persona authored on web
-      // map predictably onto the phone's 4×9.
-      const isMicDefault = block.id === "ambient_mic_default" || template === "ambient_mic";
-      const mobileGrid = isMicDefault && entry?.mobileGrid ? entry.mobileGrid : scaleGridForDevice(grid, device);
+      // Registry-level mobileGrid wins on phone — persona-authored coords
+      // are sized for 12×9 desktop and don't always scale cleanly (notably:
+      // notes at h:8 would overlap the mic's bottom strip). Blocks without
+      // an override fall through to the scaled desktop grid.
+      const useMobileOverride = device === "phone" && entry?.mobileGrid;
+      const mobileGrid = useMobileOverride ? entry!.mobileGrid! : scaleGridForDevice(grid, device);
       setBlocks((prev) => {
         const existing = prev.findIndex((b) => b.id === block.id);
         const next = { id: block.id, template, grid: mobileGrid, params: parsed.params };

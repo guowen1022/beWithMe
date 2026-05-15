@@ -37,6 +37,7 @@ from infra.render.note_grammar import (
     ALLOWED_TAGS,
     ALLOWED_URL_SCHEMES,
 )
+from infra.render.svg_inline_css import inline_svg_css
 
 _DIAGRAM_CLASS = "bw-diagram"
 # Defensive: even though mermaid runs with securityLevel='strict' which
@@ -87,6 +88,11 @@ async def process(html_str: str) -> str:
         try:
             svg_raw = await render_mermaid(mermaid_src)
             svg = _strip_svg_unsafe(svg_raw)
+            # Mermaid's scoped <style> block doesn't survive react-native-svg
+            # on mobile; fold its rules into inline style attributes so both
+            # surfaces render identically. Desktop sees inline styles win
+            # against the original <style> block (kept for @keyframes).
+            svg = inline_svg_css(svg)
         except Exception:  # noqa: BLE001 — render failure should not break the card
             parent = node.getparent()
             if parent is not None:

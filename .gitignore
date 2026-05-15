@@ -27,3 +27,4 @@ data/diagrams/
 data/notes/
 benchmark/results/
 .*.swp
+scripts/mobile-build-env.sh

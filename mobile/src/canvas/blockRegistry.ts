@@ -64,6 +64,10 @@ export const blockRegistry: Record<string, RegistryEntry> = {
   note: {
     component: NoteBlock,
     manifest: noteManifest,
+    // Full-width, top 7 rows on phone; leaves the bottom strip free for the
+    // ambient_mic dot. Desktop's default {x:1,y:1,w:10,h:8} scaled to phone
+    // would overlap the mic at y:7-8.
+    mobileGrid: { x: 0, y: 0, w: 4, h: 7 },
   },
   url_card: {
     component: UrlCardBlock,
