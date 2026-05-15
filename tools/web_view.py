@@ -27,6 +27,7 @@ from infra.contracts.ui import BlockSource, UIUpdate
 from infra.topology import upstream_url
 from services.persona.routers.dynamic import enqueue_for_user
 from workshop.canvas.tools.mount_template import mount_template
+from infra.model.tools import ToolSpec
 
 
 _TIMEOUT = httpx.Timeout(60.0)
@@ -134,4 +135,149 @@ async def web_view(
     return {"error": f"unknown action: {action!r}"}
 
 
-__all__ = ["web_view"]
+__all__ = ["web_view", "build_spec"]
+
+def _make_web_view(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        action = (args.get("action") or "").strip().lower()
+        if not action:
+            return json.dumps({"error": "action is required"})
+        url = args.get("url")
+        selector = args.get("selector")
+        text = args.get("text")
+        direction = args.get("direction") or "down"
+        amount_raw = args.get("amount")
+        try:
+            amount = int(amount_raw) if amount_raw is not None else 400
+        except (TypeError, ValueError):
+            return json.dumps({"error": "amount must be an integer"})
+        timeout_raw = args.get("timeout_ms")
+        try:
+            timeout_ms = int(timeout_raw) if timeout_raw is not None else 5000
+        except (TypeError, ValueError):
+            return json.dumps({"error": "timeout_ms must be an integer"})
+        include_screenshot = bool(args.get("include_screenshot") or False)
+        x = args.get("x")
+        y = args.get("y")
+        try:
+            x = int(x) if x is not None else None
+            y = int(y) if y is not None else None
+        except (TypeError, ValueError):
+            return json.dumps({"error": "x and y must be integers"})
+        try:
+            result = await web_view(
+                user_id=user_id,
+                action=action,
+                url=url if isinstance(url, str) else None,
+                selector=selector if isinstance(selector, str) else None,
+                text=text if isinstance(text, str) else None,
+                direction=direction,
+                amount=amount,
+                timeout_ms=timeout_ms,
+                include_screenshot=include_screenshot,
+                x=x,
+                y=y,
+            )
+        except Exception as e:
+            return json.dumps({"error": f"web_view call failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="web_view",
+        description=(
+            "Visible web pane — the desktop's real Chromium "
+            "BrowserView, mounted on the canvas as a draggable / "
+            "resizable / closeable block. NOT the default for shared "
+            "URLs — for 'explain this article', 'what is this', "
+            "'summarise this paper', use read_url instead, then speak "
+            "the answer. Reach for web_view ONLY when the user "
+            "explicitly wants to see / play / interact with the page: "
+            "'show me', 'open it', 'play this replay', 'let me watch', "
+            "or when read_url failed to extract text (canvas / video / "
+            "image-only SPAs). The page loads first-party (real "
+            "cookies, real Referer), so anti-embed sites, DRM "
+            "players, session-bound SPAs, video/canvas replays that "
+            "'just don't work' inside request_new_block work here. "
+            "Available actions: "
+            "'open' (loads url, returns perception), 'observe' (re-checks "
+            "current page without re-navigating — call twice ~2s apart "
+            "to see if a video is actually playing via "
+            "video.current_time advancing), 'click' (selector OR x+y), "
+            "'type' (text into a focused or selected element), 'scroll' "
+            "(direction up/down + pixel amount), 'wait_for' (selector "
+            "appears within timeout_ms), 'close' (hide the pane). The "
+            "perception report includes title, url, ready_state, "
+            "loader_visible, video state (current_time, duration, "
+            "paused), canvas presence, visible text excerpt, console "
+            "errors, and failed network requests. Set "
+            "include_screenshot=true on open/observe ONLY when DOM "
+            "probes aren't enough — the screenshot is delegated to a "
+            "vision model and the textual description is added to the "
+            "report as `screenshot_description` (the persona never sees "
+            "raw image bytes). include_screenshot adds ~5–6s. If the "
+            "desktop isn't running, returns "
+            "{\"error\": \"desktop_not_running\"} so you can speak the "
+            "limitation back to the user."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "open", "observe", "click", "type",
+                        "scroll", "wait_for", "close",
+                    ],
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Required for action='open'.",
+                },
+                "selector": {
+                    "type": "string",
+                    "description": (
+                        "CSS selector. For click/type, alternative to x+y. "
+                        "Required for wait_for."
+                    ),
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to type. Required for action='type'.",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down"],
+                    "description": "Scroll direction. Default 'down'.",
+                },
+                "amount": {
+                    "type": "integer",
+                    "description": "Scroll distance in pixels. Default 400.",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Timeout for wait_for. Default 5000.",
+                },
+                "include_screenshot": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, capture a screenshot, run it through "
+                        "the vision model, and add the textual "
+                        "description to the report. Adds ~5–6s."
+                    ),
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "Click x-coordinate (alternative to selector).",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Click y-coordinate (alternative to selector).",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        executor=_make_web_view(user_id),
+    )

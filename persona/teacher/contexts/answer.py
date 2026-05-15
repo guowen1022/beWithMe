@@ -28,7 +28,7 @@ from persona.teacher.prompts.parts import PromptParts, build_history_messages
 from persona.teacher.prompts.voice_answer import build as build_voice_answer_prompt
 from persona.teacher.prompts.voice_brief import build as build_voice_brief_prompt
 from persona.teacher.schemas import AskRequest
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
 
 

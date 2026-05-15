@@ -17,6 +17,7 @@ for every currently-online device of that user.
 """
 from __future__ import annotations
 
+import re
 from typing import Awaitable, Callable, Optional
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from infra.devices import registry as device_registry
 from infra.sandbox import validate_block_source
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.model.tools import ToolSpec
 
 
 async def _ensure_valid(blocks: list[BlockSource]) -> None:
@@ -147,3 +149,89 @@ async def request_ui_block(
         await _send(UIUpdate(action="mount", block=block))
         await _record_mount(user_id, block.id, mount_targets)
     return blocks
+
+# Tripwire: descriptions matching any of these patterns are diagram-shaped
+# requests and must go through `interactive_graph`, not the engineer LLM.
+# We catch this server-side so the teacher gets immediate, deterministic
+# feedback even if its prompt-side discipline slips.
+_DIAGRAM_HINTS = re.compile(
+    r"\b(flow ?chart|flow diagram|sequence diagram|class diagram|"
+    r"er diagram|state diagram|"
+    r"mind ?map|gantt|sankey|timeline|"
+    r"step\s*\d|step[s]?\s*->|->\s*step|"
+    r"hierarchy|tree of|relation(ship)?s? between|"
+    r"diagram (of|showing|for)|chart (of|showing))\b",
+    re.IGNORECASE,
+)
+# A separate check: arrow chains in the description are almost always a flow.
+_ARROW_CHAIN = re.compile(r"(->|→|=>|-->).*?(->|→|=>|-->)")
+
+
+def _make_request_new_block(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        description = (args.get("description") or "").strip()
+        if not description:
+            return json.dumps({"error": "description is required"})
+
+        # Diagram-shaped requests must go through interactive_graph. The
+        # engineer must never end up authoring per-step JS for a flow,
+        # sequence, hierarchy, etc. — that's content, not code, and per-
+        # step JS does not belong in the user's git workspace.
+        if _DIAGRAM_HINTS.search(description) or _ARROW_CHAIN.search(description):
+            return json.dumps({
+                "error": (
+                    "diagram-shaped request — use interactive_graph(name='...', "
+                    "mermaid='flowchart LR ...') instead. request_new_block is "
+                    "for novel interactive widgets only (sliders, simulations, "
+                    "custom inputs); diagrams are content rendered by the "
+                    "ephemeral interactive_graph surface, not code in the "
+                    "user's workspace."
+                )
+            })
+
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        spec = BlockSpec(description=description)
+        try:
+            blocks = await request_ui_block(spec, user_id, target_device_id=target_uuid)
+        except ValueError as e:
+            # Sandbox validation rejected the engineer's output. Surface
+            # the message so the teacher's LLM can refine the description
+            # (or the engineer agent rewrites on the next call).
+            return json.dumps({"error": str(e)})
+        return json.dumps({"mounted_block_ids": [b.id for b in blocks]})
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="request_new_block",
+        description=(
+            "Use **only** for novel *interactive widgets* — sliders, "
+            "custom inputs, simulations, anything that needs fresh "
+            "JavaScript. **DO NOT** use for diagrams (flows, "
+            "sequences, charts, hierarchies, classes, mind maps, "
+            "timelines): those go to `interactive_graph`. **DO NOT** "
+            "use to display text or a passage: those go to "
+            "`mount_template`. The engineer LLM authors code here — "
+            "slow, and only justified for genuinely novel UI."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "What the new block should do. 1-3 short sentences.",
+                },
+                "target_device_id": {
+                    "type": "string",
+                    "description": "Optional UUID; mount on this device only. Omit to fan out.",
+                },
+            },
+            "required": ["description"],
+            "additionalProperties": False,
+        },
+        executor=_make_request_new_block(user_id),
+    )

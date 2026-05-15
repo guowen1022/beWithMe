@@ -26,6 +26,7 @@ from infra.devices import registry as device_registry
 from services.persona.routers.dynamic import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
+from infra.model.tools import ToolSpec
 
 
 def _title_from_design_doc(design_doc: str | None) -> str | None:
@@ -83,4 +84,45 @@ async def list_media(user_id: UUID) -> MediaInventory:
     return MediaInventory(user_id=user_id, canvases=canvases, voices=voices)
 
 
-__all__ = ["list_media"]
+__all__ = ["list_media", "build_spec"]
+
+def _make_list_media(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        inv = await list_media(user_id)
+        # Compact — full DTO would balloon context across turns.
+        canvases = [
+            {
+                "device_id": str(c.device_id),
+                "device_class": c.device_class,
+                "online": c.online,
+                "block_ids": [b.id for b in c.blocks],
+            }
+            for c in inv.canvases
+        ]
+        voices = [
+            {
+                "device_id": str(v.device_id),
+                "device_class": v.device_class,
+                "online": v.online,
+            }
+            for v in inv.voices
+        ]
+        return json.dumps({"canvases": canvases, "voices": voices})
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="list_media",
+        description=(
+            "DEPRECATED: prefer read_media, which returns the same "
+            "inventory plus per-block state. Kept for backward "
+            "compatibility. Inventory the user's currently connected "
+            "canvases and voice outputs. Takes no arguments."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        executor=_make_list_media(user_id),
+    )

@@ -1,11 +1,14 @@
 """Typed HTTP client for the silicon_brain (knowledge sidecar).
 
 silicon_brain holds neutral user data only — Profile (self_description),
-UserPreferences (user-stated), Documents/DocumentChunks. The teacher reads
-these via this narrow client. Everything teacher-authored (Interactions,
-ConceptNodes, Recommendations, LearningSessions, TeacherPreferenceModel) is
-stored in teacher's own tables and read directly via SQLAlchemy on
-`infra.db`, not over HTTP.
+UserPreferences (user-stated), Documents/DocumentChunks. Personas read
+these via this narrow client. Persona-authored data (Interactions,
+ConceptNodes, Recommendations, LearningSessions, etc.) is stored in the
+persona's own tables and read directly via SQLAlchemy on `infra.db`, not
+over HTTP.
+
+Lives in `infra/` because every persona shares it; nothing here is
+teacher-specific.
 
 Auth: every call auto-injects `X-User-Id`.
 Network: `trust_env=False` so a system HTTP_PROXY doesn't intercept localhost

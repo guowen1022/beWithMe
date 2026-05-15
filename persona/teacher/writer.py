@@ -31,7 +31,7 @@ from uuid import UUID
 
 from infra.event_log import log_event
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_tools
 from workshop.canvas.tools import _note_cache

@@ -198,7 +198,7 @@ async def run_one(scenario: dict, base_url: str) -> dict:
     from persona.teacher.tools import manifest as M
     from persona.teacher.contexts import research as ctx_r
     from persona.teacher import research_state as RS
-    from persona.teacher.silicon_brain_client import SiliconBrainClient
+    from infra.silicon_brain_client import SiliconBrainClient
     from workshop.canvas.tools import read_media as _rm
     from workshop.canvas.tools import mount_template as _mt
     from workshop.canvas.tools import push_block_content as _pb

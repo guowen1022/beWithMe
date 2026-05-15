@@ -39,6 +39,8 @@ from silicon_brain.models.user_preferences import (
     UserPreferences,
 )
 
+from infra.model.tools import ToolSpec
+
 
 # Logical "block id" we tag the BlockMessage with. The frontend overlay
 # filters on the topic, not the block id, but we keep this stable so the
@@ -136,4 +138,87 @@ async def speak(
     }
 
 
-__all__ = ["speak"]
+__all__ = ["speak", "build_spec"]
+
+def _make_speak(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        text = (args.get("text") or "").strip()
+        if not text:
+            return json.dumps({"error": "text is required"})
+        channel = (args.get("channel") or "").strip()
+        if channel not in ("voice", "text", "both"):
+            return json.dumps({
+                "error": "channel must be 'voice', 'text', or 'both'"
+            })
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        # Cross-device output routing: default to request's X-Output-Device-Id
+        # when persona didn't pick a target.
+        if target_uuid is None:
+            from infra.contracts.output_routing import get_output_device_id
+            ctx_target = get_output_device_id()
+            if ctx_target is not None:
+                target_uuid = ctx_target
+        try:
+            delivered = await speak(
+                user_id=user_id,
+                text=text,
+                channel=channel,
+                voice=args.get("voice"),
+                speed=args.get("speed"),
+                lang=args.get("lang"),
+                target_device_id=target_uuid,
+            )
+        except ValueError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps(delivered)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="speak",
+        description=(
+            "Deliver an utterance to the user via voice (Kokoro audio), "
+            "an on-screen caption (a borderless, always-on-top floating "
+            "strip near the bottom of the screen, like YouTube CC, that "
+            "reveals left-to-right at reading speed and auto-fades), or "
+            "both. Pick `channel` based on TALK PREFERENCE in the "
+            "system context plus the active device class (see "
+            "CURRENTLY ON CANVAS). Voice / speed / lang default to the "
+            "user's saved preferences; override only if the user is "
+            "explicit."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "What to say. 1-3 sentences works best for both audio latency and an on-screen line that is readable at a glance.",
+                },
+                "channel": {
+                    "type": "string",
+                    "enum": ["voice", "text", "both"],
+                    "description": "How to deliver this utterance. 'voice' plays audio only; 'text' shows it in the teacher-speech block only; 'both' does both.",
+                },
+                "voice": {
+                    "type": "string",
+                    "description": "Optional kokoro voice id (e.g., 'af_heart'). Only used when channel includes voice.",
+                },
+                "speed": {
+                    "type": "number",
+                    "description": "Optional 0.5-2.0 multiplier on speaking rate. Only used when channel includes voice.",
+                },
+                "lang": {
+                    "type": "string",
+                    "description": "Optional language tag (e.g., 'en-us'). Only used when channel includes voice.",
+                },
+                "target_device_id": {"type": "string"},
+            },
+            "required": ["text", "channel"],
+            "additionalProperties": False,
+        },
+        executor=_make_speak(user_id),
+    )

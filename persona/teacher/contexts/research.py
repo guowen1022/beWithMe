@@ -14,7 +14,7 @@ from persona.teacher.contexts.answer import TeacherContext
 from persona.teacher.preferences import get_user_profile
 from persona.teacher.knowledge import get_concepts
 from persona.teacher.prompts.research import build as build_research_prompt
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
 from workshop.research import per_host_skills
 from workshop.research.recipes import host_from_url

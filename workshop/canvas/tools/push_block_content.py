@@ -20,6 +20,7 @@ from infra.render.note import process as preprocess_note
 from infra.render.note_md import render_markdown as render_note_markdown
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from workshop.canvas.tools import _note_cache, _note_index, _template_registry
+from infra.model.tools import ToolSpec
 
 
 async def push_block_content(
@@ -67,4 +68,49 @@ async def push_block_content(
     return await enqueue_for_user(user_id, event)
 
 
-__all__ = ["push_block_content"]
+__all__ = ["push_block_content", "build_spec"]
+
+def _make_push_block_content(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        block_id = (args.get("block_id") or "").strip()
+        topic = (args.get("topic") or "").strip()
+        if not block_id or not topic:
+            return json.dumps({"error": "block_id and topic are required"})
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        delivered = await push_block_content(
+            user_id=user_id,
+            block_id=block_id,
+            topic=topic,
+            value=args.get("value"),
+            target_device_id=target_uuid,
+        )
+        return json.dumps({"delivered_to": delivered})
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="push_block_content",
+        description=(
+            "Send a value into a topic that an existing surface "
+            "listens on. Use to drive live data (counters, list rows, "
+            "text updates) into something already up — no remount."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "block_id": {"type": "string"},
+                "topic": {"type": "string"},
+                "value": {
+                    "description": "Any JSON value the block expects on this topic.",
+                },
+                "target_device_id": {"type": "string"},
+            },
+            "required": ["block_id", "topic"],
+            "additionalProperties": False,
+        },
+        executor=_make_push_block_content(user_id),
+    )

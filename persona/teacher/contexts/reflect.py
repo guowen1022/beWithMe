@@ -21,7 +21,7 @@ from persona.teacher.prompts.reflect import (
     PerceptionEventSummary,
     build as build_reflect_prompt,
 )
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
 
 from infra.db import async_session

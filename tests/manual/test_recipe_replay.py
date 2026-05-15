@@ -108,7 +108,7 @@ async def main() -> int:
         recorded_speaks.append({"text": text, "channel": channel})
         return ["test-device"]
 
-    from persona.teacher.silicon_brain_client import SiliconBrainClient
+    from infra.silicon_brain_client import SiliconBrainClient
     from workshop.canvas.tools import read_media as _rm
     from services.persona.routers import dynamic as _dyn
     from persona.teacher import preferences as _prefs

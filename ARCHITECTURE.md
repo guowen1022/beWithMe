@@ -186,12 +186,11 @@ persona/<name>/
 ├── agent.py             # the loop: read state → think → choose tools → act → write state
 ├── prompt.py            # builds the system + user prompt parts
 ├── schemas.py           # request/response DTOs the persona's HTTP face exposes
-├── silicon_brain_client.py
-│                        # typed HTTP client for the knowledge sidecar (shared by
-│                        # all personas; will move to infra once a 2nd persona exists)
 ├── skills/              # markdown skill prompts loaded at runtime
 └── <subdomain>/         # e.g. teacher/recommender/, teacher/session/
 ```
+
+The typed HTTP client for the knowledge sidecar (`SiliconBrainClient`) lives at `infra/silicon_brain_client.py` — it's shared by every persona and contains no persona-specific logic.
 
 A persona has no FastAPI router. Its HTTP face lives in `services/persona/routers/`.
 
@@ -378,7 +377,7 @@ from infra.contracts import BrainStateDTO, RecommendationDTO
 from infra.hlr import compute_mastery
 from silicon_brain.db import Base, engine, async_session, get_db
 import persona.teacher
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 import services.persona.main, services.knowledge.main
 print('OK')
 "

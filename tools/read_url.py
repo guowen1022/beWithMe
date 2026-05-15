@@ -14,6 +14,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from tools.browser_set import browser_set
+from infra.model.tools import ToolSpec
 
 
 _MAX_TEXT_RETURN = 12_000  # chars; bound so a long page doesn't blow up persona context
@@ -61,4 +62,46 @@ async def read_url(*, user_id: UUID, url: str) -> dict:
     }
 
 
-__all__ = ["read_url"]
+__all__ = ["read_url", "build_spec"]
+
+def _make_read_url(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        url = (args.get("url") or "").strip()
+        if not url:
+            return json.dumps({"error": "url is required"})
+        try:
+            result = await read_url(user_id=user_id, url=url)
+        except Exception as e:
+            return json.dumps({"error": f"read_url failed: {e}"})
+        return json.dumps(result)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="read_url",
+        description=(
+            "Convenience shortcut: browser_set(goto) + close. One-shot "
+            "headless read of a URL — no popup, no canvas mutation, no "
+            "visible window. Loads the URL in headless Chromium, "
+            "captures the visible text + the XHR/fetch responses the "
+            "page made during load, then closes the page. Returns "
+            "{url, title, text, length, truncated, responses}. Use "
+            "this for the common 'what's on this URL' pattern; for "
+            "anything more (interaction, observation over time, "
+            "screenshots, evaluating JS) use browser_set directly. "
+            "Do NOT echo the URL or raw text back at the user — "
+            "extract meaning, then respond via speak."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to read.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+        executor=_make_read_url(user_id),
+    )

@@ -23,7 +23,7 @@ from persona.teacher.recommender.engine import (
     generate_llm_recommendations,
     generate_web_recommendations,
 )
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 
 
 router = APIRouter(tags=["recommendations"])

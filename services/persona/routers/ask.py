@@ -14,7 +14,7 @@ from infra.event_log import log_event
 from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
 from persona.teacher import assemble_context, parse_title
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from persona.teacher.writer import run_canvas_writer
 from infra.model.llm import generate_cached
 from persona.teacher.brain_builder.background import post_interaction_update

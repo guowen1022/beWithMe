@@ -17,8 +17,9 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from infra.rag.embedding import embed_text
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 from workshop.canvas.tools.read_media import read_media
+from infra.model.tools import ToolSpec
 
 
 async def _resolve_document_id_from_canvas(user_id: UUID) -> tuple[Optional[UUID], Optional[str]]:
@@ -137,4 +138,94 @@ async def read_document(
         await client.aclose()
 
 
-__all__ = ["read_document"]
+__all__ = ["read_document", "build_spec"]
+
+def _make_read_document(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        action = (args.get("action") or "").strip()
+        if not action:
+            return json.dumps({"error": "action is required"})
+        document_id_raw = args.get("document_id")
+        document_id = None
+        if document_id_raw:
+            try:
+                document_id = UUID(document_id_raw)
+            except (ValueError, TypeError):
+                return json.dumps({"error": "invalid document_id"})
+        page = args.get("page")
+        query = args.get("query")
+        top_k_raw = args.get("top_k")
+        try:
+            top_k = int(top_k_raw) if top_k_raw is not None else 5
+        except (TypeError, ValueError):
+            return json.dumps({"error": "top_k must be an integer"})
+        result = await read_document(
+            user_id=user_id,
+            action=action,
+            document_id=document_id,
+            page=page,
+            query=query if isinstance(query, str) else None,
+            top_k=max(1, min(20, top_k)),
+        )
+        return json.dumps(result)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="read_document",
+        description=(
+            "Actively read content from a PDF that's loaded in the "
+            "user's pdf_reader. Three actions: "
+            "(1) `action='outline'` returns the document's table of "
+            "contents + page count — call this first when the user "
+            "asks about a paper to learn its structure; "
+            "(2) `action='page', page=N` returns the full text of "
+            "page N (1-indexed) — use to read the abstract on page 1, "
+            "the methods on whatever page they're on, etc; "
+            "(3) `action='query', query='...'` runs a vector search "
+            "across the document's chunks — use to find a specific "
+            "concept (e.g. query='positional encoding'). Returned "
+            "chunks include their page_number so you can cite. "
+            "`document_id` is optional — when omitted, the tool resolves "
+            "to whichever PDF is currently on canvas (error if 0 or "
+            "2+ PDFs). Worked examples: "
+            "`read_document(action='outline')` to map the paper; "
+            "`read_document(action='page', page=1)` for the abstract; "
+            "`read_document(action='query', query='self-attention')` "
+            "to find that section."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["outline", "page", "query"],
+                },
+                "document_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Doc UUID. Defaults to the single PDF "
+                        "currently on canvas."
+                    ),
+                },
+                "page": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-indexed page number. Required when action='page'.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search phrase. Required when action='query'.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Number of chunks to return for action='query'. Default 5.",
+                },
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        executor=_make_read_document(user_id),
+    )

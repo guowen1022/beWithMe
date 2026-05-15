@@ -37,6 +37,7 @@ from infra.contracts.ui import BlockMessage, BlockSource, UIUpdate
 from infra.db import async_session
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.model.tools import ToolSpec
 
 
 _DEFAULT_NAME = "main"
@@ -615,4 +616,118 @@ async def interactive_graph(
     }
 
 
-__all__ = ["interactive_graph"]
+__all__ = ["interactive_graph", "build_spec"]
+
+def _make_interactive_graph(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        name_raw = args.get("name")
+        if name_raw is not None and not isinstance(name_raw, str):
+            return json.dumps({"error": "name must be a string"})
+        name = (name_raw or "main").strip() or "main"
+
+        mermaid_raw = args.get("mermaid")
+        if mermaid_raw is not None and not isinstance(mermaid_raw, str):
+            return json.dumps({"error": "mermaid must be a string"})
+        mermaid = mermaid_raw.strip() if isinstance(mermaid_raw, str) else None
+        if mermaid == "":
+            mermaid = None
+
+        highlight_raw = args.get("highlight_node")
+        if highlight_raw is not None and not isinstance(highlight_raw, str):
+            return json.dumps({"error": "highlight_node must be a string"})
+        highlight_node = highlight_raw.strip() if isinstance(highlight_raw, str) else None
+        if highlight_node == "":
+            highlight_node = None
+
+        clear = bool(args.get("clear") or False)
+
+        if mermaid is None and highlight_node is None and not clear:
+            return json.dumps({
+                "error": "pass at least one of mermaid, highlight_node, or clear=true",
+            })
+
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+
+        result = await interactive_graph(
+            user_id=user_id,
+            name=name,
+            mermaid=mermaid,
+            highlight_node=highlight_node,
+            clear=clear,
+            target_device_id=target_uuid,
+        )
+        return json.dumps(result)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="interactive_graph",
+        description=(
+            "Draw or update a diagram on the canvas — flowcharts, "
+            "sequence diagrams, classes (UML), mindmaps, charts "
+            "(bar / line / pie), gantt, sankey, timelines, ER, "
+            "state machines, and more. Each diagram has a `name` you "
+            "choose (e.g. \"steps\", \"protocol\"). Pass the SAME "
+            "name to update an existing diagram in place; pass a "
+            "DIFFERENT name to add a second diagram alongside. "
+            "Diagrams are written in Mermaid syntax — concise text. "
+            "The CURRENTLY ON CANVAS section in your prompt tells "
+            "you which diagrams are already up. Diagrams are "
+            "EPHEMERAL: they appear, illustrate the concept, and "
+            "disappear when the user reloads. Don't worry about "
+            "saving them. Pair with `speak` to narrate while the "
+            "diagram grows; use `highlight_node` to flash a node "
+            "while you're talking about it; use `clear=true` to "
+            "wipe a diagram. For step-by-step explanation, send a "
+            "fuller Mermaid each turn under the same name and the "
+            "diagram grows with your words."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Semantic name for the diagram instance — "
+                        "kebab-case (e.g. \"steps\", \"tls-handshake\", "
+                        "\"krebs-cycle\"). Same name = update existing; "
+                        "different name = add alongside. Defaults to "
+                        "\"main\" if omitted."
+                    ),
+                },
+                "mermaid": {
+                    "type": "string",
+                    "description": (
+                        "Full Mermaid source. Replaces the prior content "
+                        "of the named diagram. Examples: "
+                        "'flowchart LR\\n  A[Step 1] --> B[Step 2]'; "
+                        "'classDiagram\\nclass User { +String name }'; "
+                        "'sequenceDiagram\\nAlice->>Bob: Hi'; "
+                        "'xychart-beta\\ntitle \"Q1 sales\"\\nbar [10,20,30]'."
+                    ),
+                },
+                "highlight_node": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Node id to flash for ~1.6s. Use the "
+                        "same id you used in the Mermaid source "
+                        "(e.g. 'A', 'Step1', or a class/actor name)."
+                    ),
+                },
+                "clear": {
+                    "type": "boolean",
+                    "description": "If true, wipe the named diagram.",
+                },
+                "target_device_id": {
+                    "type": "string",
+                    "description": "Optional UUID; update on this device only.",
+                },
+            },
+            "additionalProperties": False,
+        },
+        executor=_make_interactive_graph(user_id),
+    )

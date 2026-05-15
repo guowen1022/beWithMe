@@ -48,6 +48,7 @@ from services.persona.routers.dynamic import (
     mounted_block_ids,
 )
 from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.model.tools import ToolSpec
 
 
 # Sane default grid in desktop coordinates (12×9). Each template's
@@ -56,6 +57,18 @@ from silicon_brain.models.canvas_layout import CanvasLayout
 # The frontend rescales these to the active device class on render
 # (see frontend/lib/gridConfig.ts scaleGridForDevice).
 _DEFAULT_GRID = {"x": 2, "y": 2, "w": 8, "h": 5}
+
+
+def _viewport_for_grid(g: dict[str, int]) -> str:
+    """Pick a Mermaid render profile from the block's resolved grid.
+
+    Viewport is a property of the *block*, not the surface. The frontend
+    proportionally rescales the canonical desktop grid (12x9) to phone
+    (4x9) and tablet (8x9) — so a w<h block stays tall regardless of
+    which device displays it. Two profiles for v1: w<h → narrow (TB
+    flowchart, tighter spacing); else → wide (default LR).
+    """
+    return "narrow" if g.get("w", 0) < g.get("h", 0) else "wide"
 
 
 @dataclass
@@ -267,6 +280,7 @@ async def mount_template(
     else:
         bid = block_id or template.id_default
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
+    viewport = _viewport_for_grid(g)
 
     # Idempotence: if the block is already mounted on any device for this
     # user AND the caller didn't ask to replace anything, skip the mount
@@ -329,25 +343,25 @@ async def mount_template(
                     ),
                     confirmed=confirmed,
                 )
-            processed = await render_note_markdown(md_source)
+            processed = await render_note_markdown(md_source, viewport=viewport)
             params = {**params, "content": processed}
             params.pop("markdown", None)  # don't ship the source to the client
-            _note_cache.set(user_id, bid, html=processed, md=md_source)
+            _note_cache.set(user_id, bid, html=processed, md=md_source, viewport=viewport)
             _note_index.enqueue_reembed(user_id, bid, md_source)
             # Fresh authoring: typewriter-reveal the new content.
             params.setdefault("animate", True)
         elif isinstance(content_in, str) and content_in.strip():
-            processed = await preprocess_note(content_in)
+            processed = await preprocess_note(content_in, viewport=viewport)
             params = {**params, "content": processed}
-            _note_cache.set(user_id, bid, html=processed)
+            _note_cache.set(user_id, bid, html=processed, viewport=viewport)
             params.setdefault("animate", True)
         else:
             # Hydrate path. Cache lazily loads from disk on miss.
-            cached_html = _note_cache.get_html(user_id, bid)
+            cached_html = _note_cache.get_html(user_id, bid, viewport=viewport)
             cached_md = _note_cache.get_md(user_id, bid)
             if not cached_html and cached_md:
-                cached_html = await render_note_markdown(cached_md)
-                _note_cache.set(user_id, bid, html=cached_html)
+                cached_html = await render_note_markdown(cached_md, viewport=viewport)
+                _note_cache.set(user_id, bid, html=cached_html, viewport=viewport)
             if cached_html:
                 params = {**params, "content": cached_html}
                 # Re-display existing note — skip the reveal animation
@@ -435,4 +449,279 @@ async def mount_template(
     return MountResult(block_id=bid, template=template_name, deleted=deleted)
 
 
-__all__ = ["mount_template", "MountResult"]
+__all__ = ["mount_template", "MountResult", "build_spec"]
+
+def _make_mount_template(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        # Pretty-print incoming args so we can see exactly what the LLM
+        # emitted when a mount appears to "succeed" but no block lands.
+        # Tee to the perception trace file so it shows up alongside the
+        # llm-response lines (backend stdout is hard to capture).
+        try:
+            _arg_preview = json.dumps(args, default=str)[:600]
+        except Exception:
+            _arg_preview = repr(args)[:600]
+        _trace_line = f"[mount_template/exec] args={_arg_preview}"
+        print(_trace_line, flush=True)
+        try:
+            import time as _t
+            with open("/tmp/bewithme-perception-trace.log", "a") as _f:
+                _f.write(f"{_t.strftime('%H:%M:%S')} {_trace_line}\n")
+        except Exception:
+            pass
+
+        def _trace(msg: str) -> None:
+            print(msg, flush=True)
+            try:
+                import time as _t
+                with open("/tmp/bewithme-perception-trace.log", "a") as _f:
+                    _f.write(f"{_t.strftime('%H:%M:%S')} {msg}\n")
+            except Exception:
+                pass
+
+        # `_raw_arguments` is the LLM provider's fallback shape when the
+        # tool-arg stream didn't get parsed into structured fields. Some
+        # providers (DeepSeek's tool channel observed in 2026-05) emit a
+        # COMPLETE valid JSON object inside this string even on successful
+        # calls. Try to recover: if it parses to a dict, treat it as the
+        # real args. Only bail when it's truly unparseable (truncation).
+        if "_raw_arguments" in args:
+            raw = args["_raw_arguments"]
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        _trace("[mount_template/exec] recovered args from _raw_arguments JSON string")
+                        args = parsed
+                    else:
+                        _trace("[mount_template/exec] BAILING: _raw_arguments parsed to non-dict")
+                        return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+                except json.JSONDecodeError:
+                    _trace("[mount_template/exec] BAILING: _raw_arguments not valid JSON (truncated)")
+                    return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+            else:
+                _trace("[mount_template/exec] BAILING: _raw_arguments not a string")
+                return json.dumps({"error": "tool arguments were truncated mid-stream — retry with shorter content"})
+
+        template_name = (args.get("template") or "").strip()
+        if not template_name:
+            return json.dumps({"error": "template is required"})
+        replace = args.get("replace") or None
+        if replace is not None and not isinstance(replace, list):
+            return json.dumps({"error": "replace must be a list of block ids"})
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        # If the persona didn't pick a target device but the request carries
+        # an X-Output-Device-Id (e.g. phone routing answers to desktop), use
+        # it as the default. Persona's explicit choice still wins.
+        if target_uuid is None:
+            from infra.contracts.output_routing import get_output_device_id
+            ctx_target = get_output_device_id()
+            if ctx_target is not None:
+                target_uuid = ctx_target
+                _trace(f"[mount_template/exec] using ctx target_device_id={ctx_target}")
+
+        # Be lenient about `params`: some LLM providers emit nested
+        # objects as JSON-encoded strings instead of structured objects.
+        # Accept either; only reject genuinely-broken shapes.
+        params = args.get("params")
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+                _trace("[mount_template/exec] params arrived as string; decoded to dict")
+            except json.JSONDecodeError:
+                return json.dumps({"error": "params was a string but not valid JSON"})
+        if params is not None and not isinstance(params, dict):
+            return json.dumps({"error": f"params must be an object, got {type(params).__name__}"})
+
+        # `slug` is the canonical name for note templates — it doubles as
+        # the canvas block_id, the on-disk filename, and the note_id in
+        # `note_chunks`. For other templates, `slug` is ignored (their
+        # block_id stays the template's id_default).
+        raw_slug = args.get("slug")
+        slug = raw_slug.strip() if isinstance(raw_slug, str) else None
+        try:
+            result = await mount_template(
+                user_id=user_id,
+                template_name=template_name,
+                block_id=slug or None,
+                replace=replace,
+                target_device_id=target_uuid,
+                params=params,
+            )
+        except FileNotFoundError:
+            _trace(f"[mount_template/exec] unknown template {template_name!r}")
+            return json.dumps({
+                "error": f"unknown template {template_name!r}",
+            })
+        except ValueError as e:
+            _trace(f"[mount_template/exec] ValueError: {e}")
+            return json.dumps({"error": str(e)})
+        _trace(f"[mount_template/exec] OK bid={result.block_id} template={result.template} deleted={result.deleted}")
+        return json.dumps({
+            "block_id": result.block_id,
+            "template": result.template,
+            "deleted": result.deleted,
+        })
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="mount_template",
+        description=(
+            "Display a known surface on the user's canvas. Templates: "
+            "`upload_file` (PDF/video/audio/image picker), "
+            "`passage_reader` (USER pastes/types their own text — "
+            "input widget, never use for prose you author), "
+            "`pdf_reader` (rendered PDF), `note` "
+            "(YOUR PRIMARY EXPLANATION SURFACE — a Wikipedia-like "
+            "card with prose, embedded Mermaid diagrams, inline "
+            "images, highlights, and inline revision marks. Use this "
+            "for ANY explanation longer than a sentence: definitions, "
+            "comparisons, walkthroughs, illustrated concepts. **Pass "
+            "`params: {markdown: '## H\\n\\nprose…'}`** — the server "
+            "renders markdown to HTML using markdown-it with the "
+            "==highlight== extension. Use `## Heading` for sections, "
+            "`**bold**`, `==hi==` for highlights, `- bullet` for "
+            "lists, and ` ```mermaid ` fenced code blocks for "
+            "diagrams. Don't author raw `<div class=\"card-…\">` — "
+            "headings + paragraphs get styled automatically. Legacy "
+            "`params.content` (raw HTML) still works for back-compat "
+            "but is discouraged.), `text_display` "
+            "(short authored prose / voice transcripts — cheaper "
+            "tokens than note. Use for one- or two-sentence "
+            "answers only; reach for note the moment you want "
+            "a heading, a list with structure, or any diagram.), "
+            "`screen_share` (live screen-share — click START to "
+            "begin streaming the user's screen + audio into "
+            "perception; use when the user says 'watch me', "
+            "'share my screen', 'see what I'm doing'), "
+            "`inputs_launcher` (three-button starter, auto-mounted on "
+            "empty canvas, rarely needed manually). "
+            "Fast and deterministic. Pass `replace: [...]` to "
+            "atomically swap out an existing surface.\n\n"
+            "NOTE MARKDOWN WORKED EXAMPLE "
+            "(author into `params.markdown`):\n"
+            "```\n"
+            "## Quicksort\n"
+            "\n"
+            "Divide-and-conquer with a ==pivot==.\n"
+            "\n"
+            "```mermaid\n"
+            "graph TD; A[unsorted]-->B[pivot]; B-->C[left]; B-->D[right]\n"
+            "```\n"
+            "\n"
+            "Then recurse on each half.\n"
+            "\n"
+            "- Best: **O(n log n)**\n"
+            "- Worst: **O(n²)**\n"
+            "```\n"
+            "Syntax: `## H2` / `### H3` for sections, `**bold**`, "
+            "`*italic*`, `==highlight==` (renders as <mark>), bullet "
+            "and numbered lists, ` ```mermaid ` fenced code blocks "
+            "for diagrams. Inline HTML is allowed for special cases "
+            "(`<mark>`, `<ins>`, `<del>`, `<strong>` etc.) but you "
+            "should reach for markdown syntax first. Legacy "
+            "`params.content` (HTML grammar) still works.\n\n"
+            "**NAMING NOTES (`slug`, required for `note`):** Each note "
+            "you mount needs a stable topic-derived name so it can be "
+            "recalled later via `search_notes` and re-edited via "
+            "`edit_note`. Pass `slug` as a kebab-case identifier "
+            "(lowercase letters, digits, '-'; e.g. `sumer-mesopotamia`, "
+            "`transformer-attention`, `quicksort-algorithm`).\n"
+            "Rules — follow strictly:\n"
+            "  • **Standalone test.** The slug names a *thing* — an "
+            "entity or concept — that could carry its own first "
+            "paragraph without referencing a parent topic. Ask: would "
+            "a reader independently search for this by name, or is it "
+            "just a facet of something already named? Facet → "
+            "`edit_note` on the parent slug. Entity → fresh slug. "
+            "`steve-jobs` is an entity ✅. `steve-jobs-apple-comeback`, "
+            "`steve-jobs-iphone-story` are facets ❌ — they only make "
+            "sense in reference to `steve-jobs`.\n"
+            "  • **2–3 words max.** Four-word slugs almost always "
+            "smuggle in a facet. If you reach for a 4th word, the "
+            "extra word is usually the user's question, not the topic.\n"
+            "  • **No prefix nesting.** If your candidate slug starts "
+            "with, or wholly contains, any slug in `RELATED STORED "
+            "NOTES` (e.g. candidate `steve-jobs-apple-comeback` vs "
+            "stored `steve-jobs`), DO NOT author a new slug — "
+            "re-display the stored slug (option 2 below) or extend it "
+            "with `edit_note` (option 3). Nesting under an existing "
+            "topic creates near-duplicate notes that fragment recall.\n"
+            "  • **Avoid polysemous bare tokens.** A single token "
+            "with multiple meanings collides with unrelated topics: "
+            "`jobs` is both employment and a surname; `apple` is both "
+            "a fruit and a company; `mercury` is a planet, an element, "
+            "and a person. Use the concept name (`employment`, "
+            "`careers`) over the colloquial token (`jobs`). Like "
+            "Wikipedia's disambiguation pages — the slug should "
+            "uniquely identify *which* meaning you mean.\n"
+            "  • **No question words / no filler.** No `how-…`, "
+            "`why-…`, `what-is-…`, no `-explained`, no `-overview`, no "
+            "dates, no numbers.\n"
+            "If you forget to pass `slug`, it auto-derives from your "
+            "first markdown heading.\n\n"
+            "**THREE WAYS TO MOUNT A NOTE:**\n"
+            "1. **Author new** — pass `slug` + `params.markdown`. "
+            "Writes a fresh note. WARNING: if `slug` already exists "
+            "in storage, this OVERWRITES the prior content — only do "
+            "this when intentionally rewriting.\n"
+            "2. **Re-display stored** — pass `slug` ONLY, no `params`. "
+            "Hydrates the saved HTML from disk and brings the note "
+            "back to canvas. Use this when `search_notes` (or the "
+            "`=== RELATED STORED NOTES ===` section) shows a stored "
+            "slug that already covers the topic. Cheap (no LLM "
+            "authoring), no overwrite, the user sees their prior "
+            "note again.\n"
+            "3. **Extend in place** — use `edit_note(block_id=slug, "
+            "ops=[…])` to append/revise/highlight a note that's "
+            "already on canvas. Does NOT use `mount_template`."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "template": {
+                    "type": "string",
+                    "description": "Template filename stem (e.g. 'note').",
+                },
+                "slug": {
+                    "type": "string",
+                    "description": (
+                        "Topic-derived kebab-case identifier for `note` "
+                        "templates (e.g. 'sumer-mesopotamia'). Doubles "
+                        "as block_id, filename, and note_id. Reusing a "
+                        "slug REPLACES the prior note's content — use "
+                        "`edit_note` to extend instead. Auto-derived "
+                        "from the first markdown heading if omitted."
+                    ),
+                },
+                "replace": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Block ids to unmount in the same batch.",
+                },
+                "target_device_id": {
+                    "type": "string",
+                    "description": "Optional UUID; mount on this device only.",
+                },
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "Template-specific values.\n"
+                        "• `note`: prefer `{markdown: '## H\\n\\n…'}` "
+                        "(see worked example above). Legacy `{content: "
+                        "'<html>...'}` still accepted.\n"
+                        "• `text_display`: `{content: 'markdown'}`.\n"
+                        "• Other templates: see their own docs."
+                    ),
+                },
+            },
+            "required": ["template"],
+            "additionalProperties": False,
+        },
+        executor=_make_mount_template(user_id),
+    )

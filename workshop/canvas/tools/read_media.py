@@ -33,6 +33,7 @@ from services.persona.routers.dynamic import mounted_block_ids
 from agents.frontend_engineer import llm_engineer
 
 from workshop.canvas.tools.list_media import _title_from_design_doc
+from infra.model.tools import ToolSpec
 
 
 async def read_media(
@@ -129,4 +130,89 @@ async def read_media(
     return MediaPerception(user_id=user_id, canvases=canvases, voices=voices, screens=screens)
 
 
-__all__ = ["read_media"]
+__all__ = ["read_media", "build_spec"]
+
+def _make_read_media(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        block_ids = args.get("block_ids") or None
+        device_ids_raw = args.get("device_ids") or None
+        device_ids = None
+        if device_ids_raw:
+            try:
+                device_ids = [UUID(d) for d in device_ids_raw]
+            except (ValueError, TypeError):
+                return json.dumps({"error": "device_ids must be valid UUIDs"})
+        perc = await read_media(user_id, block_ids=block_ids, device_ids=device_ids)
+
+        # Compact serialisation — keep only what the persona reasons over.
+        canvases = []
+        for c in perc.canvases:
+            canvases.append({
+                "device_id": str(c.device_id),
+                "device_class": c.device_class,
+                "online": c.online,
+                "blocks": [
+                    {
+                        "id": b.id,
+                        "title": b.title,
+                        "state": (b.state.model_dump() if b.state else None),
+                        "last_updated_s_ago": (
+                            round(b.last_updated_s_ago, 1)
+                            if b.last_updated_s_ago is not None else None
+                        ),
+                    }
+                    for b in c.blocks
+                ],
+            })
+        voices = []
+        for v in perc.voices:
+            voices.append({
+                "device_id": str(v.device_id),
+                "device_class": v.device_class,
+                "online": v.online,
+                "recent_utterances": [
+                    {
+                        "text": u.text,
+                        "voice": u.voice,
+                        "played_at": u.played_at.isoformat(),
+                    }
+                    for u in v.recent_utterances[-5:]   # last 5 — context-friendly
+                ],
+            })
+        return json.dumps({"canvases": canvases, "voices": voices})
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="read_media",
+        description=(
+            "Read what the user is currently receiving — every canvas's "
+            "mounted blocks (with each block's current self-reported "
+            "state: what it shows, whether the user has it focused) and "
+            "every voice device (with what you've recently said on it). "
+            "Use this whenever your next action depends on what the user "
+            "is actually looking at, hearing, or has highlighted. Pass "
+            "no arguments to read everything; pass block_ids/device_ids "
+            "to narrow the response. Each block's state has fields: "
+            "kind (e.g. 'pdf', 'snapshot', 'browser'), content (one-line "
+            "summary), focus ('active' = user attention here, 'visible', "
+            "'background'), extra (block-specific structured data)."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "block_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional. Only return state for these block ids.",
+                },
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional. Only return canvases/voices for these device UUIDs.",
+                },
+            },
+            "additionalProperties": False,
+        },
+        executor=_make_read_media(user_id),
+    )

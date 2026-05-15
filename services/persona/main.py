@@ -19,7 +19,7 @@ from infra.event_log_middleware import install_event_log
 from infra.observability import register_emit
 from infra.topology import service_port
 from persona.teacher import triggers as teacher_triggers
-from persona.teacher.silicon_brain_client import SiliconBrainClient
+from infra.silicon_brain_client import SiliconBrainClient
 
 # Register every model on infra.db.Base so FK constraints resolve.
 # Teacher's tables FK to silicon_brain.users.id, so BOTH packages must be

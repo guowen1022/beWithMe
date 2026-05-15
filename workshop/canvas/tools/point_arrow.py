@@ -29,6 +29,7 @@ from infra.db import async_session
 from infra.devices import registry as device_registry
 from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
 from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.model.tools import ToolSpec
 
 
 _ARROW_BLOCK_ID = "arrow-overlay"
@@ -282,4 +283,58 @@ async def point_arrow(
     }
 
 
-__all__ = ["point_arrow"]
+__all__ = ["point_arrow", "build_spec"]
+
+def _make_point_arrow(user_id: UUID):
+    async def executor(args: Dict[str, Any]) -> str:
+        from_id = (args.get("from_block_id") or "").strip()
+        to_id = (args.get("to_block_id") or "").strip()
+        # Allow both empty to mean "clear the arrow".
+        if (bool(from_id) ^ bool(to_id)):
+            return json.dumps({"error": "from_block_id and to_block_id must both be set, or both empty to clear"})
+        target_device_id = args.get("target_device_id")
+        try:
+            target_uuid = UUID(target_device_id) if target_device_id else None
+        except (ValueError, TypeError):
+            return json.dumps({"error": "invalid target_device_id"})
+        result = await point_arrow(
+            user_id=user_id,
+            from_block_id=from_id,
+            to_block_id=to_id,
+            label=args.get("label"),
+            target_device_id=target_uuid,
+        )
+        return json.dumps(result)
+    return executor
+
+def build_spec(user_id: UUID) -> ToolSpec:
+    return ToolSpec(
+        name="point_arrow",
+        description=(
+            "Draw an arrow on the canvas pointing from one block to another, "
+            "with an optional label. Use to visually link two ideas the user "
+            "is comparing or to direct attention from a question to its "
+            "answer. Pass both ids empty to clear a previously-drawn arrow."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "from_block_id": {
+                    "type": "string",
+                    "description": "Source block id (the arrow's tail).",
+                },
+                "to_block_id": {
+                    "type": "string",
+                    "description": "Target block id (the arrow's head).",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Optional short label rendered near the midpoint.",
+                },
+                "target_device_id": {"type": "string"},
+            },
+            "required": ["from_block_id", "to_block_id"],
+            "additionalProperties": False,
+        },
+        executor=_make_point_arrow(user_id),
+    )

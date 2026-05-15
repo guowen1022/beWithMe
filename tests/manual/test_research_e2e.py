@@ -90,7 +90,7 @@ async def main(url: str, goal: str) -> int:
     from persona.teacher.tools import manifest as M
     from persona.teacher.contexts import research as ctx_r
     from persona.teacher import research_state as RS
-    from persona.teacher.silicon_brain_client import SiliconBrainClient
+    from infra.silicon_brain_client import SiliconBrainClient
 
     user_id = uuid.uuid4()
     print(f"=== research E2E ===")
