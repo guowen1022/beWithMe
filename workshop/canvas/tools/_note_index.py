@@ -66,4 +66,42 @@ def enqueue_clear(user_id: UUID, block_id: str) -> None:
     _schedule(_post(user_id, block_id, ""))
 
 
-__all__ = ["enqueue_reembed", "enqueue_clear"]
+async def search_similar(
+    user_id: UUID,
+    query: str,
+    top_k: int = 5,
+) -> dict[str, float]:
+    """Semantic search against the user's stored notes via the knowledge
+    sidecar. Returns slug → max-similarity-score (cosine ≈ 1 - distance)
+    across all chunks of each note. Returns {} on any failure — callers
+    treat semantic checks as best-effort.
+
+    Used by `mount_template`'s slug-collision gate: token-set nesting
+    alone false-positives on polysemy (`jobs` vs `steve-jobs`), so we
+    AND it with content similarity before logging a confirmed collision.
+    """
+    if not query or not query.strip():
+        return {}
+    out: dict[str, float] = {}
+    try:
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
+            resp = await client.get(
+                f"{upstream_url('knowledge')}/api/notes/search",
+                headers={"X-User-Id": str(user_id)},
+                params={"q": query[:2000], "top_k": top_k},
+            )
+            resp.raise_for_status()
+            hits = resp.json() or []
+            for h in hits:
+                slug = h.get("note_id") if isinstance(h, dict) else None
+                if not isinstance(slug, str) or not slug:
+                    continue
+                score = float(h.get("score", 0.0) or 0.0)
+                if slug not in out or score > out[slug]:
+                    out[slug] = score
+    except Exception as e:
+        _log.info("note search failed: %s", e)
+    return out
+
+
+__all__ = ["enqueue_reembed", "enqueue_clear", "search_similar"]

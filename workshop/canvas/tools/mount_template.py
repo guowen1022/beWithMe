@@ -30,13 +30,18 @@ from sqlalchemy import delete
 from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockSource, UIUpdate
 from infra.db import async_session
+from infra.event_log import log_event
 from infra.perception import forget_block
 from infra.render.note import process as preprocess_note
 from infra.render.note_md import render_markdown as render_note_markdown
 from infra.sandbox import validate_block_source
 from infra.templates import Template, load_template
 from workshop.canvas.tools import _note_cache, _note_index, _template_registry
-from workshop.canvas.tools._slug import is_valid_slug, slug_from_markdown
+from workshop.canvas.tools._slug import (
+    is_valid_slug,
+    slug_collides_with_existing,
+    slug_from_markdown,
+)
 from services.persona.routers.dynamic import (
     enqueue_for_device,
     enqueue_for_user,
@@ -299,6 +304,31 @@ async def mount_template(
         md_source = params.get("markdown")
         content_in = params.get("content")
         if isinstance(md_source, str) and md_source.strip():
+            # Soft slug-collision check: fires when a fresh authoring slug
+            # nests under an existing stored slug (token-set test). Pure
+            # token nesting false-positives on polysemy (`jobs` vs
+            # `steve-jobs`), so we AND it with semantic similarity via
+            # `search_similar` — only `confirmed=True` if the stored
+            # note's content is also a match (cosine ≥ 0.40). Log-only
+            # for now; the writer prompt does the actual prevention.
+            existing_slugs = [s for s in _note_cache.list_slugs(user_id) if s != bid]
+            colliding_slug = (
+                slug_collides_with_existing(bid, existing_slugs) if existing_slugs else None
+            )
+            if colliding_slug is not None:
+                sim_map = await _note_index.search_similar(user_id, md_source, top_k=5)
+                similarity = sim_map.get(colliding_slug)
+                confirmed = similarity is not None and similarity >= 0.40
+                log_event(
+                    "canvas.slug_collision",
+                    user_id=str(user_id),
+                    candidate=bid,
+                    colliding_slug=colliding_slug,
+                    semantic_similarity=(
+                        round(similarity, 3) if similarity is not None else None
+                    ),
+                    confirmed=confirmed,
+                )
             processed = await render_note_markdown(md_source)
             params = {**params, "content": processed}
             params.pop("markdown", None)  # don't ship the source to the client

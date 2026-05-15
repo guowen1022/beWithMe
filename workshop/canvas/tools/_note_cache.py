@@ -259,3 +259,24 @@ def clear() -> None:
     """Drop the in-process cache only. Disk store is preserved — call
     `forget` / `forget_user` to delete from disk."""
     _cache.clear()
+
+
+def list_slugs(user_id: UUID) -> list[str]:
+    """Enumerate every stored note slug for a user (alphabetical).
+
+    Source-of-truth is the on-disk `.md` files under `data/notes/<uid>/`;
+    we ignore the in-process cache so callers see the canonical set
+    even after a restart. Returns [] when persistence is disabled or
+    the user has no notes.
+    """
+    if not _persist_enabled():
+        return []
+    d = _dir_for(user_id)
+    if not d.exists():
+        return []
+    slugs: list[str] = []
+    for p in d.iterdir():
+        if p.suffix == ".md" and p.is_file():
+            slugs.append(p.stem)
+    slugs.sort()
+    return slugs

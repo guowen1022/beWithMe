@@ -1,7 +1,12 @@
 """Tests for the note slug helpers."""
 from __future__ import annotations
 
-from workshop.canvas.tools._slug import is_valid_slug, slug_from_markdown, slugify
+from workshop.canvas.tools._slug import (
+    is_valid_slug,
+    slug_collides_with_existing,
+    slug_from_markdown,
+    slugify,
+)
 
 
 def test_is_valid_slug_accepts_kebab() -> None:
@@ -52,3 +57,60 @@ def test_slug_from_markdown_returns_none_when_no_heading() -> None:
 
 def test_slug_from_markdown_returns_none_for_empty_heading() -> None:
     assert slug_from_markdown("## !!!\n\nbody") is None  # nothing survives slugify
+
+
+# ---- slug_collides_with_existing -------------------------------------------
+
+
+def test_collision_flags_strict_token_superset() -> None:
+    # Canonical case: candidate nests under an existing stored slug.
+    assert slug_collides_with_existing(
+        "steve-jobs-apple-comeback", ["steve-jobs"]
+    ) == "steve-jobs"
+
+
+def test_collision_flags_reordered_token_superset() -> None:
+    # Token-set test, not prefix: order doesn't matter.
+    assert slug_collides_with_existing(
+        "apple-comeback-steve-jobs", ["steve-jobs"]
+    ) == "steve-jobs"
+
+
+def test_collision_returns_first_match() -> None:
+    # Multiple existing slugs that both nest under candidate — first wins.
+    result = slug_collides_with_existing(
+        "steve-jobs-apple-comeback",
+        ["steve-jobs", "apple-comeback"],
+    )
+    assert result in {"steve-jobs", "apple-comeback"}
+
+
+def test_collision_ignores_exact_match() -> None:
+    # Equal slugs are not a collision — that's an intentional overwrite.
+    assert slug_collides_with_existing("steve-jobs", ["steve-jobs"]) is None
+
+
+def test_collision_one_directional_subset_not_flagged() -> None:
+    # Authoring a BROADER slug than something stored is allowed.
+    # `jobs` (the role) vs stored `steve-jobs` — the polysemy false-positive
+    # the inverse direction would produce. Must NOT flag.
+    assert slug_collides_with_existing("jobs", ["steve-jobs"]) is None
+    assert slug_collides_with_existing("apple", ["steve-jobs-apple"]) is None
+    assert slug_collides_with_existing("python", ["monty-python"]) is None
+
+
+def test_collision_distinct_tokens_not_flagged() -> None:
+    # Neither slug is a subset of the other — different topics.
+    assert slug_collides_with_existing(
+        "roman-empire", ["byzantine-empire"]
+    ) is None
+    assert slug_collides_with_existing(
+        "transformer-attention", ["transformer-tokenizer"]
+    ) is None
+
+
+def test_collision_empty_inputs() -> None:
+    assert slug_collides_with_existing("", ["steve-jobs"]) is None
+    assert slug_collides_with_existing("steve-jobs", []) is None
+    assert slug_collides_with_existing("steve-jobs", [""]) is None
+    assert slug_collides_with_existing(None, ["steve-jobs"]) is None  # type: ignore[arg-type]
