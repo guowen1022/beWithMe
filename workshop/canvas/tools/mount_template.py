@@ -59,18 +59,6 @@ from infra.model.tools import ToolSpec
 _DEFAULT_GRID = {"x": 2, "y": 2, "w": 8, "h": 5}
 
 
-def _viewport_for_grid(g: dict[str, int]) -> str:
-    """Pick a Mermaid render profile from the block's resolved grid.
-
-    Viewport is a property of the *block*, not the surface. The frontend
-    proportionally rescales the canonical desktop grid (12x9) to phone
-    (4x9) and tablet (8x9) — so a w<h block stays tall regardless of
-    which device displays it. Two profiles for v1: w<h → narrow (TB
-    flowchart, tighter spacing); else → wide (default LR).
-    """
-    return "narrow" if g.get("w", 0) < g.get("h", 0) else "wide"
-
-
 @dataclass
 class MountResult:
     block_id: str
@@ -280,7 +268,6 @@ async def mount_template(
     else:
         bid = block_id or template.id_default
     g = grid or (dict(template.manifest.grid) if template.manifest.grid else dict(_DEFAULT_GRID))
-    viewport = _viewport_for_grid(g)
 
     # Idempotence: if the block is already mounted on any device for this
     # user AND the caller didn't ask to replace anything, skip the mount
@@ -343,25 +330,25 @@ async def mount_template(
                     ),
                     confirmed=confirmed,
                 )
-            processed = await render_note_markdown(md_source, viewport=viewport)
+            processed = await render_note_markdown(md_source)
             params = {**params, "content": processed}
             params.pop("markdown", None)  # don't ship the source to the client
-            _note_cache.set(user_id, bid, html=processed, md=md_source, viewport=viewport)
+            _note_cache.set(user_id, bid, html=processed, md=md_source)
             _note_index.enqueue_reembed(user_id, bid, md_source)
             # Fresh authoring: typewriter-reveal the new content.
             params.setdefault("animate", True)
         elif isinstance(content_in, str) and content_in.strip():
-            processed = await preprocess_note(content_in, viewport=viewport)
+            processed = await preprocess_note(content_in)
             params = {**params, "content": processed}
-            _note_cache.set(user_id, bid, html=processed, viewport=viewport)
+            _note_cache.set(user_id, bid, html=processed)
             params.setdefault("animate", True)
         else:
             # Hydrate path. Cache lazily loads from disk on miss.
-            cached_html = _note_cache.get_html(user_id, bid, viewport=viewport)
+            cached_html = _note_cache.get_html(user_id, bid)
             cached_md = _note_cache.get_md(user_id, bid)
             if not cached_html and cached_md:
-                cached_html = await render_note_markdown(cached_md, viewport=viewport)
-                _note_cache.set(user_id, bid, html=cached_html, viewport=viewport)
+                cached_html = await render_note_markdown(cached_md)
+                _note_cache.set(user_id, bid, html=cached_html)
             if cached_html:
                 params = {**params, "content": cached_html}
                 # Re-display existing note — skip the reveal animation
