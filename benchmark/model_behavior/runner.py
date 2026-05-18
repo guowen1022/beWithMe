@@ -28,14 +28,32 @@ from benchmark._common import (
     git_sha,
     list_runnable,
     load_yaml,
+    render_answers_md,
     reset_db,
     run_id,
     safe_json,
     seed_preferences,
     set_profile,
+    set_talk_preference,
     upload_file_decl,
     write_run_artifacts,
 )
+
+
+_VALID_DEVICE_CLASSES = {"desktop", "tablet", "phone"}
+
+
+def _validate_device_class(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if v == "":
+        return None
+    if v not in _VALID_DEVICE_CLASSES:
+        raise SystemExit(
+            f"device_class must be one of desktop/tablet/phone (got {value!r})."
+        )
+    return v
 
 
 PKG_ROOT = pathlib.Path(__file__).resolve().parent
@@ -64,14 +82,22 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
     started_at = datetime.now(timezone.utc).isoformat()
     wall_start = time.time()
 
+    device_class = _validate_device_class(data.get("device_class"))
+    talk_pref_yaml = data.get("talk_preference") or None
+
     async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
         username = f"bench_{region}_{uuid.uuid4().hex[:6]}"
         user_id = await create_or_get_user(client, username)
-        headers = auth_headers(user_id)
+        headers = auth_headers(user_id, device_class=device_class)
         print(f"[user] {username} (id={user_id[:8]}...)")
+        if device_class:
+            print(f"[device] X-Device-Class={device_class}")
 
         await set_profile(client, headers, data.get("profile", ""))
         seeded_prefs = await seed_preferences(client, headers, data.get("preferences"))
+        seeded_talk_pref = await set_talk_preference(client, headers, talk_pref_yaml)
+        if seeded_talk_pref:
+            print(f"[talk_preference] seeded: {seeded_talk_pref}")
 
         all_answers: list[dict] = []
         prompts_per_interaction: list[dict] = []
@@ -81,6 +107,7 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
         for s_idx, session in enumerate(sessions):
             title = session.get("title", "")
             interactions = session.get("interactions") or []
+            encourage_visual = bool(session.get("encourage_visual"))
 
             # A session may declare a file (PDF/video/audio/image) instead
             # of an inline passage. When `file:` is set, upload it now and
@@ -125,6 +152,7 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
                     question=question,
                     session_id=sid,
                     document_id=session_doc_id,
+                    encourage_visual=encourage_visual,
                 )
                 result["session_title"] = title
                 result["interaction_index"] = q_num - 1
@@ -167,6 +195,26 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
         avg_time = sum(a.get("elapsed_seconds", 0.0) for a in valid) / max(len(valid), 1)
         concepts_with_line = sum(1 for a in valid if a.get("concepts_line"))
 
+        # Aggregate multi-modal totals so reviewers see at a glance
+        # whether the round actually exercised diagrams / voice / canvas
+        # tools. Counts come from the per-result `multimodal` block
+        # built in `ask_one`.
+        mm_totals = {
+            "spoken": 0,
+            "diagrams": 0,
+            "annotations": 0,
+            "mounted_templates": 0,
+            "delegations": 0,
+            "tool_call_count": 0,
+        }
+        for a in valid:
+            mm = a.get("multimodal") or {}
+            for k in mm_totals:
+                if k == "tool_call_count":
+                    mm_totals[k] += mm.get("tool_call_count", 0)
+                else:
+                    mm_totals[k] += len(mm.get(k, []))
+
         results = {
             "round_id": rid,
             "region": region,
@@ -184,6 +232,7 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
                 "graph_edges": len(graph.get("edges", [])),
                 "concepts_line_rate": f"{concepts_with_line}/{len(valid)}",
                 "total_wall_seconds": round(wall_total, 1),
+                "multimodal": mm_totals,
             },
         }
 
@@ -194,7 +243,12 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
             **git_sha(),
             "env": env_snapshot(),
             "base_url": base_url,
-            "config": {"reset_db_before": did_reset},
+            "config": {
+                "reset_db_before": did_reset,
+                "device_class": device_class,
+                "talk_preference_yaml": talk_pref_yaml,
+                "talk_preference_after_put": seeded_talk_pref,
+            },
             "user_profile_snapshot": {
                 "self_description": data.get("profile", ""),
                 "preferences_yaml": data.get("preferences") or None,
@@ -206,11 +260,20 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
             "prompts_per_interaction": prompts_per_interaction,
         }
 
+        answers_md = render_answers_md(
+            title=f"Round {rid} — {region}",
+            profile=data.get("profile", ""),
+            device_class=device_class,
+            talk_preference=talk_pref if isinstance(talk_pref, dict) else None,
+            answers=all_answers,
+        )
+
         write_run_artifacts(
             run_dir,
             results=results,
             metadata=metadata,
             comments_header=comments_template(rid, region),
+            answers_md=answers_md,
         )
 
         print(
@@ -220,6 +283,7 @@ async def run_region(region: str, base_url: str, *, did_reset: bool) -> pathlib.
         print(f"  results:  {run_dir / 'results.json'}")
         print(f"  metadata: {run_dir / 'metadata.json'}")
         print(f"  comments: {run_dir / 'comments.md'}")
+        print(f"  answers:  {run_dir / 'answers.md'}")
         return run_dir
 
 

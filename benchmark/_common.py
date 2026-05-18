@@ -56,8 +56,19 @@ async def reset_db() -> None:
 
 # ---- HTTP ----
 
-def auth_headers(user_id: str) -> dict[str, str]:
-    return {"Content-Type": "application/json", "X-User-Id": user_id}
+def auth_headers(
+    user_id: str, *, device_class: str | None = None
+) -> dict[str, str]:
+    """Auth headers for benchmark requests.
+
+    `device_class` (desktop|tablet|phone) is forwarded as `X-Device-Class`
+    so the persona router resolves the right talk channel + prompt
+    builder. Omitted by default to keep existing call sites unchanged.
+    """
+    h = {"Content-Type": "application/json", "X-User-Id": user_id}
+    if device_class:
+        h["X-Device-Class"] = device_class
+    return h
 
 
 async def create_or_get_user(client: httpx.AsyncClient, username: str) -> str:
@@ -86,6 +97,32 @@ async def seed_preferences(
     if not preferences:
         return None
     resp = await client.put("/api/preferences", headers=headers, json=preferences)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def set_talk_preference(
+    client: httpx.AsyncClient, headers: dict, pref: dict | None
+) -> dict | None:
+    """PUT a per-device-class talk preference. Accepts a partial dict like
+    `{"desktop": "voice"}` and fills missing fields from the user's
+    current preference so the PUT (which requires all three of desktop/
+    tablet/phone) succeeds. Returns the server's view after the put, or
+    None when nothing was seeded.
+    """
+    if not pref:
+        return None
+    fallback = {"desktop": "both", "tablet": "both", "phone": "text"}
+    try:
+        cur_resp = await client.get("/api/talk-preference", headers=headers)
+        if cur_resp.status_code == 200:
+            base = cur_resp.json()
+        else:
+            base = fallback
+    except Exception:
+        base = fallback
+    payload = {**base, **{k: v for k, v in pref.items() if v}}
+    resp = await client.put("/api/talk-preference", headers=headers, json=payload)
     resp.raise_for_status()
     return resp.json()
 
@@ -121,6 +158,7 @@ async def ask_one(
     question: str,
     session_id: str,
     document_id: str | None = None,
+    encourage_visual: bool = False,
 ) -> dict:
     """Single POST to /api/ask/stream. Parses the SSE stream and returns
     a result dict including the full `answer_text`, the assembled prompt
@@ -129,12 +167,26 @@ async def ask_one(
     Pass `document_id` when the question references an uploaded PDF — the
     route stores it on the Interaction row so the doc/Q&A link survives.
 
+    When `encourage_visual=True`, a short one-line nudge is appended to
+    the question — neutral wording that reminds the teacher its diagram /
+    speak tools are available without dictating that they be used. The
+    final phrasing lands in the SSE `debug.dynamic_user` so reviewers can
+    see exactly what was asked.
+
     On any HTTP / transport error returns the same dict shape with an
     extra `error` key set."""
+    effective_question = question
+    if encourage_visual:
+        effective_question = (
+            f"{question}\n\n"
+            "(Use a diagram via interactive_graph or speak the answer "
+            "out loud if either would genuinely help — otherwise just "
+            "answer in text.)"
+        )
     payload: dict = {
         "passage_text": passage,
         "selected_text": selected_text,
-        "question": question,
+        "question": effective_question,
         "session_id": session_id,
     }
     if document_id:
@@ -201,6 +253,8 @@ async def ask_one(
         "prompt_parts": prompt_parts,
         "usage": usage,
         "tool_calls": tool_calls,
+        "multimodal": _build_multimodal(tool_calls),
+        "encourage_visual": encourage_visual,
     }
 
 
@@ -216,7 +270,118 @@ def _error_result(question: str, selected_text: str | None, err: str) -> dict:
         "prompt_parts": None,
         "usage": {},
         "tool_calls": [],
+        "multimodal": _build_multimodal([]),
         "error": err,
+    }
+
+
+# ---- Multi-modal output normalization ----
+#
+# The teacher persona exposes diagram / voice / canvas tools (see
+# `persona/teacher/tools/manifest.py`). When the LLM invokes one, the
+# /api/ask/stream route forwards it as a `tool_call` SSE event with the
+# tool's name + arguments. _build_multimodal() reshapes the raw
+# tool_calls list into review-friendly buckets so results.json and
+# answers.md can render the spoken text, the mermaid source, and the
+# canvas mutations without anyone having to grok argument schemas.
+
+_MERMAID_KIND_FIRST_WORD = {
+    "flowchart": "flowchart",
+    "graph": "flowchart",
+    "sequencediagram": "sequence",
+    "classdiagram": "class",
+    "statediagram": "state",
+    "statediagram-v2": "state",
+    "erdiagram": "er",
+    "journey": "journey",
+    "gantt": "gantt",
+    "pie": "pie",
+    "mindmap": "mindmap",
+    "timeline": "timeline",
+    "sankey-beta": "sankey",
+    "xychart-beta": "xychart",
+    "quadrantchart": "quadrant",
+    "requirementdiagram": "requirement",
+    "gitgraph": "gitgraph",
+}
+
+
+def _detect_mermaid_kind(mermaid: str) -> str:
+    """Best-effort: pull the first non-empty line and map its first
+    token to a short kind label ('flowchart', 'sequence', ...). Returns
+    'unknown' if we can't tell — used only as a hint in the review
+    artifacts, never load-bearing."""
+    for raw in (mermaid or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        first = line.split(None, 1)[0].lower().rstrip(":")
+        return _MERMAID_KIND_FIRST_WORD.get(first, first or "unknown")
+    return "unknown"
+
+
+def _build_multimodal(tool_calls: list[dict]) -> dict:
+    """Normalize raw tool_call events into category buckets.
+
+    Each tool the teacher can invoke maps to one bucket; unknown tools
+    fall through into `other_tool_names` so we don't silently drop new
+    additions to the manifest. Caller still gets the full raw list via
+    the sibling `tool_calls` field on the result row."""
+    spoken: list[dict] = []
+    diagrams: list[dict] = []
+    annotations: list[dict] = []
+    mounted_templates: list[dict] = []
+    delegations: list[dict] = []
+    other: list[str] = []
+    for tc in tool_calls:
+        name = (tc.get("name") or "").strip()
+        args = tc.get("arguments") or {}
+        if name == "speak":
+            spoken.append({
+                "text": args.get("text", ""),
+                "channel": args.get("channel") or "both",
+                "source": "tool",
+            })
+        elif name == "interactive_graph":
+            mermaid = args.get("mermaid", "") or ""
+            diagrams.append({
+                "name": args.get("name") or "main",
+                "kind": _detect_mermaid_kind(mermaid),
+                "mermaid": mermaid,
+                "highlight_node": args.get("highlight_node"),
+                "clear": bool(args.get("clear")),
+            })
+        elif name == "point_arrow":
+            label = args.get("label") or ""
+            summary = (
+                f"arrow {args.get('from_block_id', '?')} → "
+                f"{args.get('to_block_id', '?')}"
+            )
+            if label:
+                summary += f" [{label}]"
+            annotations.append({"tool": name, "summary": summary})
+        elif name == "mount_template":
+            params = args.get("params") or {}
+            mounted_templates.append({
+                "template": args.get("template", ""),
+                "slug": args.get("slug"),
+                "params_keys": sorted(params.keys()) if isinstance(params, dict) else [],
+            })
+        elif name in ("request_new_block", "request_ui_block"):
+            delegations.append({
+                "tool": name,
+                "description": args.get("description", ""),
+            })
+        elif name:
+            other.append(name)
+    return {
+        "spoken": spoken,
+        "diagrams": diagrams,
+        "annotations": annotations,
+        "mounted_templates": mounted_templates,
+        "delegations": delegations,
+        "other_tool_names": other,
+        "tool_call_count": len(tool_calls),
     }
 
 
@@ -422,7 +587,12 @@ def write_run_artifacts(
     results: dict,
     metadata: dict,
     comments_header: str,
+    answers_md: str | None = None,
 ) -> None:
+    """Write the standard per-round files. When `answers_md` is provided,
+    also write an `answers.md` transcript next to them — this is the
+    human-readable view of a round (inline mermaid, spoken snippets,
+    tool summaries) and is rendered by callers via `render_answers_md`."""
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
@@ -430,6 +600,146 @@ def write_run_artifacts(
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     with open(run_dir / "comments.md", "w", encoding="utf-8") as f:
         f.write(comments_header)
+    if answers_md is not None:
+        with open(run_dir / "answers.md", "w", encoding="utf-8") as f:
+            f.write(answers_md)
+
+
+def render_answers_md(
+    *,
+    title: str,
+    profile: str,
+    device_class: str | None,
+    talk_preference: dict | None,
+    answers: list[dict],
+) -> str:
+    """Render the round's question/answer/multi-modal transcript as
+    markdown. Inlines mermaid diagrams in fenced ```mermaid blocks so
+    GitHub and most previewers render them without extra tooling. Voice
+    output from the `speak` tool is shown in a quoted block; canvas
+    annotations / templates / delegations are listed as short bullets.
+
+    Designed to be the artifact a human reviewer scans for "did the
+    teacher use the right medium?" — results.json stays as the
+    machine-grading source of truth."""
+    lines: list[str] = []
+    lines.append(f"# {title}")
+    lines.append("")
+    if profile:
+        lines.append("**Profile**")
+        lines.append("")
+        for ln in profile.strip().splitlines():
+            lines.append(f"> {ln}")
+        lines.append("")
+    meta_bits = []
+    if device_class:
+        meta_bits.append(f"device_class={device_class}")
+    if talk_preference:
+        tp_str = ", ".join(f"{k}={v}" for k, v in talk_preference.items())
+        meta_bits.append(f"talk_preference=({tp_str})")
+    if meta_bits:
+        lines.append(f"_{' · '.join(meta_bits)}_")
+        lines.append("")
+
+    current_session: str | None = object()  # sentinel that won't compare equal
+    for idx, a in enumerate(answers, start=1):
+        session_title = a.get("session_title") or ""
+        if session_title != current_session:
+            current_session = session_title
+            if session_title:
+                lines.append(f"## Session: {session_title}")
+                lines.append("")
+
+        q = a.get("question") or ""
+        sel = a.get("selected_text")
+        lines.append(f"### Q{idx}. {q}")
+        if sel:
+            lines.append(f"**selected:** “{sel}”")
+        lines.append("")
+
+        if a.get("error"):
+            lines.append(f"> **ERROR**: {a['error']}")
+            lines.append("")
+            continue
+
+        title_str = a.get("title")
+        if title_str:
+            lines.append(f"**Title:** {title_str}")
+            lines.append("")
+
+        answer_text = (a.get("answer_text") or "").strip()
+        if answer_text:
+            lines.append("**Answer**")
+            lines.append("")
+            for ln in answer_text.splitlines():
+                lines.append(f"> {ln}" if ln else ">")
+            lines.append("")
+
+        mm = a.get("multimodal") or {}
+        for spoken in mm.get("spoken", []):
+            ch = spoken.get("channel", "both")
+            lines.append(f"**Spoken (channel={ch})**")
+            lines.append("")
+            for ln in (spoken.get("text") or "").splitlines():
+                lines.append(f"> {ln}" if ln else ">")
+            lines.append("")
+        for diag in mm.get("diagrams", []):
+            name = diag.get("name") or "main"
+            kind = diag.get("kind") or "unknown"
+            if diag.get("clear"):
+                lines.append(f"**Diagram cleared — `{name}`** ({kind})")
+                lines.append("")
+                continue
+            lines.append(f"**Diagram — `{name}`** ({kind})")
+            lines.append("")
+            lines.append("```mermaid")
+            lines.append((diag.get("mermaid") or "").rstrip())
+            lines.append("```")
+            hn = diag.get("highlight_node")
+            if hn:
+                lines.append(f"_highlight: `{hn}`_")
+            lines.append("")
+        for ann in mm.get("annotations", []):
+            lines.append(f"- **{ann.get('tool')}**: {ann.get('summary')}")
+        if mm.get("annotations"):
+            lines.append("")
+        for tmpl in mm.get("mounted_templates", []):
+            slug = tmpl.get("slug") or "(auto)"
+            keys = ", ".join(tmpl.get("params_keys") or []) or "—"
+            lines.append(
+                f"- **mount_template** `{tmpl.get('template')}` "
+                f"slug=`{slug}` params=[{keys}]"
+            )
+        if mm.get("mounted_templates"):
+            lines.append("")
+        for deleg in mm.get("delegations", []):
+            lines.append(
+                f"- **{deleg.get('tool')}**: {deleg.get('description')}"
+            )
+        if mm.get("delegations"):
+            lines.append("")
+        if mm.get("other_tool_names"):
+            lines.append(
+                "_other tools: " + ", ".join(mm["other_tool_names"]) + "_"
+            )
+            lines.append("")
+
+        usage = a.get("usage") or {}
+        tc_count = mm.get("tool_call_count", 0)
+        bits = []
+        if tc_count:
+            bits.append(f"tool_calls={tc_count}")
+        if usage.get("input_tokens") is not None:
+            bits.append(f"in={usage.get('input_tokens')}")
+        if usage.get("output_tokens") is not None:
+            bits.append(f"out={usage.get('output_tokens')}")
+        if a.get("elapsed_seconds"):
+            bits.append(f"elapsed={a['elapsed_seconds']}s")
+        if bits:
+            lines.append("_" + " · ".join(bits) + "_")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def comments_template(round_id: str, label: str) -> str:

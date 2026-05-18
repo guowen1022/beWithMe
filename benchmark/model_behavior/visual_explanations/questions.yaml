@@ -1,0 +1,114 @@
+name: "Visual / spoken explanations — exercising the teacher's full toolkit"
+
+# Curated to push the teacher beyond plain prose. Each session is the
+# kind of passage where a flowchart, sequence diagram, or out-loud
+# walkthrough genuinely earns its keep — so the teacher's
+# `interactive_graph` and `speak` tools should fire in a healthy round.
+# Existing regions (biology, computer_science, mathematics, sports)
+# stay text-only as the regression baseline; this region is where we
+# look for multi-modal behavior.
+
+profile: |
+  I'm a curious self-learner who responds well to pictures and verbal
+  walkthroughs. When a process has steps or pieces talking to each
+  other, I usually need to see it laid out — pure prose blurs together
+  for me.
+
+# desktop=both so voice + on-screen text are both valid; the teacher
+# may still pick text-only if the question doesn't warrant speaking.
+talk_preference:
+  desktop: both
+
+sessions:
+  - title: "Cellular respiration — a process with stages"
+    encourage_visual: true
+    passage: |
+      Cellular respiration is the set of metabolic reactions that
+      convert chemical energy from nutrients into adenosine
+      triphosphate (ATP). It proceeds in four stages: glycolysis, the
+      pyruvate oxidation step, the citric acid (Krebs) cycle, and
+      oxidative phosphorylation via the electron transport chain.
+
+      Glycolysis happens in the cytoplasm and splits one glucose
+      molecule into two pyruvate molecules, producing a small net gain
+      of ATP and NADH. Each pyruvate is then transported into a
+      mitochondrion, where pyruvate dehydrogenase converts it into
+      acetyl-CoA, releasing CO2 and producing more NADH.
+
+      Acetyl-CoA enters the Krebs cycle in the mitochondrial matrix.
+      Over one full turn of the cycle, two CO2 molecules are released,
+      and the cycle produces ATP (or GTP), more NADH, and FADH2. The
+      NADH and FADH2 carry high-energy electrons to the inner
+      mitochondrial membrane.
+
+      At the inner membrane, the electron transport chain passes those
+      electrons through a series of complexes. The energy released
+      pumps protons into the intermembrane space, building an
+      electrochemical gradient. ATP synthase lets the protons flow
+      back, and uses that flow to synthesize the bulk of the cell's
+      ATP. Oxygen is the final electron acceptor, combining with
+      protons to form water.
+    interactions:
+      - selected_text: "four stages: glycolysis, the pyruvate oxidation step, the citric acid (Krebs) cycle, and oxidative phosphorylation"
+        question: "Can you map out the four stages and how they connect? I want to see where the inputs and outputs of each one go."
+      - selected_text: "electron transport chain passes those electrons through a series of complexes"
+        question: "Walk me through the electron transport chain step by step — what happens at each complex?"
+      - selected_text: "ATP synthase lets the protons flow back, and uses that flow to synthesize the bulk of the cell's ATP"
+        question: "How is ATP synthase like a turbine? Show me the relationship between the proton gradient and ATP."
+
+  - title: "TLS handshake — actors exchanging messages"
+    encourage_visual: true
+    passage: |
+      Transport Layer Security (TLS) lets two parties — typically a
+      client (your browser) and a server (a website) — agree on a
+      shared encryption key over a public network without an
+      eavesdropper learning the key. A TLS 1.3 handshake unfolds as a
+      short, ordered exchange of messages.
+
+      The client opens by sending ClientHello, which includes the TLS
+      version, a random number, the cipher suites it supports, and an
+      ephemeral key share for the (EC)DHE key agreement.
+
+      The server responds with ServerHello — choosing one cipher
+      suite, returning its own random and key share — followed by
+      EncryptedExtensions, Certificate (the server's certificate
+      chain), CertificateVerify (a signature proving it owns the
+      certificate's private key), and Finished (a MAC over the
+      transcript so far).
+
+      The client validates the server certificate against its trust
+      store, verifies CertificateVerify, derives the shared traffic
+      secrets, and sends its own Finished message. Application data
+      can flow once both sides have sent Finished.
+    interactions:
+      - selected_text: "short, ordered exchange of messages"
+        question: "Show me the message sequence between client and server during a TLS 1.3 handshake — which side sends what, and in what order?"
+      - selected_text: "ephemeral key share for the (EC)DHE key agreement"
+        question: "Why is an ephemeral key share safer than just using the server's certificate key to encrypt? Diagram the difference if it helps."
+      - selected_text: "CertificateVerify (a signature proving it owns the certificate's private key)"
+        question: "What is CertificateVerify proving, exactly? Walk me through what would happen without it."
+
+  - title: "Recursion — explaining out loud"
+    encourage_visual: true
+    passage: |
+      Recursion is a technique where a function solves a problem by
+      calling itself on a smaller version of the same problem. A
+      recursive function needs two things: a base case that doesn't
+      recurse (so the recursion terminates), and a recursive case
+      that reduces the problem and calls the function on the smaller
+      problem.
+
+      A classic example is computing factorial: n! = n × (n-1)!, with
+      the base case 0! = 1. Another is traversing a binary tree:
+      visit the current node, then recurse on the left subtree, then
+      recurse on the right subtree.
+
+      Each recursive call adds a frame to the call stack. When the
+      base case is reached, the calls return in reverse order,
+      unwinding the stack. Without a correct base case, the recursion
+      runs forever and causes a stack overflow.
+    interactions:
+      - selected_text: "a base case that doesn't recurse"
+        question: "Can you explain recursion out loud to me, like you would to a friend who's never coded? I learn better hearing it."
+      - selected_text: "Each recursive call adds a frame to the call stack"
+        question: "Show me a diagram of the call stack for factorial(4) — I want to see each frame stacking up and then unwinding."
