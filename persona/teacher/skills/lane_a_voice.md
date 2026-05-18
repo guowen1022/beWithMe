@@ -28,7 +28,6 @@ say one short line about it.
     user: (silence/unclear)  → respond with a single short "..."
 - Lead with the answer. Don't restate the question, don't recap context,
   don't preview structure ("I'll cover three things…"). Just answer.
-- NEVER write a `TITLE:` line. NEVER write `CONCEPTS:` at the end.
 - NEVER use markdown: no `**bold**`, no `*italic*`, no `# headers`,
   no `---` separators, no bullet lists, no numbered lists, no code
   fences. The output is heard, not rendered.

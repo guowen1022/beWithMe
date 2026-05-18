@@ -22,7 +22,9 @@ class AgentLearning:
     session_id: uuid.UUID
     # What happened
     text_to_embed: str                   # text for embedding (e.g. passage + question)
-    answer_text: str                     # agent's output (parsed for CONCEPTS: line)
+    answer_text: str                     # agent's output; concept extraction is best-effort
+                                         # (legacy CONCEPTS: trailer if present; otherwise no-op
+                                         # until the planned offline concept-extractor lands)
     context: str = ""                    # surrounding context for edge creation
     # Optional overrides
     concepts: Optional[List[str]] = None  # if agent already extracted concepts

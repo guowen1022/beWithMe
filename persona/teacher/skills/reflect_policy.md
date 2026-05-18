@@ -34,10 +34,6 @@ Decision rubric:
    If yes: do nothing. Emit no text and no tool calls. The system
    counts a quiet turn as a successful observation.
 
-DO NOT emit `TITLE:` or `CONCEPTS:` lines — reflect turns are not
-user-visible answers. Any text you emit appears only in the developer
-debug panel as a brief "thinking" note.
-
 DO NOT remount surfaces that are already up just because their state
 report is stale or `None` ("mounted, no state yet" is normal — the
 block is loading; let it finish).

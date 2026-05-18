@@ -15,6 +15,14 @@ async def build_concepts(
     """Parse concepts from an agent's output and update the knowledge graph.
 
     Returns the list of concept names that were extracted.
+
+    The teacher's answer prompt no longer asks for a `CONCEPTS:` trailer
+    (that was a legacy contract for the old right-panel UI). The parser
+    below still handles the trailer if any caller hands one in — historic
+    interactions, fake LLM fixtures, or future opt-in modes. When the
+    trailer is absent this returns an empty list; a planned background
+    concept-extractor (a dedicated offline LLM pass over the answer body)
+    will eventually fill that gap.
     """
     concepts = parse_concepts(answer_text)
     if not concepts:
