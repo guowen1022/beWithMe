@@ -1,0 +1,12 @@
+name: "Improve emotional intelligence"
+
+profile: |
+  I'm a tech lead who struggles with team conflicts.
+  I want to be better at reading people.
+
+goal: "Improve my emotional intelligence to become a better team leader"
+
+actions:
+  - {type: expand, node_index: 0}
+  - {type: expand, node_index: 1}
+  - {type: expand, node_index: 3}

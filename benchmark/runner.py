@@ -1,6 +1,13 @@
 """
 Benchmark runner — executes scenarios against the live beWithMe API.
 
+DEPRECATED. Prefer `python -m benchmark.model_behavior --region <name>` or
+`python -m benchmark.goal_planning --topic <slug>`. The YAML-driven runners
+co-locate each round's results.json, metadata.json (full prompts), and
+comments.md next to the question set. This module is retained so the legacy
+`python -m benchmark --scenario N` invocation keeps working until all callers
+migrate.
+
 Usage:
     python -m benchmark.runner [--scenario 1] [--reset] [--base-url http://localhost:8000]
 

@@ -1,0 +1,13 @@
+name: "Learn web development from scratch"
+
+profile: |
+  I'm a college student with no programming experience.
+  I learn best with hands-on projects.
+
+goal: "Learn web development from scratch"
+
+# expand a node = click "Expand" on it. know/unknown = mark mastery.
+actions:
+  - {type: expand, node_index: 0}
+  - {type: expand, node_index: 1}
+  - {type: know,   node_index: 2}

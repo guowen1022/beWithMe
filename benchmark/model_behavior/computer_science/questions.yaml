@@ -1,0 +1,135 @@
+name: "CS student learning machine learning"
+
+profile: |
+  I'm a computer science senior. Strong in linear algebra and programming.
+  New to deep learning. I prefer math-first explanations with code examples.
+
+sessions:
+  - title: "Neural Networks — Backpropagation"
+    passage: |
+      A neural network is a network of artificial neurons organized in layers. Each connection between neurons has a weight that is adjusted during training. The network learns by adjusting these weights to minimize a loss function.
+
+      Backpropagation is the algorithm used to train neural networks. It computes the gradient of the loss function with respect to each weight by applying the chain rule, computing the gradient one layer at a time, iterating backward from the last layer.
+
+      The gradient tells us how much the loss would change if we made a small change to each weight. We then update each weight in the direction that reduces the loss — this is gradient descent. The learning rate controls how big each step is.
+
+      Stochastic gradient descent (SGD) computes the gradient using a random subset (mini-batch) of the training data rather than the entire dataset, which makes training much faster while still converging to a good solution.
+    interactions:
+      - selected_text: "adjusted during training"
+        question: "What does 'training' actually mean mathematically?"
+      - selected_text: "chain rule, computing the gradient one layer at a time"
+        question: "Can you show me the chain rule applied to a simple 2-layer network?"
+      - selected_text: "gradient descent"
+        question: "What's the intuition behind gradient descent?"
+      - selected_text: "learning rate controls how big each step is"
+        question: "What happens if the learning rate is too high or too low?"
+      - selected_text: "Stochastic gradient descent"
+        question: "Why does using random mini-batches still work?"
+
+  - title: "Transformers — Attention Mechanism"
+    passage: |
+      The Transformer is a deep learning architecture that relies entirely on self-attention mechanisms, dispensing with recurrence and convolutions entirely. It was introduced in the paper "Attention Is All You Need" by Vaswani et al. in 2017.
+
+      Self-attention allows the model to weigh the importance of different words in a sequence when encoding each word. For each word, the model computes Query (Q), Key (K), and Value (V) vectors. The attention score between two words is the dot product of the query of one word with the key of the other, scaled by the square root of the dimension.
+
+      Multi-head attention runs multiple attention computations in parallel, each with different learned projections. This allows the model to attend to information from different representation subspaces at different positions.
+
+      The Transformer architecture uses positional encoding to inject information about the position of tokens in the sequence, since the self-attention mechanism is permutation-invariant.
+    interactions:
+      - selected_text: "relies entirely on self-attention mechanisms"
+        question: "Why was removing recurrence such a big deal?"
+      - selected_text: "Query (Q), Key (K), and Value (V) vectors"
+        question: "What's the intuition behind Q, K, V? Why three separate vectors?"
+      - selected_text: "dot product of the query of one word with the key of the other"
+        question: "Can you show the attention computation with actual numbers?"
+      - selected_text: "Multi-head attention"
+        question: "Why do we need multiple heads? What does each one learn?"
+      - selected_text: "positional encoding"
+        question: "How does positional encoding work? Why sine/cosine?"
+      - selected_text: null
+        question: "How do transformers relate to the backpropagation we studied earlier?"
+
+  - title: "Convolutional Neural Networks — vision foundations"
+    passage: |
+      A Convolutional Neural Network (CNN) replaces the dense matrix multiplications of an MLP with a sliding-window operation called a convolution. Each conv layer learns a small set of filters (also called kernels) — typically 3x3 or 5x5 — that are slid across the input and produce a 2D feature map for every channel. The weights of these filters are learned via backpropagation, exactly like in an MLP, but each filter is shared across every spatial position in the input.
+
+      This weight sharing is what gives CNNs translation equivariance: if a feature (an edge, a corner, a face) shifts to a different location in the image, the same filter detects it without needing a separate set of weights for that location. Empirically this dramatically reduces the number of parameters needed to recognize patterns and makes CNNs especially well-suited to images and other grid-structured data.
+
+      Modern CNNs stack many conv layers, each followed by a non-linearity (ReLU) and often a pooling operation. Max pooling takes the largest activation within a small window — say 2x2 — and discards the rest, halving the spatial resolution while making the network more robust to small spatial shifts. Padding with zeros around the edges keeps the output the same size as the input; without padding the feature maps shrink with each layer.
+
+      The receptive field of a neuron in a deep conv layer — the region of the original input it can see — grows by roughly the kernel size with each layer, so stacking many 3x3 layers eventually sees as much as a single large kernel would, but with far fewer parameters: two 3x3 layers cover the same area as one 5x5 with 18 weights instead of 25.
+
+      A conv layer typically has multiple channels, where each channel is a separate filter learning a different feature. The first layer may learn edge detectors and color blobs; deeper layers compose those into shapes, parts, and eventually whole-object detectors.
+    interactions:
+      - selected_text: "learned via backpropagation"
+        question: "What does it mean for a convolution kernel to be 'learned'? Where do the filter weights actually come from?"
+      - selected_text: "weight sharing"
+        question: "Why is weight sharing the key idea that makes CNNs work for images, when a plain MLP would also fit the data in theory?"
+      - selected_text: "translation equivariance"
+        question: "What is translation equivariance, and how is it different from translation invariance?"
+      - selected_text: "Max pooling"
+        question: "Max pooling throws away information by design — why does that help generalization instead of hurting it?"
+      - selected_text: "Padding with zeros"
+        question: "Why do we pad with zeros around the edges? What goes wrong without padding when you stack many conv layers?"
+      - selected_text: "receptive field"
+        question: "Walk me through how the receptive field grows as I stack more conv layers. Why does that matter for what the network can recognize?"
+      - selected_text: "two 3x3 layers cover the same area as one 5x5 with 18 weights instead of 25"
+        question: "Show the parameter-count arithmetic for two 3x3 layers vs one 5x5 layer, and explain why 'deeper with smaller kernels' became the consistent design choice."
+      - selected_text: null
+        question: "How does training a CNN with backprop differ — if at all — from training the fully-connected nets we studied first?"
+
+  - title: "Recurrent Networks & LSTM — sequence foundations"
+    passage: |
+      A Recurrent Neural Network (RNN) processes a sequence one element at a time, maintaining a hidden state that summarizes everything it has seen so far. At each timestep t, the network computes a new hidden state h_t from the previous hidden state h_(t-1) and the current input x_t, then optionally produces an output y_t. The same weights are used at every timestep — recurrence is just weight-sharing across time.
+
+      Training an RNN uses backpropagation through time (BPTT): the network is conceptually unrolled into a deep feedforward computation graph spanning the whole sequence, and gradients flow backward through every timestep. This is where vanilla RNNs run into trouble. Gradients flowing back through many timesteps repeatedly multiply by the same weight matrix, and unless the eigenvalues of that matrix are exactly one, the gradient magnitudes either explode or vanish exponentially. For sequences longer than about 20 to 30 timesteps, vanishing gradients make it impossible for the network to learn long-range dependencies.
+
+      Long Short-Term Memory (LSTM) networks fix this by introducing a separate cell state alongside the hidden state, regulated by three gates: a forget gate that decides what to remove from the cell, an input gate that decides what new information to write, and an output gate that decides what to expose as the hidden state. Each gate is a small sigmoid-activated layer producing values between 0 and 1 — element-wise multipliers on the cell state.
+
+      The crucial mathematical property is that the cell state has a near-linear path through time: information can flow forward across hundreds of timesteps without being repeatedly squashed by activation functions. Gradients can similarly flow backward through this highway without vanishing.
+
+      During training, sequence models often use teacher forcing: instead of feeding the model's own output back as the next input, the ground-truth target token is fed in. This makes training more stable and parallelizable across the sequence length, at the cost of a train-vs-inference mismatch — the model never sees its own mistakes during training.
+    interactions:
+      - selected_text: "hidden state"
+        question: "What is a hidden state in an RNN, and how is it different from the weights of the network?"
+      - selected_text: "vanishing gradients"
+        question: "Why do plain RNNs suffer from vanishing gradients on long sequences? Tie the explanation to the chain rule."
+      - selected_text: "three gates"
+        question: "Walk me through what each of the three LSTM gates does, in plain language plus the math."
+      - selected_text: "cell state has a near-linear path through time"
+        question: "What does it mean that the cell state has a 'highway' for gradient flow? Why is that the trick that fixes vanishing gradients?"
+      - selected_text: "teacher forcing"
+        question: "What is teacher forcing and what's the train-vs-inference mismatch it creates?"
+      - selected_text: "backpropagation through time"
+        question: "What's BPTT, and how is it different from regular backprop on a feedforward network?"
+      - selected_text: null
+        question: "Transformers replaced RNNs for most language tasks — what was the single biggest advantage that made the switch happen?"
+
+  - title: "Diffusion Models — generative AI"
+    passage: |
+      Diffusion models are a class of generative models that learn to reverse a gradual noising process. Given a training image x_0, the forward (or diffusion) process produces a sequence of progressively noisier versions x_1, x_2, ..., x_T by adding a small amount of Gaussian noise at each step. The noise schedule is chosen so that after T steps (usually around 1000), the original signal is essentially destroyed and x_T is indistinguishable from pure Gaussian noise.
+
+      The reverse process is what the neural network learns. Instead of trying to predict the clean image x_0 directly from noise, the model is trained to predict the noise that was added at each step. This turns out to be much easier than predicting the image itself, because the noise at each step is small and Gaussian. Once the model can predict the noise at any timestep, sampling proceeds by starting from pure noise and iteratively subtracting the predicted noise step-by-step, gradually revealing a coherent image.
+
+      The denoising network is typically a U-Net, a fully convolutional architecture with skip connections between matching encoder and decoder layers. The U-Net is well-suited because it operates at multiple spatial resolutions, capturing both fine details and global structure, and the skip connections let the network preserve spatial information that would otherwise be lost in the bottleneck.
+
+      Mathematically, the training objective is connected to score matching: the network is implicitly learning the score function — the gradient of the log-probability of the data distribution at every noise level. This is why diffusion models can be reframed as solving a stochastic differential equation in reverse, and it gives them a principled probabilistic foundation that GANs lack.
+
+      Conditioning a diffusion model on text — as in "a cat astronaut on the moon" — is done by feeding a text embedding into the denoising U-Net at every step, usually via cross-attention. The network learns to steer the denoising toward images consistent with the prompt. Classifier-free guidance, the most common conditioning trick, mixes a conditional and unconditional prediction at sampling time to amplify the influence of the prompt without needing a separate classifier model.
+    interactions:
+      - selected_text: "forward (or diffusion) process"
+        question: "Walk me through the forward noising process step by step. Why does the noise have to be Gaussian specifically?"
+      - selected_text: "predict the noise that was added at each step"
+        question: "The network learns to predict noise, not the clean image — why is that easier than predicting the image directly?"
+      - selected_text: "U-Net"
+        question: "Why is a U-Net the typical backbone for the denoising step? Tie it back to the CNN ideas we covered."
+      - selected_text: "score matching"
+        question: "What's the connection between diffusion training and 'score matching'? Explain in plain language."
+      - selected_text: "cross-attention"
+        question: "How does cross-attention let a text prompt steer the denoising process? Tie this back to the transformer attention we studied."
+      - selected_text: "Classifier-free guidance"
+        question: "What is classifier-free guidance and why does it improve text-to-image quality?"
+      - selected_text: null
+        question: "Compare a diffusion model with a transformer language model: what does each one *learn* during training, and how does each one *generate* at inference?"
+      - selected_text: null
+        question: "Looking back at all five topics — backprop, transformers, CNNs, RNNs, diffusion — what's the common thread that lets all these very different architectures be trained with the same basic algorithm?"

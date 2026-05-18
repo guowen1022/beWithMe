@@ -1,0 +1,6 @@
+# Mathematics region — empty slot.
+# Add a name, profile, and sessions[] block to make this runnable.
+# See ../biology/questions.yaml for the expected shape.
+
+name: "Mathematics — (empty slot)"
+sessions: []

@@ -59,16 +59,75 @@ cd desktop && npm run dist:mac
 ```
 
 ### Benchmark
-End-to-end integration benchmark in `benchmark/`. Drives the live FastAPI backend with
-realistic reading/goal scenarios and saves timestamped results to `benchmark/results/`.
-Whatever `LLM_PROVIDER` is active in `.env` is what the benchmark exercises — switch
-providers by changing the env var and restarting the backend.
+End-to-end integration benchmarks in `benchmark/`. Two LLM-behavior buckets are organized
+by sub-package; each region/topic owns its own `questions.yaml` and a co-located `runs/`
+folder where every round drops `results.json` (full answer text), `metadata.json` (git sha,
+env, full system prompt per interaction, profile snapshot), and `comments.md` (free-form
+human or LLM-judge annotations). Whatever `LLM_PROVIDER` is active in `.env` is what the
+benchmark exercises — switch providers by changing the env var and restarting the backend.
 ```bash
 # Backend must be running (uvicorn) on :8000.
-python -m benchmark --scenario 1          # reading + Q&A scenario
-python -m benchmark --goal 1              # goal-planning scenario
-python -m benchmark --scenario 2 --reset  # wipe DB first
+
+# Reading-Q&A behavior — one region per knowledge area.
+python -m benchmark.model_behavior --list                       # list runnable regions
+python -m benchmark.model_behavior --region biology --reset
+python -m benchmark.model_behavior --region computer_science
+
+# Goal-planning behavior — one slug per goal topic.
+python -m benchmark.goal_planning --list                        # list runnable topics
+python -m benchmark.goal_planning --topic learn-web-dev --reset
+python -m benchmark.goal_planning --topic deploy-ml-production
+
+# File-attachment focused module test — exercises the PDF / media
+# upload pipeline in isolation, one slug per fixture.
+python -m benchmark.file_understanding --list                   # list runnable slugs
+python -m benchmark.file_understanding --slug gettysburg-pdf --reset
 ```
+
+**File attachments are a cross-cutting capability.** Any `model_behavior`
+session can carry a `file:` block in place of an inline `passage:`:
+
+```yaml
+sessions:
+  - title: "Attention Is All You Need — read this paper"
+    file:
+      kind: pdf
+      text_source: |              # runner materializes a PDF at runtime
+        ...full paper text...
+      # OR: path: "fixtures/attention.pdf"   # an existing file on disk
+    interactions:
+      - selected_text: "scaled dot-product attention"
+        question: "Why divide by sqrt(d_k)?"
+```
+
+When a session declares a file, the runner uploads it before the session,
+plugs the extracted text into `passage_text`, and passes the resulting
+`document_id` on every ask so the Interaction row is linked back to the
+document. For `file.kind: video|audio|image` the runner posts to
+`/api/media/upload` and surfaces the server-side path in the passage so
+the persona's `look_at_video` / `look_at_image` tools can find it.
+
+`benchmark/file_understanding/` is then the **focused module test** for
+the upload pipeline itself — one file, one question list, no
+multi-session context. Use it when iterating on the upload/extraction
+path; use a file-attached session inside a `model_behavior` region when
+you want to test how the teacher handles a real reading-with-attachment
+flow.
+
+Add a new region/topic/slug by creating one of:
+- `benchmark/model_behavior/<slug>/questions.yaml` — reading (`sessions:` block; any session may carry `file:`)
+- `benchmark/goal_planning/<slug>/questions.yaml` — goals (`goal:` + `actions:`)
+- `benchmark/file_understanding/<slug>/questions.yaml` — upload-pipeline test (`file:` + `questions:`)
+
+See `benchmark/model_behavior/biology/questions.yaml` (reading) and
+`benchmark/file_understanding/gettysburg-pdf/questions.yaml` (file) for
+reference shapes. The CLI auto-discovers any slug whose YAML has the
+right top-level key. Past runs live under `runs/` next to the YAML —
+gitignored by default; commit individual rounds manually when you want
+to keep them as a reference baseline.
+
+The original `benchmark/scenarios.py` + `benchmark/runner.py` (`python -m benchmark --scenario N`)
+still work but are deprecated; new question sets should go in the YAML layout above.
 
 ## Environment Variables
 

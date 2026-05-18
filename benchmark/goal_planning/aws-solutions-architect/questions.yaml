@@ -1,0 +1,12 @@
+name: "Pass AWS Solutions Architect certification"
+
+profile: |
+  I'm a backend developer with 3 years of experience.
+  I use AWS at work but haven't studied for certs.
+
+goal: "Pass the AWS Solutions Architect Associate certification"
+
+actions:
+  - {type: expand, node_index: 0}
+  - {type: know,   node_index: 1}
+  - {type: expand, node_index: 2}

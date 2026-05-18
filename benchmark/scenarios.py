@@ -1,6 +1,14 @@
 """
 Benchmark scenarios — simulates a curious user reading articles and asking questions.
 
+DEPRECATED. New question sets should live as YAML under
+  benchmark/model_behavior/<region>/questions.yaml   (reading Q&A)
+  benchmark/goal_planning/<topic>/questions.yaml     (goal planning)
+and be run via `python -m benchmark.model_behavior --region <name>` or
+`python -m benchmark.goal_planning --topic <slug>`. This module is kept
+only so the legacy `python -m benchmark --scenario N` entry point still
+works for in-flight callers.
+
 Each scenario is a list of reading sessions. Each session has:
 - A passage (real article text)
 - A sequence of interactions: (selected_text, question) pairs

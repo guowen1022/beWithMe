@@ -1,0 +1,13 @@
+name: "Deploy ML model to production"
+
+profile: |
+  I'm a data scientist comfortable with Python and sklearn.
+  Never deployed anything beyond Jupyter notebooks.
+
+goal: "Build and deploy a machine learning model to production"
+
+actions:
+  - {type: know,   node_index: 0}   # already know ML fundamentals
+  - {type: know,   node_index: 1}   # already know data engineering
+  - {type: expand, node_index: 2}   # expand the deployment part
+  - {type: expand, node_index: 3}   # expand serving/API part

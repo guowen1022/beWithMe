@@ -1,0 +1,63 @@
+name: "Biology student exploring cells and evolution"
+
+profile: |
+  I'm a second-year biology undergrad. Comfortable with basic cell biology
+  but new to molecular genetics. I like visual analogies.
+
+sessions:
+  - title: "Cell Biology — Mitochondria"
+    passage: |
+      The mitochondrion is a double-membraned organelle found in most eukaryotic organisms. Mitochondria generate most of the cell's supply of adenosine triphosphate (ATP), used as a source of chemical energy. They were first discovered by Albert von Kolliker in 1857.
+
+      The organelle is composed of compartments that carry out specialized functions. These compartments include the outer membrane, the intermembrane space, the inner membrane, and the cristae and matrix. Mitochondrial proteins vary depending on the tissue and the species.
+
+      The endosymbiotic hypothesis suggests that mitochondria were originally prokaryotic cells, capable of implementing oxidative mechanisms that were not possible for eukaryotic cells. They became endosymbionts living inside the eukaryote. The evidence for this includes the fact that mitochondria have their own DNA (mtDNA), which is circular like bacterial DNA.
+
+      The electron transport chain is a series of complexes that transfer electrons from electron donors to electron acceptors via redox reactions, and couples this electron transfer with the transfer of protons across a membrane. This creates an electrochemical proton gradient that drives the synthesis of ATP via ATP synthase.
+    interactions:
+      - selected_text: "mitochondrion is a double-membraned organelle"
+        question: "What makes the double membrane important?"
+      - selected_text: "adenosine triphosphate (ATP)"
+        question: "How exactly does ATP store energy?"
+      - selected_text: "endosymbiotic hypothesis"
+        question: "What evidence supports the endosymbiotic theory?"
+      - selected_text: "mitochondria have their own DNA (mtDNA), which is circular like bacterial DNA"
+        question: "Why is circular DNA evidence for endosymbiosis?"
+      - selected_text: "electron transport chain"
+        question: "Can you walk me through the electron transport chain step by step?"
+      - selected_text: "electrochemical proton gradient"
+        question: "What is a proton gradient and why does it matter?"
+
+  - title: "Evolution — Natural Selection"
+    passage: |
+      Natural selection is the differential survival and reproduction of individuals due to differences in phenotype. It is a key mechanism of evolution, the change in the heritable traits characteristic of a population over generations. Charles Darwin popularised the term in his 1859 book On the Origin of Species.
+
+      Variation exists within all populations of organisms. This occurs partly because random mutations arise in the genome of an individual organism, and their offspring can inherit such mutations. Throughout the lives of the individuals, their genomes interact with their environments to cause variations in traits.
+
+      Individuals with certain variants of the trait may survive and reproduce more than individuals with other, less successful variants. Therefore the population evolves. Factors that affect reproductive success are also important, an aspect of selection known as sexual selection.
+
+      Natural selection acts on the phenotype, the characteristics of the organism which actually interact with the environment, but the genetic basis of any phenotype that gives a reproductive advantage may become more common in a population. Over time, this process can result in populations that specialise for particular ecological niches and may eventually result in speciation.
+    interactions:
+      - selected_text: "differential survival and reproduction"
+        question: "How does differential survival actually lead to evolution?"
+      - selected_text: "random mutations arise in the genome"
+        question: "Are all mutations random? What about epigenetics?"
+      - selected_text: "Individuals with certain variants of the trait may survive and reproduce more"
+        question: "Can you give me a concrete example of this in nature?"
+      - selected_text: "sexual selection"
+        question: "How is sexual selection different from natural selection?"
+      - selected_text: "specialise for particular ecological niches"
+        question: "What's the connection between niches and speciation?"
+
+  - title: "Cross-topic — connecting biology concepts"
+    passage: |
+      Modern biology reveals deep connections between cellular processes and evolutionary theory. The mitochondria in your cells are themselves evidence of evolution — ancient bacteria that became permanent residents inside larger cells billions of years ago. This endosymbiotic event was a major evolutionary transition.
+
+      Similarly, the genetic code itself — DNA, RNA, and the machinery of protein synthesis — is shared across all known life, pointing to common ancestry. Mutations in DNA, the raw material for natural selection, occur during cell division when DNA replication is imperfect.
+    interactions:
+      - selected_text: "mitochondria in your cells are themselves evidence of evolution"
+        question: "How does the endosymbiotic theory connect to natural selection?"
+      - selected_text: "Mutations in DNA, the raw material for natural selection, occur during cell division"
+        question: "So cell division errors drive evolution? That's amazing."
+      - selected_text: null
+        question: "Looking back at everything I've read, what's the biggest connection between cell biology and evolution?"

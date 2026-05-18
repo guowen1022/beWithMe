@@ -1,0 +1,37 @@
+name: "Gettysburg Address — PDF reading benchmark"
+
+profile: |
+  I'm a curious adult reader brushing up on American history. I have some
+  background in 19th-century US politics but I'm not a Civil War scholar.
+  I like answers that mix direct quoting with plain-language interpretation.
+
+# Twelve questions spanning recall, inference, and interpretation. The PDF
+# is generated at runtime from `file.text_source` by the runner — no
+# binary to keep in git, no extra deps. The full extracted text is shipped
+# back to the persona as `passage_text`, and `document_id` is set so the
+# Interaction is correctly linked to the uploaded doc.
+file:
+  kind: pdf
+  filename: "gettysburg-address.pdf"
+  text_source: |
+    The Gettysburg Address — November 19, 1863
+
+    Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.
+
+    Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure. We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live. It is altogether fitting and proper that we should do this.
+
+    But, in a larger sense, we can not dedicate, we can not consecrate, we can not hallow this ground. The brave men, living and dead, who struggled here, have consecrated it, far above our poor power to add or detract. The world will little note, nor long remember what we say here, but it can never forget what they did here. It is for us the living, rather, to be dedicated here to the unfinished work which they who fought here have thus far so nobly advanced. It is rather for us to be here dedicated to the great task remaining before us — that from these honored dead we take increased devotion to that cause for which they gave the last full measure of devotion — that we here highly resolve that these dead shall not have died in vain — that this nation, under God, shall have a new birth of freedom — and that government of the people, by the people, for the people, shall not perish from the earth.
+
+questions:
+  - "How many years are 'four score and seven'? Show the arithmetic."
+  - "What date is being referenced by that opening phrase, and what event in American history is it pointing to?"
+  - "In one sentence, what is Lincoln saying the Civil War is 'testing'?"
+  - "Lincoln says 'we can not dedicate, we can not consecrate, we can not hallow this ground.' Why does he claim he can't, given that he literally came there to dedicate a cemetery?"
+  - "Pick out every phrase in the speech that hinges on the word 'dedicate' or 'dedicated', and explain how the meaning shifts each time."
+  - "What is the 'unfinished work' Lincoln refers to? Quote the exact phrase and then explain in plain language."
+  - "What's the rhetorical effect of the line 'the world will little note, nor long remember what we say here, but it can never forget what they did here'?"
+  - "The famous closing — 'government of the people, by the people, for the people' — uses three prepositions. What does each one mean concretely about who governs and who is governed?"
+  - "Where in the text does Lincoln tie the soldiers' deaths to the idea of 'a new birth of freedom'? Is he making an argument or just paying tribute?"
+  - "Lincoln only uses the word 'God' once in the whole speech. Find it, quote the surrounding clause, and explain why the placement matters."
+  - "If you had to summarize the entire speech in three plain-English sentences for a 12-year-old, what would you say?"
+  - "What is NOT mentioned in this speech that a modern reader might expect — given that it's about the Civil War and a battlefield cemetery?"

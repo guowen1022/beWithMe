@@ -1,0 +1,12 @@
+name: "Learn acoustic guitar"
+
+profile: |
+  I'm 30 years old, no musical background.
+  I have a guitar at home but never learned properly.
+
+goal: "Learn to play acoustic guitar well enough to play songs at a campfire"
+
+actions:
+  - {type: expand,  node_index: 0}
+  - {type: expand,  node_index: 1}
+  - {type: unknown, node_index: 2}

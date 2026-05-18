@@ -26,5 +26,6 @@ data/web_view_port.json
 data/diagrams/
 data/notes/
 benchmark/results/
+benchmark/*/*/runs/
 .*.swp
 scripts/mobile-build-env.sh
