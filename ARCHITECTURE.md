@@ -134,6 +134,38 @@ infra is the toolbox everyone can use. Stateless utilities + the **shared persis
 
 > **Why Base lives in infra, not silicon_brain.** silicon_brain is a *consumer* of persistence, not its owner. If persona/teacher needs to declare its own tables (e.g., a `TeacherStrategy` table for self-memory), it must inherit from a Base that doesn't sit "above" it in the dep graph. Putting Base in infra (the leaf) lets every domain build on it without violating the one-direction rule.
 
+### 2.6 The user-data map — knowing where a user's data lives
+
+Each domain owns its own slice of a user's data (a table keyed by `user_id`, a
+`data/<x>/<user_id>/` directory). That is correct and stays. But "delete
+everything about this person" must not require remembering every scattered
+store. `infra/user_data.py` is the **index** that makes a user's data
+enumerable and erasable in one shot, without inverting the dep graph (it's in
+infra, so every domain can register into it).
+
+It captures new user data two ways, both drift-resistant:
+
+- **DB tables — automatic.** Any table on the shared Base with a `user_id`
+  column is discovered from `Base.metadata`. A new domain's user table is
+  covered for free. Purge deletes **per table, keyed by `user_id`** (not via a
+  single `users`-row cascade) so a table that forgets `ON DELETE CASCADE` is
+  still erased.
+- **Disk dirs — registered.** Path roots aren't introspectable, so each owner
+  calls `register_user_dir(...)` next to its path constant (see
+  `persona/teacher/session/transcriber.py`, `workshop/canvas/tools/_note_cache.py`,
+  etc.). `user_dir(root, uid)` is the preferred accessor for new code.
+
+The guard test `tests/unit/test_user_data_map.py` is the enforcement: it fails
+CI when a `data/<x>` root appears in source unregistered, or a Base table has no
+`user_id` and isn't allowlisted as non-user (e.g. `document_chunks`, which
+cascades from `documents`). Shared, non-per-user stores (`browser_profile/`,
+`diagrams/`, `per-host-skills/`) are deliberately out of the map.
+
+No layer triggers a purge today; the operator entry point is
+`scripts/purge_user.py` (dry-run by default, `--confirm` to erase). A
+user-initiated "delete my account" flow can wrap the same `infra.user_data`
+functions later.
+
 ---
 
 ## 3. Dependency graph
@@ -355,6 +387,7 @@ These are the rules every refactor must preserve. If a PR violates one, reject i
 11. A new sidecar gets a fixed offset in `infra/topology.py:SERVICE_OFFSETS`. Order matters; only append.
 12. Sidecar-local config (model paths, daemon flags) lives with the sidecar, not in any shared config module.
 13. UI mutations driven by an LLM go through the sandbox. Direct LLM-to-DOM is forbidden.
+14. Every store of a user's data is in the user-data map (`infra/user_data.py`): a `user_id` DB column, or a `register_user_dir`-registered disk root. New user data without a map entry fails `tests/unit/test_user_data_map.py`.
 
 ---
 

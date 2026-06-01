@@ -127,6 +127,24 @@ BEGIN
         CREATE INDEX IF NOT EXISTS idx_concept_edges_user ON concept_edges(user_id);
     END IF;
 END $$;
+
+-- note_chunks.user_id predates the FK convention: it was a bare column with no
+-- ON DELETE CASCADE, so deleting a users row would orphan its chunks. Add the
+-- FK so it matches every other user-scoped table and the user-data purge map
+-- (infra/user_data.py). create_all names this constraint identically on fresh
+-- DBs, so the guard below is a no-op there.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='note_chunks')
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.table_constraints
+           WHERE table_name='note_chunks' AND constraint_name='note_chunks_user_id_fkey'
+       ) THEN
+        DELETE FROM note_chunks WHERE user_id NOT IN (SELECT id FROM users);
+        ALTER TABLE note_chunks
+            ADD CONSTRAINT note_chunks_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 """
 
 

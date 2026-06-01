@@ -43,8 +43,14 @@ from typing import Optional, Tuple
 from uuid import UUID
 
 
+from infra.user_data import register_user_dir
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_DATA_ROOT = _REPO_ROOT / "data" / "notes"
+_DATA_ROOT = register_user_dir(
+    "canvas",
+    _REPO_ROOT / "data" / "notes",
+    "User-authored canvas notes (markdown source + rendered HTML cache).",
+)
 
 _DEFAULT_VIEWPORT = "wide"
 

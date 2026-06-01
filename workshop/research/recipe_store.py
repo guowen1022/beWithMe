@@ -28,8 +28,14 @@ from uuid import UUID
 
 
 # Repo root → data/research/<user>/recipes/. Resolved once at import.
+from infra.user_data import register_user_dir
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DATA_ROOT = _REPO_ROOT / "data" / "research"
+_DATA_ROOT = register_user_dir(
+    "research",
+    _REPO_ROOT / "data" / "research",
+    "Saved research recipes — goals, embeddings, and recorded tool sequences.",
+)
 
 
 # ---- model -----------------------------------------------------------------

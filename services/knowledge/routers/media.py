@@ -24,9 +24,16 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from infra.auth import parse_user_id as get_current_user_id
+from infra.user_data import register_user_dir
 
 
 router = APIRouter()
+
+_UPLOADS_ROOT = register_user_dir(
+    "knowledge",
+    Path(__file__).resolve().parents[3] / "data" / "uploads",
+    "Raw uploaded media bytes (video / audio / image) keyed by user.",
+)
 
 
 _LOG_PATH = Path(__file__).resolve().parents[3] / ".dev-logs" / "media_upload.log"
@@ -60,10 +67,8 @@ _MAX_BYTES: Final = 500 * 1024 * 1024  # 500 MB per upload
 
 def _uploads_root() -> Path:
     """Absolute path to <repo_root>/data/uploads/, created if missing."""
-    repo_root = Path(__file__).resolve().parents[3]
-    root = repo_root / "data" / "uploads"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    _UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
+    return _UPLOADS_ROOT
 
 
 @router.post("/media/upload")

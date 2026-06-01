@@ -11,12 +11,17 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from infra.user_data import register_user_dir
 from persona.teacher.models.interaction import Interaction
 
 if TYPE_CHECKING:
     pass
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "sessions"
+DATA_DIR = register_user_dir(
+    "teacher",
+    Path(__file__).resolve().parents[3] / "data" / "sessions",
+    "Per-session transcripts (verbatim Q&A) and LLM summaries.",
+)
 
 
 def _format_timestamp(dt) -> str:

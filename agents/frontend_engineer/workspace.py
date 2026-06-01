@@ -34,8 +34,14 @@ from typing import Iterable
 from uuid import UUID
 
 
+from infra.user_data import register_user_dir
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CANVASES_ROOT = _REPO_ROOT / "data" / "canvases"
+_CANVASES_ROOT = register_user_dir(
+    "engineer",
+    _REPO_ROOT / "data" / "canvases",
+    "Per-user canvas workspace — block source, design docs, cautions, git history.",
+)
 
 
 _KEBAB = re.compile(r"^[a-z0-9][a-z0-9-]*$")
