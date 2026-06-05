@@ -159,12 +159,24 @@ export default function RecommendationsPage() {
   };
 
   const handleAccept = async (id: string) => {
+    const rec = recs.find((r) => r.id === id);
     try {
       await updateRecommendation(id, "accepted");
-      setRecs((prev) => prev.filter((r) => r.id !== id));
     } catch {
-      // ignore
+      // Non-fatal: still take the user to the Reader to start learning.
     }
+    // "Start Learning" must actually start learning. Carry the topic to the
+    // Reader and prefill the command bar (CanvasCommandBar consumes this key
+    // once on mount). Previously this only marked the rec accepted and
+    // removed the card — a primary CTA that did nothing the user could see.
+    if (rec && typeof window !== "undefined") {
+      const topic = rec.title.replace(/^(Review|Explore|Deepen):\s*/i, "").trim();
+      window.localStorage.setItem(
+        "bewithme_canvas_seed",
+        `I'd like to learn about ${topic}.`,
+      );
+    }
+    router.push("/");
   };
 
   // Group by category

@@ -14,6 +14,9 @@ type Addressee = NonNullable<AskRequest["addressee"]>;
 type Sender = "user" | "teacher";
 
 const ADDRESSEE_KEY = "bewithme_canvas_addressee";
+// One-shot handoff: a recommendation's "Start Learning" stashes a seed
+// question here, then routes to the Reader. Consumed (and cleared) on mount.
+const SEED_KEY = "bewithme_canvas_seed";
 
 // Only two valid pairs are reachable: user→teacher (normal flow, runs the
 // LLM intent router) and teacher→frontend_engineer (test mode, bypasses
@@ -85,6 +88,18 @@ export default function CanvasCommandBar() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(ADDRESSEE_KEY, addressee);
   }, [addressee]);
+
+  // Consume a one-shot seed left by a recommendation's "Start Learning".
+  // Prefill the bar so the user lands ready to ask; we do NOT auto-send —
+  // they review and press Enter, keeping the user in control.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const seed = window.localStorage.getItem(SEED_KEY);
+    if (seed) {
+      window.localStorage.removeItem(SEED_KEY);
+      setValue(seed);
+    }
+  }, []);
 
   // One session id per page mount.
   if (!sessionIdRef.current && typeof window !== "undefined") {
