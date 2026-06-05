@@ -30,6 +30,7 @@ from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
 from services.maestro import long as _long
+from services.maestro import short as _short
 from services.maestro.cache import Cache, CacheEntry, VALID_POSTURES
 
 
@@ -129,6 +130,30 @@ async def set_cache(
     )
     await _CACHE.set(entry)
     return _entry_dict(entry)
+
+
+@app.post("/api/maestro/signal")
+async def post_signal(body: WebhookRequest) -> dict:
+    """Short-instance entrypoint — in-engagement signal arrived.
+
+    Decides refresh vs skip per SPEC §5.4 and writes a cache_refresh
+    or skip_refresh event accordingly. Synchronous; failures bubble up
+    as 500 with the exception class logged.
+    """
+    try:
+        result = await _short.handle_signal(_CACHE, body.event)
+    except Exception as exc:
+        log_event(
+            "maestro.handle_signal.error",
+            kind=body.event.kind,
+            error=repr(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"handle_signal failed: {exc}")
+    return {
+        "ok": True,
+        "decision": result.get("decision"),
+        "new_posture": result.get("new_posture"),
+    }
 
 
 @app.post("/api/maestro/event")

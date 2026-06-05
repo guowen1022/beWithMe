@@ -85,17 +85,19 @@ async def _emit(
     )
 
 
-async def _notify_maestro(triggering: EventDTO) -> None:
-    """Fire the Maestro long-instance webhook. Best-effort: any failure
-    (Maestro sidecar down, slow, etc.) is logged and swallowed — the
-    user-facing turn must not depend on Maestro health."""
+async def _notify_maestro(triggering: EventDTO, *, route: str = "event") -> None:
+    """Fire a Maestro webhook. `route='event'` reaches the long instance
+    (engagement_ended etc.); `route='signal'` reaches the short
+    instance (turn_arrived etc.). Best-effort either way: any failure
+    is logged and swallowed — the user-facing turn must not depend on
+    Maestro health."""
     try:
-        url = f"{upstream_url('maestro')}/api/maestro/event"
+        url = f"{upstream_url('maestro')}/api/maestro/{route}"
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
             resp = await h.post(url, json={"event": triggering.model_dump(mode="json")})
             resp.raise_for_status()
     except Exception as e:
-        print(f"[engagement] maestro notify failed: {e}", flush=True)
+        print(f"[engagement] maestro {route} notify failed: {e}", flush=True)
 
 
 async def _maybe_seed_cache_from_tapped_proposal(
@@ -233,7 +235,7 @@ async def ensure_engagement_and_emit_turn(
                 engagement_id = current_id
 
         # Always emit signal.turn_arrived.
-        await client.emit_event(
+        signal_event = await client.emit_event(
             user_id,
             EventEmit(
                 kind="signal.turn_arrived",
@@ -248,6 +250,10 @@ async def ensure_engagement_and_emit_turn(
         # candidate's posture + opening as the engagement's frame.
         if seed_cache:
             await _maybe_seed_cache_from_tapped_proposal(client, user_id)
+
+        # PR-6: notify the Maestro short instance of the turn so it can
+        # decide refresh vs skip. Best-effort.
+        await _notify_maestro(signal_event, route="signal")
 
         return engagement_id
     finally:
