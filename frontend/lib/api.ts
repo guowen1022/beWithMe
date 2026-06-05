@@ -863,3 +863,89 @@ export async function speakTextStream(
   const sampleRate = Number(res.headers.get("X-Sample-Rate")) || 24000;
   return { sampleRate, reader: res.body.getReader() };
 }
+
+
+// --- Inbox proposals (PR-7) ---
+
+export interface InboxProposal {
+  id: string;
+  user_id: string;
+  kickoff_event_id: string;
+  candidate_idx: number;
+  title: string;
+  persona_purpose: string;
+  posture: string;
+  opening: string;
+  body: Record<string, unknown> | null;
+  status: string;       // pending | tapped | dismissed | consumed | expired
+  created_at: string | null;
+  tapped_at: string | null;
+  consumed_at: string | null;
+}
+
+export async function listInbox(opts: { status?: string } = {}): Promise<InboxProposal[]> {
+  const params = new URLSearchParams();
+  if (opts.status) params.set("status", opts.status);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/inbox${qs ? `?${qs}` : ""}`, {
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to load inbox (${res.status})`);
+  return res.json();
+}
+
+export async function tapProposal(id: string): Promise<InboxProposal> {
+  const res = await fetch(`${API_BASE}/inbox/${id}/tap`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to tap proposal (${res.status})`);
+  return res.json();
+}
+
+export async function dismissProposal(id: string): Promise<InboxProposal> {
+  const res = await fetch(`${API_BASE}/inbox/${id}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to dismiss proposal (${res.status})`);
+  return res.json();
+}
+
+// --- Event stream (PR-7 mirror view) ---
+
+export interface StreamEvent {
+  event_id: string;
+  user_id: string;
+  ts: string;
+  valid_at: string | null;
+  source: string;
+  kind: string;
+  body: Record<string, unknown>;
+  refs: Record<string, unknown> | null;
+  schema_version: number;
+}
+
+export interface StreamQueryBody {
+  kinds?: string[];
+  sources?: string[];
+  since?: string;
+  until?: string;
+  limit?: number;
+  order?: "asc" | "desc";
+}
+
+export async function queryStream(q: StreamQueryBody = {}): Promise<StreamEvent[]> {
+  const body: StreamQueryBody = { limit: 100, order: "desc", ...q };
+  const res = await fetch(`${API_BASE}/event-stream/query`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to query event stream (${res.status})`);
+  return res.json();
+}

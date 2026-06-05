@@ -1,4 +1,4 @@
-"""Inbox proposal surface (PR-5).
+"""Inbox proposal surface (PR-5 + PR-7).
 
 Routes (mounted under `/api` in services/knowledge/main.py):
 
@@ -13,24 +13,128 @@ Routes (mounted under `/api` in services/knowledge/main.py):
 guarded: a proposal can only move forward (pending → tapped → consumed
 OR pending → dismissed). Re-tapping is idempotent and returns the
 existing row.
+
+PR-7 additions:
+- Every state transition emits a stream event for the
+  inbox_interaction_log view (user.proposal_tapped, user.proposal_dismissed,
+  user.proposal_consumed, system.proposal_expired). Best-effort: failure
+  to emit doesn't break the transition; the row is the source of truth.
+- POST /api/inbox enforces a per-user stock cap (M=5). When over cap,
+  the OLDEST pending proposals expire (and emit system.proposal_expired)
+  before the new one is returned.
+- GET /api/inbox sweeps expired proposals before returning — any
+  pending proposal older than TTL_HOURS (=24h) is moved to status
+  'expired' lazily.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.auth import parse_user_id
+from infra.contracts.event import EventEmit
 from infra.contracts.inbox import InboxProposalCreate, InboxProposalDTO
 from infra.db import get_db
+from silicon_brain.models.event import Event
 from silicon_brain.models.inbox_proposal import InboxProposal
 
 
+# SPEC §6.1.2: per-user inbox stock cap + TTL.
+STOCK_CAP = 5
+TTL_HOURS = 24
+
+
 router = APIRouter()
+
+
+async def _emit_event(
+    db: AsyncSession,
+    user_id: UUID,
+    kind: str,
+    source: str,
+    body: dict,
+) -> None:
+    """Append one event directly via the ORM. Same DB session as the
+    inbox row write so it commits in the same transaction."""
+    try:
+        ev = Event(
+            user_id=user_id,
+            source=source,
+            kind=kind,
+            body=body,
+        )
+        db.add(ev)
+        await db.flush()  # let the caller's commit pick this up
+    except Exception:
+        # Observability event — don't let a stream-write failure break
+        # the inbox transition.
+        pass
+
+
+def _interaction_body(row: InboxProposal) -> dict:
+    return {
+        "proposal_id": str(row.id),
+        "kickoff_event_id": str(row.kickoff_event_id),
+        "candidate_idx": row.candidate_idx,
+        "persona_purpose": row.persona_purpose,
+        "posture": row.posture,
+    }
+
+
+async def _expire_over_cap(db: AsyncSession, user_id: UUID) -> int:
+    """If the user has more than STOCK_CAP pending proposals, expire the
+    oldest until they're at-cap. Emits system.proposal_expired per row.
+    Returns the count expired."""
+    pending = list((await db.execute(
+        select(InboxProposal)
+        .where(
+            InboxProposal.user_id == user_id,
+            InboxProposal.status == "pending",
+        )
+        .order_by(asc(InboxProposal.created_at))
+    )).scalars().all())
+    overflow = max(0, len(pending) - STOCK_CAP)
+    if overflow == 0:
+        return 0
+    now = datetime.now(timezone.utc)
+    for row in pending[:overflow]:
+        row.status = "expired"
+        row.consumed_at = now
+        await _emit_event(
+            db, user_id, "system.proposal_expired", "system",
+            {**_interaction_body(row), "reason": "stock_cap"},
+        )
+    return overflow
+
+
+async def _expire_past_ttl(db: AsyncSession, user_id: UUID) -> int:
+    """Move any pending proposal older than TTL_HOURS to status 'expired'.
+    Emits system.proposal_expired per row. Returns the count expired."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=TTL_HOURS)
+    pending = list((await db.execute(
+        select(InboxProposal)
+        .where(
+            InboxProposal.user_id == user_id,
+            InboxProposal.status == "pending",
+            InboxProposal.created_at < cutoff,
+        )
+    )).scalars().all())
+    if not pending:
+        return 0
+    now = datetime.now(timezone.utc)
+    for row in pending:
+        row.status = "expired"
+        row.consumed_at = now
+        await _emit_event(
+            db, user_id, "system.proposal_expired", "system",
+            {**_interaction_body(row), "reason": "ttl"},
+        )
+    return len(pending)
 
 
 def _to_dto(row: InboxProposal) -> InboxProposalDTO:
@@ -69,6 +173,10 @@ async def create_proposal(
         status="pending",
     )
     db.add(row)
+    # SPEC §6.1.2 stock cap — after this insert, anything over M is the
+    # oldest pending and gets auto-expired with a system event.
+    await db.flush()
+    await _expire_over_cap(db, user_id)
     await db.commit()
     await db.refresh(row)
     return _to_dto(row)
@@ -81,6 +189,11 @@ async def list_proposals(
     status: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
 ):
+    # PR-7 TTL sweep: lazy expiry of stale pending proposals on every
+    # read. Phase 0 chose lazy over cron — simpler, no extra scheduler.
+    expired = await _expire_past_ttl(db, user_id)
+    if expired:
+        await db.commit()
     stmt = select(InboxProposal).where(InboxProposal.user_id == user_id)
     if status:
         stmt = stmt.where(InboxProposal.status == status)
@@ -115,6 +228,9 @@ async def tap_proposal(
     if row.status == "pending":
         row.status = "tapped"
         row.tapped_at = datetime.now(timezone.utc)
+        await _emit_event(
+            db, user_id, "user.proposal_tapped", "user", _interaction_body(row),
+        )
         await db.commit()
         await db.refresh(row)
     elif row.status in ("tapped", "consumed"):
@@ -137,6 +253,9 @@ async def dismiss_proposal(
     row = await _load_and_authorise(db, proposal_id, user_id)
     if row.status == "pending":
         row.status = "dismissed"
+        await _emit_event(
+            db, user_id, "user.proposal_dismissed", "user", _interaction_body(row),
+        )
         await db.commit()
         await db.refresh(row)
     elif row.status == "dismissed":
@@ -161,6 +280,9 @@ async def consume_proposal(
     if row.status == "tapped":
         row.status = "consumed"
         row.consumed_at = datetime.now(timezone.utc)
+        await _emit_event(
+            db, user_id, "user.proposal_consumed", "user", _interaction_body(row),
+        )
         await db.commit()
         await db.refresh(row)
     elif row.status == "consumed":

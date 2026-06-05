@@ -13,6 +13,8 @@ import {
 const NAV_ITEMS = [
   { href: "/", label: "Reader" },
   { href: "/recommendations", label: "Recommendations" },
+  { href: "/inbox", label: "Inbox" },
+  { href: "/mirror", label: "Mirror" },
 ];
 
 export default function NavBar() {

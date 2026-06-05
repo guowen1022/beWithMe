@@ -25,7 +25,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from silicon_brain.views import cache_refresh_log, engagement_log, kickoff_log
+from silicon_brain.views import (
+    cache_refresh_log,
+    engagement_log,
+    inbox_interaction_log,
+    kickoff_log,
+)
 
 
 Materializer = Callable[[AsyncSession, UUID], Awaitable[list[dict]]]
@@ -35,6 +40,7 @@ VIEWS: dict[str, Materializer] = {
     "engagement_log": engagement_log.materialize,
     "kickoff_log": kickoff_log.materialize,
     "cache_refresh_log": cache_refresh_log.materialize,
+    "inbox_interaction_log": inbox_interaction_log.materialize,
 }
 
 
