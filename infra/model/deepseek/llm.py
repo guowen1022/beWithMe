@@ -300,12 +300,23 @@ async def generate_json(prompt: str, max_tokens: int = 512) -> str:
     """Request a JSON object using DeepSeek's native JSON mode.
 
     Returns the raw JSON text. Caller still parses.
+
+    Thinking is DISABLED here. This is a structured-extraction path, so the
+    hidden chain-of-thought adds no value — and on a thinking-enabled model
+    (e.g. deepseek-v4-flash) the CoT tokens count against `max_tokens` and
+    can consume the entire budget before any JSON content is emitted,
+    leaving `message.content` empty. That silently broke every caller
+    (Maestro candidate generation, the persona router). Disabling thinking
+    keeps the full budget for the JSON itself. The model still emits the
+    brief in-band reasoning that JSON mode allows.
+    See https://api-docs.deepseek.com/guides/thinking_mode
     """
     client = _get_client()
     response = await client.chat.completions.create(
         model=settings.deepseek_model,
         max_tokens=max_tokens,
         response_format={"type": "json_object"},
+        extra_body={"thinking": {"type": "disabled"}},
         messages=[
             {"role": "system", "content": "You extract structured data. Respond with JSON only."},
             {"role": "user", "content": prompt},

@@ -29,6 +29,15 @@ DEDUP_THRESHOLD = 0.85
 # K bounds (SPEC §6.1).
 MAX_K = 3
 
+# The canonical persona-purpose every long-horizon kickoff proposal is keyed
+# under. The Maestro cache the agent reads (persona/teacher/contexts/answer.py)
+# and the short instance refreshes (services/maestro/short.py `_ACTIVE_PURPOSE`)
+# both look ONLY under this value. Candidates must NOT carry per-candidate
+# slugs here — a divergent key seeds the cache where nobody reads it and
+# silently disables posture honoring. Candidate diversity lives in
+# title/posture/opening/concept, not in the cache key.
+PERSONA_PURPOSE = "teacher:long-horizon-propose"
+
 
 @dataclass
 class Candidate:
@@ -78,7 +87,6 @@ Output strict JSON of the shape:
   {{
     "title": "short, distinct label",
     "posture": "steady|deepen|pivot|hold|wind_down|escalate|interrupt_now",
-    "persona_purpose": "teacher:<short-slug>",
     "action_shape": "inbox-proposal|voice_message|surface_capture",
     "opening": "1-3 sentences the agent will turn into the proposal text",
     "prior": 0.0
@@ -103,7 +111,6 @@ def _coerce_candidate(raw: dict) -> Optional[Candidate]:
     try:
         title = str(raw["title"]).strip()
         posture = str(raw["posture"]).strip()
-        persona_purpose = str(raw["persona_purpose"]).strip()
         action_shape = str(raw["action_shape"]).strip()
         opening = str(raw["opening"]).strip()
         prior = float(raw.get("prior", 0.5))
@@ -115,12 +122,13 @@ def _coerce_candidate(raw: dict) -> Optional[Candidate]:
         return None
     if action_shape not in _VALID_ACTION_SHAPES:
         return None
-    if not persona_purpose:
-        return None
     return Candidate(
         title=title,
         posture=posture,
-        persona_purpose=persona_purpose,
+        # Forced to the canonical kickoff key (see PERSONA_PURPOSE above) —
+        # never the model's choice — so the seeded cache matches the key the
+        # agent and short instance actually read.
+        persona_purpose=PERSONA_PURPOSE,
         action_shape=action_shape,
         opening=opening,
         prior=max(0.0, min(1.0, prior)),
