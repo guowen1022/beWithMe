@@ -22,6 +22,7 @@ from uuid import UUID
 import httpx
 
 from infra.contracts import DocumentChunkDTO, NoteHitDTO, ProfileDTO, UserProfileDTO
+from infra.contracts.event import EventDTO, EventEmit, StreamQuery
 from infra.topology import upstream_url
 
 
@@ -140,6 +141,41 @@ class SiliconBrainClient:
         """
         resp = await self._http.get(
             f"/api/documents/{document_id}/pages/{page_number}",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Event stream (SPEC §8) ---
+
+    async def emit_event(self, user_id: UUID, emit: EventEmit) -> EventDTO:
+        """Append one event to the user's stream. Returns the persisted row."""
+        resp = await self._http.post(
+            "/api/event-stream",
+            headers=_user_headers(user_id),
+            json=emit.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return EventDTO.model_validate(resp.json())
+
+    async def query_stream(self, user_id: UUID, q: StreamQuery) -> list[EventDTO]:
+        """List events for this user matching the filter. `q.order` defaults to desc."""
+        resp = await self._http.post(
+            "/api/event-stream/query",
+            headers=_user_headers(user_id),
+            json=q.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return [EventDTO.model_validate(x) for x in resp.json()]
+
+    async def read_projection(self, user_id: UUID, name: str) -> dict:
+        """Return a Phase-0 projection (SPEC §8.4) as a JSON-able dict.
+
+        Stub projections respond `{"_stub": True, "name": "<name>"}` until
+        the PR that implements them lands.
+        """
+        resp = await self._http.get(
+            f"/api/event-stream/projections/{name}",
             headers=_user_headers(user_id),
         )
         resp.raise_for_status()

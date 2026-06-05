@@ -3,6 +3,7 @@
 from silicon_brain.models.user import User
 from silicon_brain.models.profile import Profile
 from silicon_brain.models.document import Document, DocumentChunk
+from silicon_brain.models.event import Event
 from silicon_brain.models.note_chunk import NoteChunk
 from silicon_brain.models.user_preferences import UserPreferences
 from silicon_brain.models.device import Device
@@ -13,6 +14,7 @@ __all__ = [
     "Profile",
     "Document",
     "DocumentChunk",
+    "Event",
     "NoteChunk",
     "UserPreferences",
     "Device",
