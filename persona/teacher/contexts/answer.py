@@ -218,6 +218,24 @@ async def assemble(
             talk_preference=talk_preference,
         )
 
+    # PR-5: Maestro cache read on every LLM call. When an inbox tap has
+    # seeded the cache, the active candidate's opening + posture rides
+    # into the top of the system prompt. Absent cache → no change to the
+    # existing prompt path.
+    try:
+        from persona.teacher.engagement import read_active_cache
+        from persona.teacher.prompts import maestro_frame
+        # PR-5 keys the cache by 'teacher:long-horizon-propose' (the
+        # purpose the kickoff seeded). PR-6 extends to per-engagement
+        # purposes; the builder-side render code stays unchanged.
+        entry = await read_active_cache(user_id, "teacher:long-horizon-propose")
+        frame = maestro_frame.render(entry)
+        if frame:
+            parts.static_system = frame + "\n\n" + parts.static_system
+    except Exception as e:
+        # Cache read failures must never block the user turn.
+        print(f"[teacher.context] maestro cache read failed: {e}", flush=True)
+
     return TeacherContext(parts=parts, prior_messages=prior_messages)
 
 

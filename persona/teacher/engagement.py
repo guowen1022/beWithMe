@@ -98,6 +98,53 @@ async def _notify_maestro(triggering: EventDTO) -> None:
         print(f"[engagement] maestro notify failed: {e}", flush=True)
 
 
+async def _maybe_seed_cache_from_tapped_proposal(
+    client: SiliconBrainClient, user_id: UUID,
+) -> None:
+    """If the user has a tapped-but-unseeded inbox proposal, push its
+    posture + opening into the Maestro cache for the appropriate
+    `persona_purpose` and mark the proposal consumed.
+
+    Cheap (one list call + one POST). Best-effort: cache + consume
+    failures degrade silently — the agent just won't have the candidate's
+    opening framing for this turn.
+    """
+    try:
+        tapped = await client.list_inbox_proposals(
+            user_id, status="tapped", limit=5,
+        )
+    except Exception as e:
+        print(f"[engagement] inbox lookup failed: {e}", flush=True)
+        return
+    if not tapped:
+        return
+
+    # Newest-tapped wins when the user has clicked multiple in quick
+    # succession (rare; client should serialize taps).
+    target = tapped[0]
+    maestro_url = f"{upstream_url('maestro')}/api/maestro/cache"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
+            resp = await h.post(
+                maestro_url,
+                headers={"X-User-Id": str(user_id)},
+                json={
+                    "persona_purpose": target.persona_purpose,
+                    "paragraph": target.opening,
+                    "posture": target.posture,
+                    "candidate_idx": target.candidate_idx,
+                },
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        print(f"[engagement] cache seed failed: {e}", flush=True)
+        return
+    try:
+        await client.consume_inbox_proposal(user_id, target.id)
+    except Exception as e:
+        print(f"[engagement] consume_inbox_proposal failed: {e}", flush=True)
+
+
 async def ensure_engagement_and_emit_turn(
     user_id: UUID,
     source: str,
@@ -121,6 +168,7 @@ async def ensure_engagement_and_emit_turn(
     client = SiliconBrainClient()
     try:
         latest = await _latest(client, user_id, list(_ACTIVITY_KINDS))
+        seed_cache = False  # set True whenever a NEW engagement is starting
 
         # Decide which engagement_id the current turn belongs to, and emit
         # any boundary events the state machine demands.
@@ -128,6 +176,7 @@ async def ensure_engagement_and_emit_turn(
             engagement_id = uuid4()
             await _emit(client, user_id, "user.engagement_started",
                         {"engagement_id": str(engagement_id)})
+            seed_cache = True
 
         elif latest.kind == "user.engagement_ended":
             elapsed = now - latest.ts
@@ -137,6 +186,7 @@ async def ensure_engagement_and_emit_turn(
                 engagement_id = UUID(prior_id)
             else:
                 engagement_id = uuid4()
+                seed_cache = True
             await _emit(client, user_id, "user.engagement_started",
                         {"engagement_id": str(engagement_id)})
 
@@ -175,6 +225,7 @@ async def ensure_engagement_and_emit_turn(
                     engagement_id = current_id
                 else:
                     engagement_id = uuid4()
+                    seed_cache = True
                 await _emit(client, user_id, "user.engagement_started",
                             {"engagement_id": str(engagement_id)})
             else:
@@ -191,13 +242,52 @@ async def ensure_engagement_and_emit_turn(
             ),
         )
 
+        # If this is a fresh engagement boundary, seed the cache from
+        # whatever inbox proposal the user tapped to start the engagement.
+        # PR-5: per-LLM-call cache reads (next section) honour the
+        # candidate's posture + opening as the engagement's frame.
+        if seed_cache:
+            await _maybe_seed_cache_from_tapped_proposal(client, user_id)
+
         return engagement_id
     finally:
         await client.aclose()
 
 
+async def read_active_cache(
+    user_id: UUID, persona_purpose: str,
+) -> Optional[dict]:
+    """Read the Maestro cache entry for (user, persona_purpose).
+
+    Returns the entry dict (per services/maestro/main.py `_entry_dict`)
+    or None if the cache has nothing for this key (404 from maestro,
+    or maestro unreachable, or any other failure — all treated as "no
+    framing", so the agent falls through to its default prompt path).
+
+    Phase-0 design: every LLM call should reach for this via the
+    prompt-builder. Phase-1+ may switch to push-on-change so the
+    polling cost goes away.
+    """
+    try:
+        url = f"{upstream_url('maestro')}/api/maestro/cache"
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as h:
+            resp = await h.get(
+                url,
+                headers={"X-User-Id": str(user_id)},
+                params={"persona_purpose": persona_purpose},
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        print(f"[engagement] cache read failed: {e}", flush=True)
+        return None
+
+
 __all__ = [
     "ensure_engagement_and_emit_turn",
+    "read_active_cache",
     "IDLE_THRESHOLD",
     "RE_WINDOW",
 ]

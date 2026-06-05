@@ -24,6 +24,7 @@ from services.knowledge.routers import (
     event_stream,
     events,
     health,
+    inbox,
     media,
     notes,
     preferences,
@@ -50,6 +51,7 @@ app.include_router(media.router, prefix="/api")
 app.include_router(notes.router, prefix="/api")
 app.include_router(retrieval.router, prefix="/api")
 app.include_router(event_stream.router, prefix="/api")
+app.include_router(inbox.router, prefix="/api")
 
 
 def main() -> None:

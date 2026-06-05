@@ -17,8 +17,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
+import httpx
+
 from infra.contracts.event import EventDTO, EventEmit, StreamQuery
 from infra.silicon_brain_client import SiliconBrainClient
+from infra.topology import upstream_url
 
 from services.maestro import candidates as _candidates
 from services.maestro import gate as _gate
@@ -131,7 +134,7 @@ async def handle_event(
             body["candidates"] = []
             body["k"] = 0
 
-        await client.emit_event(
+        kickoff_event = await client.emit_event(
             user_id,
             EventEmit(
                 kind="maestro_long.kickoff_decision",
@@ -140,6 +143,39 @@ async def handle_event(
                 refs={"triggering_event_id": str(triggering.event_id)},
             ),
         )
+
+        # On ACT-with-candidates, fire the kickoff-realization webhook so
+        # the persona side writes K inbox proposals. Best-effort — the
+        # event already landed in the stream, so a webhook failure just
+        # means the proposals aren't materialized; the audit trail is fine.
+        if body["decision"] == "ACT" and body.get("candidates"):
+            await _notify_agent_kickoff(
+                user_id=user_id,
+                kickoff_event_id=kickoff_event.event_id,
+                candidates=body["candidates"],
+            )
+
         return body
     finally:
         await client.aclose()
+
+
+async def _notify_agent_kickoff(
+    *, user_id: UUID, kickoff_event_id: UUID, candidates: list[dict],
+) -> None:
+    """POST /api/agent/kickoff on the persona sidecar."""
+    try:
+        url = f"{upstream_url('persona')}/api/agent/kickoff"
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as h:
+            resp = await h.post(
+                url,
+                headers={"X-User-Id": str(user_id)},
+                json={
+                    "kickoff_event_id": str(kickoff_event_id),
+                    "user_id": str(user_id),
+                    "candidates": candidates,
+                },
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        print(f"[maestro.long] kickoff webhook failed: {e}", flush=True)

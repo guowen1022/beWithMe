@@ -40,6 +40,7 @@ from tools import (
     stream_projection as _stream_projection,
     stream_query as _stream_query,
     web_view as _web_view,
+    write_to_inbox as _write_to_inbox,
 )
 from workshop.canvas.tools import (
     block_action as _block_action,
@@ -431,6 +432,10 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     "read_concept_mastery": {"answer", "user_facing", "background", "research"},  # local DB, fast
     "read_world_knowledge": {"answer", "user_facing", "background", "research"},  # parity with search_notes
     "read_captures":        {"answer", "user_facing", "background", "research"},  # enumeration only, look_at_image does the work
+    # PR-5 — ACT tool. Write the user-visible inbox card from a kickoff
+    # candidate. Off user_facing because Lane A's spoken turn shouldn't
+    # be writing proactive proposals — those come from the maestro path.
+    "write_to_inbox":       {"answer", "background", "research"},
 }
 
 
@@ -472,6 +477,8 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         _read_concept_mastery.build_spec(user_id),
         _read_world_knowledge.build_spec(user_id),
         _read_captures.build_spec(user_id),
+        # PR-5 — kickoff realization ACT tool.
+        _write_to_inbox.build_spec(user_id),
         *_build_research_specs(user_id),
     ]
     return [

@@ -65,6 +65,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "graph":           "persona",   # teacher's concept graph data
     "dynamic":         "persona",   # dynamic UI back-channel (SSE stream + push/error)
     "perception":      "persona",   # ambient_mic block → /api/perception/utterance
+    "agent":           "persona",   # PR-5: /api/agent/kickoff webhook from maestro
     # Stateless infra
     "transcribe": "transcribe",
     "eou":        "transcribe",   # text turn-detector — sibling endpoint

@@ -50,20 +50,19 @@ PINNED_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 #       _compute_golden; print(_compute_golden())"
 #
 # and update GOLDEN_ANSWER_LANE_SHA256 + ANSWER_LANE_JSON_BYTES.
-GOLDEN_ANSWER_LANE_SHA256 = "21c99e9dca7d94423f4e4e6f8fbdb36d7e879442ea92211a7b09d44de5d94615"
-ANSWER_LANE_JSON_BYTES = 44951
+GOLDEN_ANSWER_LANE_SHA256 = "e92352402975696b249b3e2b6b900bb7b7bb7ff6c2f350dacc7fd848dd1f29ee"
+ANSWER_LANE_JSON_BYTES = 46976
 
 
 # Per-lane counts pinned. These doubled as the verification spec in the
-# refactor plan. Updated for PR-2 (Maestro stream + domain READ tools):
-# +6 on answer/background/research, +4 on user_facing (stream_emit AND
-# stream_query excluded from user_facing — Lane A's single iteration goes
-# to speak, not WRITE or heavier reads).
+# refactor plan. Updated for PR-5 (write_to_inbox ACT tool): +1 on
+# answer/background/research (off user_facing — Lane A doesn't write
+# proactive proposals).
 EXPECTED_LANE_COUNTS = {
-    "answer": 25,
+    "answer": 26,
     "user_facing": 14,
-    "background": 23,
-    "research": 25,
+    "background": 24,
+    "research": 26,
     "writer": 2,
 }
 
@@ -98,6 +97,8 @@ EXPECTED_ANSWER_LANE_ORDER = [
     "read_concept_mastery",
     "read_world_knowledge",
     "read_captures",
+    # PR-5 — kickoff realization ACT tool.
+    "write_to_inbox",
     "start_research",
 ]
 
@@ -131,6 +132,8 @@ TOOLS_WITH_BUILD_SPEC = [
     ("tools.read_concept_mastery",               "read_concept_mastery"),
     ("tools.read_world_knowledge",               "read_world_knowledge"),
     ("tools.read_captures",                      "read_captures"),
+    # PR-5 — kickoff realization ACT tool.
+    ("tools.write_to_inbox",                     "write_to_inbox"),
 ]
 
 

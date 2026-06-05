@@ -17,9 +17,12 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from typing import Optional
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
 
 from infra.contracts.event import EventDTO
 from infra.event_log import log_event
@@ -27,7 +30,7 @@ from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
 from services.maestro import long as _long
-from services.maestro.cache import Cache
+from services.maestro.cache import Cache, CacheEntry, VALID_POSTURES
 
 
 app = FastAPI(title="beWithMe maestro")
@@ -46,6 +49,33 @@ class WebhookRequest(BaseModel):
     event: EventDTO
 
 
+class CacheSetRequest(BaseModel):
+    persona_purpose: str = Field(..., min_length=1, max_length=128)
+    paragraph: str = Field(..., min_length=1)
+    posture: str = "steady"
+    candidate_idx: Optional[int] = None
+
+
+def _entry_dict(entry: CacheEntry) -> dict:
+    return {
+        "user_id": str(entry.user_id),
+        "persona_purpose": entry.persona_purpose,
+        "paragraph": entry.paragraph,
+        "posture": entry.posture,
+        "written_at": entry.written_at.isoformat(),
+        "candidate_idx": entry.candidate_idx,
+    }
+
+
+def _parse_user_id(x_user_id: Optional[str]) -> UUID:
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="missing X-User-Id")
+    try:
+        return UUID(x_user_id)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="invalid X-User-Id")
+
+
 @app.get("/api/maestro/health")
 async def health() -> dict:
     return {
@@ -53,6 +83,52 @@ async def health() -> dict:
         "ok": True,
         "cache_size": await _CACHE.size(),
     }
+
+
+@app.get("/api/maestro/cache")
+async def get_cache(
+    persona_purpose: str,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """Read the cache entry for (user, persona_purpose). 404 if absent.
+
+    The agent calls this on every LLM call so the active posture +
+    paragraph ride into the prompt. PR-6's short instance is the main
+    writer; PR-5 seeds it from inbox-proposal taps.
+    """
+    user_id = _parse_user_id(x_user_id)
+    entry = await _CACHE.get(user_id, persona_purpose)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="cache empty for this key")
+    return _entry_dict(entry)
+
+
+@app.post("/api/maestro/cache")
+async def set_cache(
+    body: CacheSetRequest,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """Write/overwrite the cache entry for (user, persona_purpose).
+
+    Internal — engagement.py POSTs here on tap consumption; the short
+    instance POSTs here on refresh (PR-6).
+    """
+    user_id = _parse_user_id(x_user_id)
+    if body.posture not in VALID_POSTURES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"posture must be one of {sorted(VALID_POSTURES)}",
+        )
+    entry = CacheEntry(
+        user_id=user_id,
+        persona_purpose=body.persona_purpose,
+        paragraph=body.paragraph,
+        posture=body.posture,
+        written_at=datetime.now(timezone.utc),
+        candidate_idx=body.candidate_idx,
+    )
+    await _CACHE.set(entry)
+    return _entry_dict(entry)
 
 
 @app.post("/api/maestro/event")
