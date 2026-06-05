@@ -50,24 +50,28 @@ PINNED_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 #       _compute_golden; print(_compute_golden())"
 #
 # and update GOLDEN_ANSWER_LANE_SHA256 + ANSWER_LANE_JSON_BYTES.
-GOLDEN_ANSWER_LANE_SHA256 = "056db0dca54cf2f7a3917294f7f33e937b801b3cb8fd26b87cc98f41cb617a2a"
-ANSWER_LANE_JSON_BYTES = 35148
+GOLDEN_ANSWER_LANE_SHA256 = "21c99e9dca7d94423f4e4e6f8fbdb36d7e879442ea92211a7b09d44de5d94615"
+ANSWER_LANE_JSON_BYTES = 44951
 
 
 # Per-lane counts pinned. These doubled as the verification spec in the
-# refactor plan.
+# refactor plan. Updated for PR-2 (Maestro stream + domain READ tools):
+# +6 on answer/background/research, +4 on user_facing (stream_emit AND
+# stream_query excluded from user_facing — Lane A's single iteration goes
+# to speak, not WRITE or heavier reads).
 EXPECTED_LANE_COUNTS = {
-    "answer": 19,
-    "user_facing": 10,
-    "background": 17,
-    "research": 19,
+    "answer": 25,
+    "user_facing": 14,
+    "background": 23,
+    "research": 25,
     "writer": 2,
 }
 
 
 # Historical order — the exact sequence the original hand-authored
-# manifest produced. Order matters because the LLM provider's cache
-# prefix is sensitive to it.
+# manifest produced, with PR-2's stream + domain READ tools appended
+# before start_research. Order matters because the LLM provider's
+# cache prefix is sensitive to it.
 EXPECTED_ANSWER_LANE_ORDER = [
     "read_media",
     "read_document",
@@ -87,6 +91,13 @@ EXPECTED_ANSWER_LANE_ORDER = [
     "speak",
     "layout_blocks",
     "block_action",
+    # PR-2 — stream + domain READ tools.
+    "stream_emit",
+    "stream_query",
+    "stream_projection",
+    "read_concept_mastery",
+    "read_world_knowledge",
+    "read_captures",
     "start_research",
 ]
 
@@ -113,6 +124,13 @@ TOOLS_WITH_BUILD_SPEC = [
     ("tools.browser_set",                        "browser_set"),
     ("tools.web_view",                           "web_view"),
     ("tools.speak",                              "speak"),
+    # PR-2 — stream + domain READ tools.
+    ("tools.stream_emit",                        "stream_emit"),
+    ("tools.stream_query",                       "stream_query"),
+    ("tools.stream_projection",                  "stream_projection"),
+    ("tools.read_concept_mastery",               "read_concept_mastery"),
+    ("tools.read_world_knowledge",               "read_world_knowledge"),
+    ("tools.read_captures",                      "read_captures"),
 ]
 
 

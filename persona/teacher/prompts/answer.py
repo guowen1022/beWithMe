@@ -79,6 +79,14 @@ def build(
         system_parts.append(answer_format)
         system_parts.append("")
 
+    # Event-stream discipline — when to call `stream_emit` (default:
+    # silence). Loaded for every path that surfaces the tool; voice +
+    # research builders include this skill themselves.
+    stream_emission = load_skill("teacher/stream_emission")
+    if stream_emission:
+        system_parts.append(stream_emission)
+        system_parts.append("")
+
     # Preferences + background blocks (cacheable; rare to change).
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))
