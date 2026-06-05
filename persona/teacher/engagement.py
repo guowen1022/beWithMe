@@ -170,7 +170,6 @@ async def ensure_engagement_and_emit_turn(
     client = SiliconBrainClient()
     try:
         latest = await _latest(client, user_id, list(_ACTIVITY_KINDS))
-        seed_cache = False  # set True whenever a NEW engagement is starting
 
         # Decide which engagement_id the current turn belongs to, and emit
         # any boundary events the state machine demands.
@@ -178,7 +177,6 @@ async def ensure_engagement_and_emit_turn(
             engagement_id = uuid4()
             await _emit(client, user_id, "user.engagement_started",
                         {"engagement_id": str(engagement_id)})
-            seed_cache = True
 
         elif latest.kind == "user.engagement_ended":
             elapsed = now - latest.ts
@@ -188,7 +186,6 @@ async def ensure_engagement_and_emit_turn(
                 engagement_id = UUID(prior_id)
             else:
                 engagement_id = uuid4()
-                seed_cache = True
             await _emit(client, user_id, "user.engagement_started",
                         {"engagement_id": str(engagement_id)})
 
@@ -227,7 +224,6 @@ async def ensure_engagement_and_emit_turn(
                     engagement_id = current_id
                 else:
                     engagement_id = uuid4()
-                    seed_cache = True
                 await _emit(client, user_id, "user.engagement_started",
                             {"engagement_id": str(engagement_id)})
             else:
@@ -244,12 +240,15 @@ async def ensure_engagement_and_emit_turn(
             ),
         )
 
-        # If this is a fresh engagement boundary, seed the cache from
-        # whatever inbox proposal the user tapped to start the engagement.
-        # PR-5: per-LLM-call cache reads (next section) honour the
-        # candidate's posture + opening as the engagement's frame.
-        if seed_cache:
-            await _maybe_seed_cache_from_tapped_proposal(client, user_id)
+        # Seed the cache from whatever inbox proposal the user tapped.
+        # We try on every turn (not just fresh boundaries) because the
+        # seeder is idempotent — it only acts when a tapped-but-not-yet-
+        # consumed proposal exists, and once it succeeds it marks the
+        # proposal `consumed` so subsequent turns no-op. This also
+        # recovers from transient failures: if the maestro sidecar was
+        # down at the engagement boundary, the next turn picks the
+        # proposal up and seeds it then.
+        await _maybe_seed_cache_from_tapped_proposal(client, user_id)
 
         # PR-6: notify the Maestro short instance of the turn so it can
         # decide refresh vs skip. Best-effort.
