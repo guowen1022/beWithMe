@@ -50,24 +50,27 @@ PINNED_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 #       _compute_golden; print(_compute_golden())"
 #
 # and update GOLDEN_ANSWER_LANE_SHA256 + ANSWER_LANE_JSON_BYTES.
-GOLDEN_ANSWER_LANE_SHA256 = "056db0dca54cf2f7a3917294f7f33e937b801b3cb8fd26b87cc98f41cb617a2a"
-ANSWER_LANE_JSON_BYTES = 35148
+GOLDEN_ANSWER_LANE_SHA256 = "e92352402975696b249b3e2b6b900bb7b7bb7ff6c2f350dacc7fd848dd1f29ee"
+ANSWER_LANE_JSON_BYTES = 46976
 
 
 # Per-lane counts pinned. These doubled as the verification spec in the
-# refactor plan.
+# refactor plan. Updated for PR-5 (write_to_inbox ACT tool): +1 on
+# answer/background/research (off user_facing — Lane A doesn't write
+# proactive proposals).
 EXPECTED_LANE_COUNTS = {
-    "answer": 19,
-    "user_facing": 10,
-    "background": 17,
-    "research": 19,
+    "answer": 26,
+    "user_facing": 14,
+    "background": 24,
+    "research": 26,
     "writer": 2,
 }
 
 
 # Historical order — the exact sequence the original hand-authored
-# manifest produced. Order matters because the LLM provider's cache
-# prefix is sensitive to it.
+# manifest produced, with PR-2's stream + domain READ tools appended
+# before start_research. Order matters because the LLM provider's
+# cache prefix is sensitive to it.
 EXPECTED_ANSWER_LANE_ORDER = [
     "read_media",
     "read_document",
@@ -87,6 +90,15 @@ EXPECTED_ANSWER_LANE_ORDER = [
     "speak",
     "layout_blocks",
     "block_action",
+    # PR-2 — stream + domain READ tools.
+    "stream_emit",
+    "stream_query",
+    "stream_projection",
+    "read_concept_mastery",
+    "read_world_knowledge",
+    "read_captures",
+    # PR-5 — kickoff realization ACT tool.
+    "write_to_inbox",
     "start_research",
 ]
 
@@ -113,6 +125,15 @@ TOOLS_WITH_BUILD_SPEC = [
     ("tools.browser_set",                        "browser_set"),
     ("tools.web_view",                           "web_view"),
     ("tools.speak",                              "speak"),
+    # PR-2 — stream + domain READ tools.
+    ("tools.stream_emit",                        "stream_emit"),
+    ("tools.stream_query",                       "stream_query"),
+    ("tools.stream_projection",                  "stream_projection"),
+    ("tools.read_concept_mastery",               "read_concept_mastery"),
+    ("tools.read_world_knowledge",               "read_world_knowledge"),
+    ("tools.read_captures",                      "read_captures"),
+    # PR-5 — kickoff realization ACT tool.
+    ("tools.write_to_inbox",                     "write_to_inbox"),
 ]
 
 

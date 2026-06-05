@@ -29,11 +29,12 @@ SIDECARS = [
     ("transcribe", 3),
     ("speak", 4),
     ("browser", 5),
+    ("maestro", 6),
     ("shell", 0),  # shell last so upstreams are ready before it accepts traffic
 ]
 
 
-def _free_base_port(start: int = 18000, span: int = 6) -> int:
+def _free_base_port(start: int = 18000, span: int = 7) -> int:
     """Find a base port where ports [start, start+span) are all free."""
     for base in range(start, start + 200, 10):
         if all(_port_is_free(base + i) for i in range(span)):

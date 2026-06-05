@@ -29,11 +29,18 @@ from tools import (
     browser_set as _browser_set,
     look_at_image as _look_at_image,
     look_at_video as _look_at_video,
+    read_captures as _read_captures,
+    read_concept_mastery as _read_concept_mastery,
     read_document as _read_document,
     read_url as _read_url,
+    read_world_knowledge as _read_world_knowledge,
     search_notes as _search_notes,
     speak as _speak,
+    stream_emit as _stream_emit,
+    stream_projection as _stream_projection,
+    stream_query as _stream_query,
     web_view as _web_view,
+    write_to_inbox as _write_to_inbox,
 )
 from workshop.canvas.tools import (
     block_action as _block_action,
@@ -415,6 +422,20 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     "start_research":     {"answer", "user_facing"},              # Lane A spawns Lane R
     "research_plan":      {"research"},                            # only inside the research loop
     "research_note":      {"research"},                            # only inside the research loop
+    # Maestro-era stream + domain READ tools (PR-2).
+    # stream_emit is WRITE — keep it off user_facing so a spoken Lane A
+    # turn doesn't burn its single iteration on observation-writing
+    # when speak/start_research are the calls that matter.
+    "stream_emit":          {"answer", "background", "research"},
+    "stream_query":         {"answer", "background", "research"},   # heavier read; like read_document
+    "stream_projection":    {"answer", "user_facing", "background", "research"},  # cheap, projection-cached
+    "read_concept_mastery": {"answer", "user_facing", "background", "research"},  # local DB, fast
+    "read_world_knowledge": {"answer", "user_facing", "background", "research"},  # parity with search_notes
+    "read_captures":        {"answer", "user_facing", "background", "research"},  # enumeration only, look_at_image does the work
+    # PR-5 — ACT tool. Write the user-visible inbox card from a kickoff
+    # candidate. Off user_facing because Lane A's spoken turn shouldn't
+    # be writing proactive proposals — those come from the maestro path.
+    "write_to_inbox":       {"answer", "background", "research"},
 }
 
 
@@ -447,6 +468,17 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         _speak.build_spec(user_id),
         _layout_blocks.build_spec(user_id),
         _block_action.build_spec(user_id),
+        # Maestro-era stream + domain READ tools (PR-2). Appended at
+        # the end so the existing tool order — which the LLM provider's
+        # prompt cache is keyed on — is preserved.
+        _stream_emit.build_spec(user_id),
+        _stream_query.build_spec(user_id),
+        _stream_projection.build_spec(user_id),
+        _read_concept_mastery.build_spec(user_id),
+        _read_world_knowledge.build_spec(user_id),
+        _read_captures.build_spec(user_id),
+        # PR-5 — kickoff realization ACT tool.
+        _write_to_inbox.build_spec(user_id),
         *_build_research_specs(user_id),
     ]
     return [

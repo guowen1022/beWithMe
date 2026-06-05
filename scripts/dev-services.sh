@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Launch all 6 beWithMe sidecars from a single BASE_PORT.
+# Launch all 7 beWithMe sidecars from a single BASE_PORT.
 #   shell      → BASE_PORT       (default 8000)
 #   persona    → BASE_PORT + 1   (the teacher; agent-driven endpoints)
 #   knowledge  → BASE_PORT + 2
 #   transcribe → BASE_PORT + 3
 #   speak      → BASE_PORT + 4
 #   browser    → BASE_PORT + 5
+#   maestro    → BASE_PORT + 6   (PR-4: long-instance reasoning)
 #
 # Usage:
 #   ./scripts/dev-services.sh                    # uses BASE_PORT=8000
-#   BASE_PORT=9000 ./scripts/dev-services.sh     # whole topology slides to 9000-9005
+#   BASE_PORT=9000 ./scripts/dev-services.sh     # whole topology slides to 9000-9006
 
 set -euo pipefail
 
@@ -72,6 +73,7 @@ start persona    1 services.persona.main:app
 start transcribe 3 services.transcribe.main:app
 start speak      4 services.speak.main:app
 start browser    5 services.browser.main:app
+start maestro    6 services.maestro.main:app
 start shell      0 services.shell.main:app
 
 wait

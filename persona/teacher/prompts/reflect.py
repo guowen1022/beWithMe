@@ -155,6 +155,13 @@ def build(
             system_parts.append(respond_to_speech)
             system_parts.append("")
 
+    # Event-stream discipline — applies to both voice_leads + normal
+    # reflect paths since both surface `stream_emit` on the background lane.
+    stream_emission = load_skill("teacher/stream_emission")
+    if stream_emission:
+        system_parts.append(stream_emission)
+        system_parts.append("")
+
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 

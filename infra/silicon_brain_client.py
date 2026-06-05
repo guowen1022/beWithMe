@@ -22,6 +22,8 @@ from uuid import UUID
 import httpx
 
 from infra.contracts import DocumentChunkDTO, NoteHitDTO, ProfileDTO, UserProfileDTO
+from infra.contracts.event import EventDTO, EventEmit, StreamQuery
+from infra.contracts.inbox import InboxProposalCreate, InboxProposalDTO
 from infra.topology import upstream_url
 
 
@@ -144,3 +146,108 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    # --- Event stream (SPEC §8) ---
+
+    async def emit_event(self, user_id: UUID, emit: EventEmit) -> EventDTO:
+        """Append one event to the user's stream. Returns the persisted row."""
+        resp = await self._http.post(
+            "/api/event-stream",
+            headers=_user_headers(user_id),
+            json=emit.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return EventDTO.model_validate(resp.json())
+
+    async def query_stream(self, user_id: UUID, q: StreamQuery) -> list[EventDTO]:
+        """List events for this user matching the filter. `q.order` defaults to desc."""
+        resp = await self._http.post(
+            "/api/event-stream/query",
+            headers=_user_headers(user_id),
+            json=q.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return [EventDTO.model_validate(x) for x in resp.json()]
+
+    async def read_projection(self, user_id: UUID, name: str) -> dict:
+        """Return a Phase-0 projection (SPEC §8.4) as a JSON-able dict.
+
+        Stub projections respond `{"_stub": True, "name": "<name>"}` until
+        the PR that implements them lands.
+        """
+        resp = await self._http.get(
+            f"/api/event-stream/projections/{name}",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def read_view(self, user_id: UUID, name: str) -> list[dict]:
+        """Return a Phase-0 view (SPEC §15.4) as a list of dicts.
+
+        Views are chronological/log-shaped reads over the stream — the
+        companion to projections (which return state snapshots).
+        """
+        resp = await self._http.get(
+            f"/api/event-stream/views/{name}",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Inbox proposals (PR-5) ---
+
+    async def write_inbox_proposal(
+        self, user_id: UUID, proposal: InboxProposalCreate,
+    ) -> InboxProposalDTO:
+        resp = await self._http.post(
+            "/api/inbox",
+            headers=_user_headers(user_id),
+            json=proposal.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return InboxProposalDTO.model_validate(resp.json())
+
+    async def list_inbox_proposals(
+        self, user_id: UUID, *, status: Optional[str] = None, limit: int = 50,
+    ) -> list[InboxProposalDTO]:
+        params: dict = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        resp = await self._http.get(
+            "/api/inbox",
+            headers=_user_headers(user_id),
+            params=params,
+        )
+        resp.raise_for_status()
+        return [InboxProposalDTO.model_validate(x) for x in resp.json()]
+
+    async def tap_inbox_proposal(
+        self, user_id: UUID, proposal_id: UUID,
+    ) -> InboxProposalDTO:
+        resp = await self._http.post(
+            f"/api/inbox/{proposal_id}/tap",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return InboxProposalDTO.model_validate(resp.json())
+
+    async def dismiss_inbox_proposal(
+        self, user_id: UUID, proposal_id: UUID,
+    ) -> InboxProposalDTO:
+        resp = await self._http.post(
+            f"/api/inbox/{proposal_id}/dismiss",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return InboxProposalDTO.model_validate(resp.json())
+
+    async def consume_inbox_proposal(
+        self, user_id: UUID, proposal_id: UUID,
+    ) -> InboxProposalDTO:
+        resp = await self._http.post(
+            f"/api/inbox/{proposal_id}/consume",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return InboxProposalDTO.model_validate(resp.json())

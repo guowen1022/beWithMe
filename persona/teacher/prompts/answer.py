@@ -79,6 +79,25 @@ def build(
         system_parts.append(answer_format)
         system_parts.append("")
 
+    # Event-stream discipline — when to call `stream_emit` (default:
+    # silence). Loaded for every path that surfaces the tool; voice +
+    # research builders include this skill themselves.
+    stream_emission = load_skill("teacher/stream_emission")
+    if stream_emission:
+        system_parts.append(stream_emission)
+        system_parts.append("")
+
+    # Posture-honoring discipline — how to interpret the
+    # `=== ACTIVE MAESTRO FRAME ===` block (PR-5). The frame is
+    # prepended by contexts/answer.py when the Maestro cache has an
+    # entry for this user; the skill explains how to read it. Cheap to
+    # load even on turns with no active frame — the skill is a few
+    # hundred tokens and the LLM ignores instructions for absent blocks.
+    posture_honoring = load_skill("teacher/posture_honoring")
+    if posture_honoring:
+        system_parts.append(posture_honoring)
+        system_parts.append("")
+
     # Preferences + background blocks (cacheable; rare to change).
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))

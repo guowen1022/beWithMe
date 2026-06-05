@@ -1,0 +1,46 @@
+name: "Stream tools — emit, recall, project (PR-2)"
+
+profile: |
+  I'm a software engineer trying to learn statistics for my work. I find
+  formulas hard to remember and I learn best by walking through worked
+  examples.
+
+sessions:
+  - title: "Bayes' theorem — surprising preference reversal"
+    passage: |
+      Bayes' theorem describes the probability of an event, based on prior
+      knowledge of conditions related to the event. Stated mathematically:
+
+        P(A|B) = P(B|A) * P(A) / P(B)
+
+      Where:
+      - P(A|B) is the posterior — the probability of A given that B is true.
+      - P(B|A) is the likelihood — the probability of B given that A is true.
+      - P(A) is the prior — the probability of A before observing B.
+      - P(B) is the marginal — the total probability of B.
+
+      In medical testing, for example, a positive test result doesn't always
+      mean disease is present. If the disease is rare (low prior) and the
+      test has any false-positive rate, the posterior can stay low even when
+      the likelihood is high.
+    interactions:
+      # Interaction 1 — learner says something surprising relative to their
+      # stated preference for worked examples: they explicitly DON'T want a
+      # worked example here. An attentive teacher should notice this is
+      # surprising-vs-profile and is worth emitting an agent.observation
+      # (without restating the worked-examples preference). Default-to-silence
+      # discipline applies: only emit if this contradicts the stated profile.
+      - selected_text: "P(A|B) = P(B|A) * P(A) / P(B)"
+        question: "Don't walk me through a worked example for this one — I just want the intuition of why the formula has this shape. The example will get in the way."
+      # Interaction 2 — neutral follow-up, nothing surprising. Default to
+      # silence (don't emit).
+      - selected_text: "the disease is rare (low prior)"
+        question: "Why does a low prior keep the posterior low even when the test is accurate?"
+      # Interaction 3 — learner asks the teacher to reflect on what it has
+      # noticed about them. This is where the agent should read its own
+      # event stream (query_stream filtered to agent.observation) OR call
+      # read_projection('recent_observations_by_topic'). The projection is
+      # a stub today — the agent should report what it learns and behave
+      # gracefully when the stub marker appears.
+      - selected_text: null
+        question: "Based on what you've noticed about me so far in this conversation, how should you adjust the way you explain things to me going forward?"

@@ -21,8 +21,10 @@ import persona.teacher.models  # noqa: F401
 from services.knowledge.routers import (
     auth,
     documents,
+    event_stream,
     events,
     health,
+    inbox,
     media,
     notes,
     preferences,
@@ -48,6 +50,8 @@ app.include_router(documents.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 app.include_router(notes.router, prefix="/api")
 app.include_router(retrieval.router, prefix="/api")
+app.include_router(event_stream.router, prefix="/api")
+app.include_router(inbox.router, prefix="/api")
 
 
 def main() -> None:
