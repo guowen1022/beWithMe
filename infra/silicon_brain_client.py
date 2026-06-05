@@ -180,3 +180,16 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    async def read_view(self, user_id: UUID, name: str) -> list[dict]:
+        """Return a Phase-0 view (SPEC §15.4) as a list of dicts.
+
+        Views are chronological/log-shaped reads over the stream — the
+        companion to projections (which return state snapshots).
+        """
+        resp = await self._http.get(
+            f"/api/event-stream/views/{name}",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return resp.json()

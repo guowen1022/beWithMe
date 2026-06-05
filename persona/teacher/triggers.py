@@ -535,6 +535,16 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
         summary=summary,
     ))
 
+    # Engagement boundary + signal.turn_arrived emission (PR-3). Lane A
+    # is the voice-driven turn; source='voice' so consumers can tell text
+    # vs voice turns apart without joining other tables. Failures degrade
+    # silently — observability shouldn't break the user-facing turn.
+    try:
+        from persona.teacher.engagement import ensure_engagement_and_emit_turn
+        await ensure_engagement_and_emit_turn(user_id, source="voice")
+    except Exception as e:
+        print(f"[teacher.triggers] engagement emission failed: {e}", flush=True)
+
     text_chunks: List[str] = []
     tool_calls_seen: List[Dict[str, Any]] = []
     error_text: Optional[str] = None

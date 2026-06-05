@@ -28,7 +28,7 @@ Per SPEC §8.3 `kind` is an open versioned enum:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, Text
@@ -36,6 +36,18 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infra.db import Base
+
+
+def _utcnow_tz() -> datetime:
+    """tz-AWARE UTC. Used instead of `datetime.utcnow` (naive) because
+    PostgreSQL's TIMESTAMPTZ binds naive datetimes against the SESSION
+    timezone — on a host whose locale is e.g. Asia/Shanghai (UTC+8) the
+    naive value is interpreted as local-wall-clock and stored 8 hours
+    off. The legacy models in this package mostly avoid the trap because
+    they never compute deltas between stored `ts` and Python wall time;
+    `events` is the first table that genuinely depends on tz-correctness.
+    """
+    return datetime.now(timezone.utc)
 
 
 class Event(Base):
@@ -53,7 +65,7 @@ class Event(Base):
     )
     # When the system recorded the event. Server-stamped, monotonic per user.
     ts: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, index=True
+        DateTime(timezone=True), default=_utcnow_tz, index=True
     )
     # When the event is semantically true (e.g. a `agent.followup_scheduled`
     # for tomorrow). Defaults to `ts` server-side when omitted.

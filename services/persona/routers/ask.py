@@ -316,6 +316,18 @@ async def ask_stream(
         x_lane_thinking=x_lane_thinking,
     )
 
+    # Engagement boundary + signal.turn_arrived emission (PR-3). Runs
+    # AFTER the `/block` debug-shortcut early-return (a `/block` invocation
+    # isn't a real teacher turn) and BEFORE assemble_context so the
+    # current_engagement_state projection is fresh when the prompt builder
+    # reads it. Failures degrade silently — observability shouldn't break
+    # the user-facing turn.
+    try:
+        from persona.teacher.engagement import ensure_engagement_and_emit_turn
+        await ensure_engagement_and_emit_turn(user_id, source="ask")
+    except Exception as e:
+        print(f"[ask/stream] engagement emission failed: {e}", flush=True)
+
     # Benchmark instrumentation: collect per-phase elapsed milliseconds keyed
     # off a single perf_counter origin. Reported on the terminal SSE event as
     # `phase_timings_ms`. No-op outside the benchmark path — instrumentation

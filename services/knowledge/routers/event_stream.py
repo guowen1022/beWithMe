@@ -26,6 +26,7 @@ from infra.contracts.event import EventDTO, EventEmit, StreamQuery
 from infra.db import get_db
 from silicon_brain.models.event import Event
 from silicon_brain.projections import PROJECTIONS
+from silicon_brain.views import VIEWS
 
 
 router = APIRouter()
@@ -98,5 +99,20 @@ async def read_projection(
         raise HTTPException(
             status_code=404,
             detail=f"unknown projection '{name}'; known: {sorted(PROJECTIONS)}",
+        )
+    return await materialize(db, user_id)
+
+
+@router.get("/event-stream/views/{name}")
+async def read_view(
+    name: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(parse_user_id),
+):
+    materialize = VIEWS.get(name)
+    if materialize is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown view '{name}'; known: {sorted(VIEWS)}",
         )
     return await materialize(db, user_id)
