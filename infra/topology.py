@@ -50,6 +50,7 @@ SERVICE_OFFSETS: Final[dict[str, int]] = {
     "transcribe": 3,
     "speak": 4,
     "browser": 5,
+    "maestro": 6,   # PR-4: long-instance reasoning over the event stream
 }
 
 # /api/<prefix> → service. Anything not listed routes to "knowledge".
@@ -69,6 +70,9 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "eou":        "transcribe",   # text turn-detector — sibling endpoint
     "speak":      "speak",
     "browser":    "browser",
+    # Maestro long-instance (PR-4). /api/maestro/event webhook fires from
+    # the agent layer when a new event worth gating on arrives.
+    "maestro":    "maestro",
 }
 DEFAULT_SERVICE: Final[str] = "knowledge"
 

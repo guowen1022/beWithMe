@@ -40,8 +40,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
+import httpx
+
 from infra.contracts.event import EventDTO, EventEmit, StreamQuery
 from infra.silicon_brain_client import SiliconBrainClient
+from infra.topology import upstream_url
 
 
 # Phase-0 defaults — both 5min per SPEC. Kept as module constants so
@@ -80,6 +83,19 @@ async def _emit(
         user_id,
         EventEmit(kind=kind, source="user", body=body, valid_at=valid_at),
     )
+
+
+async def _notify_maestro(triggering: EventDTO) -> None:
+    """Fire the Maestro long-instance webhook. Best-effort: any failure
+    (Maestro sidecar down, slow, etc.) is logged and swallowed — the
+    user-facing turn must not depend on Maestro health."""
+    try:
+        url = f"{upstream_url('maestro')}/api/maestro/event"
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as h:
+            resp = await h.post(url, json={"event": triggering.model_dump(mode="json")})
+            resp.raise_for_status()
+    except Exception as e:
+        print(f"[engagement] maestro notify failed: {e}", flush=True)
 
 
 async def ensure_engagement_and_emit_turn(
@@ -143,11 +159,15 @@ async def ensure_engagement_and_emit_turn(
             if elapsed > IDLE_THRESHOLD:
                 # Implicitly end at last_activity + IDLE_THRESHOLD.
                 ended_at = latest.ts + IDLE_THRESHOLD
-                await _emit(
+                ended_event = await _emit(
                     client, user_id, "user.engagement_ended",
                     {"engagement_id": str(current_id)},
                     valid_at=ended_at,
                 )
+                # Notify the Maestro long instance that an engagement
+                # closed. Decision (ACT vs SILENCE) lives in the Maestro;
+                # this side just rings the bell.
+                await _notify_maestro(ended_event)
                 # Decide reopen-vs-new based on RE_WINDOW from the
                 # implicit end (not from `now`, so back-to-back idle +
                 # reactivation produces predictable boundaries).
