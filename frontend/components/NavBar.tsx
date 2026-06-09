@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   clearCurrentUserId,
@@ -10,15 +10,14 @@ import {
   type User,
 } from "@/lib/api";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Reader" },
-  { href: "/recommendations", label: "Recommendations" },
-  { href: "/inbox", label: "Inbox" },
-  { href: "/mirror", label: "Mirror" },
-];
+// The launcher feed is the landing surface (App owns launcher↔reader view
+// state at "/"), so the nav is intentionally light: the brand returns home
+// (to the feed) and Mirror is the event-stream debug view.
+const NAV_ITEMS = [{ href: "/mirror", label: "Mirror" }];
 
 export default function NavBar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [username, setUsername] = useState<string | null>(null);
 
   useEffect(() => {
@@ -45,20 +44,32 @@ export default function NavBar() {
     window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
   }
 
+  function goHome() {
+    // From a sub-route (/mirror) this navigates back to the app; on "/" it
+    // tells App to switch from the Reader back to the launcher feed.
+    window.dispatchEvent(new CustomEvent("bewithme:go-home"));
+    if (pathname !== "/") router.push("/");
+  }
+
   return (
-    <nav className="bg-white border-b border-gray-200 px-4">
+    <nav className="bg-[var(--bw-void-2)] border-b border-[var(--bw-border)] px-4">
       <div className="max-w-6xl mx-auto flex items-center h-12 gap-6">
-        <span className="font-semibold text-gray-900 mr-4">beWithMe</span>
+        <button
+          onClick={goHome}
+          className="font-bold text-[var(--bw-ink)] mr-4 tracking-tight hover:opacity-80 transition-opacity"
+        >
+          beWithMe
+        </button>
         {NAV_ITEMS.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          const active = pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}
               href={item.href}
               className={`text-sm font-medium pb-0.5 border-b-2 transition-colors ${
                 active
-                  ? "border-blue-600 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
+                  ? "border-[var(--bw-accent)] text-[var(--bw-accent)]"
+                  : "border-transparent text-[var(--bw-ink-muted)] hover:text-[var(--bw-ink)]"
               }`}
             >
               {item.label}
@@ -68,12 +79,12 @@ export default function NavBar() {
 
         {username && (
           <div className="ml-auto flex items-center gap-2 text-xs">
-            <span className="text-gray-500">
-              Signed in as <b className="text-gray-800">{username}</b>
+            <span className="text-[var(--bw-ink-muted)]">
+              Signed in as <b className="text-[var(--bw-ink)]">{username}</b>
             </span>
             <button
               onClick={handleSwitch}
-              className="text-blue-600 hover:text-blue-800 font-medium"
+              className="text-[var(--bw-accent)] hover:opacity-80 font-medium transition-opacity"
             >
               Switch
             </button>

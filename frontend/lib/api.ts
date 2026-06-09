@@ -633,60 +633,65 @@ export async function getGraphData(): Promise<GraphData> {
   return res.json();
 }
 
-// --- Recommendations ---
+// --- Feed (multi-persona, Maestro-blended) ---
 
-export interface RecommendationItem {
+export interface FeedCard {
   id: string;
-  source: string;
-  category: string;
+  user_id: string;
+  source_persona: string;       // "teacher" | "comforter" | "helper" | …
+  purpose: string;
+  posture: string;              // steady | deepen | …
   title: string;
-  summary: string;
-  reasoning: string;
-  url: string | null;
-  concept_names: string[];
-  priority: number;
-  status: string;
-  created_at: string;
+  opening: string;
+  intra_rank: number;
+  category: string | null;      // teacher: review | explore | deepen
+  body: Record<string, unknown> | null;
+  status: string;               // active | selected | dismissed | expired
+  created_at: string | null;
+  // Maestro-assembled blend metadata (informational):
+  blended_score?: number;
+  persona_weight?: number;
 }
 
-export async function getRecommendations(
-  source?: string,
-  category?: string
-): Promise<RecommendationItem[]> {
-  const params = new URLSearchParams();
-  if (source) params.set("source", source);
-  if (category) params.set("category", category);
-  const qs = params.toString();
-  const res = await fetch(
-    `${API_BASE}/recommendations${qs ? `?${qs}` : ""}`,
-    { headers: authHeaders() }
-  );
+export interface FeedResponse {
+  cards: FeedCard[];
+  stale: boolean;
+}
+
+export async function getFeed(): Promise<FeedResponse> {
+  const res = await fetch(`${API_BASE}/feed`, { headers: authHeaders() });
   await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error("Failed to fetch recommendations");
+  if (!res.ok) throw new Error(`Failed to load feed (${res.status})`);
   return res.json();
 }
 
-export async function generateRecommendations(): Promise<RecommendationItem[]> {
-  const res = await fetch(`${API_BASE}/recommendations/generate`, {
+export async function refreshFeed(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/feed/refresh`, {
     method: "POST",
     headers: authHeaders(),
   });
   await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error("Failed to generate recommendations");
+  if (!res.ok) throw new Error(`Failed to refresh feed (${res.status})`);
   return res.json();
 }
 
-export async function updateRecommendation(
-  id: string,
-  status: "dismissed" | "accepted"
-): Promise<RecommendationItem> {
-  const res = await fetch(`${API_BASE}/recommendations/${id}`, {
-    method: "PATCH",
+export async function selectCard(id: string): Promise<FeedCard> {
+  const res = await fetch(`${API_BASE}/feed/${id}/select`, {
+    method: "POST",
     headers: authHeaders(),
-    body: JSON.stringify({ status }),
   });
   await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error("Failed to update recommendation");
+  if (!res.ok) throw new Error(`Failed to select card (${res.status})`);
+  return res.json();
+}
+
+export async function dismissCard(id: string): Promise<FeedCard> {
+  const res = await fetch(`${API_BASE}/feed/${id}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await throwIfUnknownUser(res);
+  if (!res.ok) throw new Error(`Failed to dismiss card (${res.status})`);
   return res.json();
 }
 
@@ -864,56 +869,6 @@ export async function speakTextStream(
   return { sampleRate, reader: res.body.getReader() };
 }
 
-
-// --- Inbox proposals (PR-7) ---
-
-export interface InboxProposal {
-  id: string;
-  user_id: string;
-  kickoff_event_id: string;
-  candidate_idx: number;
-  title: string;
-  persona_purpose: string;
-  posture: string;
-  opening: string;
-  body: Record<string, unknown> | null;
-  status: string;       // pending | tapped | dismissed | consumed | expired
-  created_at: string | null;
-  tapped_at: string | null;
-  consumed_at: string | null;
-}
-
-export async function listInbox(opts: { status?: string } = {}): Promise<InboxProposal[]> {
-  const params = new URLSearchParams();
-  if (opts.status) params.set("status", opts.status);
-  const qs = params.toString();
-  const res = await fetch(`${API_BASE}/inbox${qs ? `?${qs}` : ""}`, {
-    headers: authHeaders(),
-  });
-  await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error(`Failed to load inbox (${res.status})`);
-  return res.json();
-}
-
-export async function tapProposal(id: string): Promise<InboxProposal> {
-  const res = await fetch(`${API_BASE}/inbox/${id}/tap`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error(`Failed to tap proposal (${res.status})`);
-  return res.json();
-}
-
-export async function dismissProposal(id: string): Promise<InboxProposal> {
-  const res = await fetch(`${API_BASE}/inbox/${id}/dismiss`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error(`Failed to dismiss proposal (${res.status})`);
-  return res.json();
-}
 
 // --- Event stream (PR-7 mirror view) ---
 

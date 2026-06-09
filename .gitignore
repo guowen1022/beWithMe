@@ -25,6 +25,9 @@ data/uploads/
 data/web_view_port.json
 data/diagrams/
 data/notes/
+data/research/
+data/per-host-skills/
+logs/
 benchmark/results/
 benchmark/*/*/runs/
 .*.swp

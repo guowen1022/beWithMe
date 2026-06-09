@@ -32,11 +32,11 @@ from services.persona.routers import (
     ask as ask_router,
     concepts as concepts_router,
     dynamic as dynamic_router,
+    feed as feed_router,
     goals as goals_router,
     interactions as interactions_router,
     kickoff as kickoff_router,
     perception_utterance as perception_utterance_router,
-    recommender as recommender_router,
     screen_share as screen_share_router,
     sessions as sessions_router,
     teacher_media as teacher_media_router,
@@ -66,7 +66,6 @@ app = FastAPI(title="beWithMe persona", lifespan=lifespan)
 install_event_log(app, service="persona", skip_paths=("/api/dynamic/stream",))
 app.include_router(ask_router.router, prefix="/api")
 app.include_router(interactions_router.router, prefix="/api")
-app.include_router(recommender_router.router, prefix="/api")
 app.include_router(goals_router.router, prefix="/api")
 app.include_router(sessions_router.router, prefix="/api")
 app.include_router(concepts_router.router, prefix="/api")
@@ -75,6 +74,7 @@ app.include_router(teacher_media_router.router, prefix="/api")
 app.include_router(perception_utterance_router.router, prefix="/api")
 app.include_router(screen_share_router.router, prefix="/api")
 app.include_router(kickoff_router.router, prefix="/api")
+app.include_router(feed_router.router, prefix="/api")
 
 
 def main() -> None:

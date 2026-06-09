@@ -29,6 +29,9 @@ from infra.event_log import log_event
 from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 
+from infra.silicon_brain_client import SiliconBrainClient
+
+from services.maestro import feed as _feed
 from services.maestro import long as _long
 from services.maestro import short as _short
 from services.maestro.cache import Cache, CacheEntry, VALID_POSTURES
@@ -176,6 +179,60 @@ async def post_event(body: WebhookRequest) -> dict:
         )
         raise HTTPException(status_code=500, detail=f"handle_event failed: {exc}")
     return {"ok": True, "decision": result.get("decision"), "k": result.get("k", 0)}
+
+
+# --- Feed surface (multi-persona, Maestro-blended) ---
+# Mounted under the clean `/api/feed*` prefix (topology routes it to maestro).
+
+@app.get("/api/feed")
+async def get_feed(
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """Assemble the blended feed (FAST — no LLM). Triggers async (re)generation
+    when empty/stale; returns whatever is cached now."""
+    user_id = _parse_user_id(x_user_id)
+    client = SiliconBrainClient()
+    try:
+        return await _feed.assemble(client, user_id)
+    finally:
+        await client.aclose()
+
+
+@app.post("/api/feed/refresh")
+async def refresh_feed(
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """Explicit "Prepare new options" — regenerate, then the client re-lists."""
+    user_id = _parse_user_id(x_user_id)
+    return await _feed.refresh(user_id)
+
+
+@app.post("/api/feed/{card_id}/select")
+async def select_card(
+    card_id: UUID,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """User picked a card → mark selected + seed the persona's cache frame."""
+    user_id = _parse_user_id(x_user_id)
+    client = SiliconBrainClient()
+    try:
+        return await _feed.select(client, _CACHE, user_id, card_id)
+    finally:
+        await client.aclose()
+
+
+@app.post("/api/feed/{card_id}/dismiss")
+async def dismiss_card(
+    card_id: UUID,
+    x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+) -> dict:
+    """User dismissed a card."""
+    user_id = _parse_user_id(x_user_id)
+    client = SiliconBrainClient()
+    try:
+        return await _feed.dismiss(client, user_id, card_id)
+    finally:
+        await client.aclose()
 
 
 def main() -> None:

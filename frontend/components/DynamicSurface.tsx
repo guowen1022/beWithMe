@@ -60,9 +60,16 @@ type Props = {
    *                events on by default.
    */
   mode?: Mode;
+  /**
+   * When true, skip mounting the `lets_begin` welcome card on an empty canvas.
+   * Set by the feed launcher's "Begin" path: a seeded first turn is auto-sent
+   * by the command bar, so the thread starts on its own and the welcome card
+   * would just get in the way.
+   */
+  suppressWelcome?: boolean;
 };
 
-export default function DynamicSurface({ mode = "overlay" }: Props) {
+export default function DynamicSurface({ mode = "overlay", suppressWelcome = false }: Props) {
   const entries = useRegistry();
   const device = useDeviceClass();
 
@@ -87,12 +94,14 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
         for (const b of blocks) {
           sourceRegistry.mount({ id: b.id, source: b.source });
         }
-        if (blocks.length === 0) {
+        if (blocks.length === 0 && !suppressWelcome) {
           // Mount the welcome card. The mount fans out via SSE — the
           // useEffect below subscribes to that stream and will pick up
           // the resulting ui-update mount. Best-effort: if the POST
           // fails (e.g. backend unreachable) the canvas just stays
-          // empty, which is the prior behavior.
+          // empty, which is the prior behavior. Skipped when the feed
+          // launcher's "Begin" auto-sends a seeded first turn — that turn
+          // starts the thread, so the welcome card would only be noise.
           mountTemplate({ template: "lets_begin" }).catch((err) =>
             console.warn("[dynamic-surface] lets_begin auto-mount failed", err),
           );
@@ -100,7 +109,7 @@ export default function DynamicSurface({ mode = "overlay" }: Props) {
       })
       .catch((err) => console.warn("[dynamic-surface] hydration failed", err));
     return () => { cancelled = true; };
-  }, [mode]);
+  }, [mode, suppressWelcome]);
 
   useEffect(() => {
     const ctrl = new AbortController();
