@@ -60,7 +60,12 @@ class AuthCache:
 
 
 def is_public(method: str, path: str) -> bool:
-    return (method.upper(), path) in PUBLIC
+    if (method.upper(), path) in PUBLIC:
+        return True
+    # Skill JS files are static public assets — no auth required.
+    if method.upper() == "GET" and path.startswith("/api/skills/"):
+        return True
+    return False
 
 
 def parse_user_header(value: str | None) -> str | None:

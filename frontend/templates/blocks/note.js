@@ -299,10 +299,50 @@
       }
     });
 
+    // ---- Skill dispatch --------------------------------------------------
+    // Scans `root` for <div data-skill="name" data-config='{...}'> elements
+    // emitted by the server's ```plot / ```skill:name fence renderer.
+    // Fetches /skills/<name>.js once (browser-cached), evals it as a
+    // function(element, config) and calls it on the placeholder div.
+    // Adding a new skill = drop a .js file in frontend/public/skills/.
+    var _skillCache = {};
+    function dispatchSkills(root) {
+      var els = root.querySelectorAll('[data-skill]');
+      if (!els.length) return;
+      els.forEach(function(el) {
+        var name = el.getAttribute('data-skill');
+        if (!name) return;
+        var config = {};
+        try { config = JSON.parse(el.getAttribute('data-config') || '{}'); } catch(_) {}
+        var container = document.createElement('div');
+        container.className = 'bw-skill-container';
+        container.style.cssText = 'width:100%;min-height:360px;position:relative;';
+        if (el.parentNode) el.parentNode.replaceChild(container, el);
+        function runSkill(jsText) {
+          try { new Function('element', 'config', jsText)(container, config); }
+          catch(e) {
+            container.style.cssText += 'display:flex;align-items:center;justify-content:center;color:var(--bw-ink-muted);font-size:13px;';
+            container.textContent = '[skill error: ' + name + ']';
+            if (typeof console !== 'undefined') console.warn('[note] skill error:', name, e);
+          }
+        }
+        if (_skillCache[name]) { runSkill(_skillCache[name]); return; }
+        fetch('/api/skills/' + name, { cache: 'no-cache' })
+          .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
+          .then(function(js) { _skillCache[name] = js; runSkill(js); })
+          .catch(function(err) {
+            container.style.cssText += 'display:flex;align-items:center;justify-content:center;color:var(--bw-ink-muted);font-size:13px;';
+            container.textContent = '[skill not found: ' + name + ']';
+            if (typeof console !== 'undefined') console.warn('[note] skill not found:', name, err);
+          });
+      });
+    }
+
     function setHtml(html, opts) {
       currentHtml = (typeof html === 'string') ? html : '';
       body.innerHTML = currentHtml;
       currentSelection = '';
+      dispatchSkills(body);
       if (opts && opts.animate && currentHtml) {
         startReveal([body]);
       }

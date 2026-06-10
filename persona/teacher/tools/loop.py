@@ -220,6 +220,11 @@ async def run(
     started_at = time.monotonic()
     deadline_warned = False
     deadline_hit = False
+    # Track whether the last executed round was entirely _raw_arguments bails
+    # (provider streamed truncated JSON so the executor returned an error without
+    # doing anything). In that case we owe the model one free retry turn beyond
+    # max_iterations — the real tool call never happened.
+    _last_round_was_bail = False
 
     # Benchmark instrumentation. `timing_origin` is a perf_counter() reading
     # taken by the caller at request start, so first-token and first-speak
@@ -367,12 +372,24 @@ async def run(
         if not pending_calls or stop_reason != "tool_use":
             break
         if turn >= max_iterations:
-            # Hard cap — surface a final answer turn anyway, but stop
-            # asking the model to call more tools.
-            break
+            # Hard cap — unless the previous round was entirely _raw_arguments
+            # bails (provider streamed truncated JSON; executor returned an error
+            # but did nothing). That round didn't consume a real iteration, so
+            # let the model's retry through once.
+            if not _last_round_was_bail:
+                break
+            _last_round_was_bail = False  # only one free pass per bail
 
         executed = await _execute_tool_calls(
             pending_calls, tools, tool_result_max_chars
+        )
+        # Detect whether this round was entirely _raw_arguments bails.
+        # Only True when the call had _raw_arguments AND the executor returned
+        # an error (recovery path would have returned ok, not an error).
+        _last_round_was_bail = bool(executed) and all(
+            "_raw_arguments" in (e.get("call") or {}).get("arguments", {})
+            and '"error"' in (e.get("result") or "")
+            for e in executed
         )
         tool_rounds += 1
         # Propagate snapshot results upstream so callers can capture

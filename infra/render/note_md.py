@@ -122,6 +122,14 @@ def _build_markdown() -> MarkdownIt:
             src = token.content or ""
             escaped = src.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
             return f'<div class="bw-diagram" data-src="{escaped}"></div>\n'
+        # ```plot {...}``` → coordinate-plot skill
+        # ```skill:name {...}``` → named skill (extensible: drop a new .js file in
+        # frontend/public/skills/ and it's available immediately, no code change needed)
+        if lang == "plot" or lang.startswith("skill:"):
+            skill_name = "coordinate-plot" if lang == "plot" else lang[len("skill:"):]
+            src = (token.content or "").strip()
+            escaped = src.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+            return f'<div data-skill="{skill_name}" data-config="{escaped}"></div>\n'
         if default_fence is not None:
             return default_fence(tokens, idx, options, env)
         # Fallback: render as <pre><code>; will be stripped by sanitizer

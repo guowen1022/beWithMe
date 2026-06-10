@@ -39,7 +39,7 @@ ALLOWED_ATTRS: dict[str, set[str]] = {
     "*": {"id"},
     "a": {"href"},
     "img": {"src", "alt", "width", "height"},
-    "div": {"data-src", "data-diagram-id"},  # bw-diagram authoring + post-sanitize id
+    "div": {"data-src", "data-diagram-id", "data-skill", "data-config"},  # bw-diagram authoring + post-sanitize id; data-skill/data-config for extensible skills
 }
 
 # Only https. No data:, no javascript:, no http:. Outbound links and images

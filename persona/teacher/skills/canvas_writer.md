@@ -166,8 +166,41 @@ One highlight + one append in a single call.
 - Use markdown headings (`## H2`, `### H3`) for sections. Don't write
   raw `<div class="card-callout">` — the server's grammar provides
   the visual hierarchy via heading levels.
-- For diagrams, use ` ```mermaid ` fenced blocks; the server renders
+- For flow diagrams and process charts, use `mermaid` fenced blocks; the server renders
   them to SVG.
+- For **coordinate plots** — scatter plots, curves, 3D surfaces, any topic involving
+  numeric axes or spatial data — use a `plot` fenced block with a JSON config body.
+  This renders an interactive Plotly chart (real x/y/z axes, not a flowchart).
+
+  Fields:
+  - `mode`: `"2d"` (line/scatter) or `"3d_surface"` (loss surface, manifold, etc.)
+  - `expression`: math string — `f(x)` for 2d, `f(x,y)` for 3d_surface. Use `*` for multiply. e.g. `"x*x"`, `"x*x + y*y"`, `"Math.sin(x) * y"`
+  - `title`, `x_label`, `y_label`, `z_label` (3d only): axis labels
+  - `x_range`, `y_range` (3d only): `[min, max]`, default `[-3, 3]`
+  - `path` (3d only): `[{"x":…,"y":…}, …]` — overlays a gradient-descent trail
+  - `annotations` (2d only): `[{"x":…,"y":…,"text":"…"}, …]` — point markers
+
+  **Example — 3D loss surface with descent path:**
+
+```plot
+{"mode":"3d_surface","title":"Loss Surface","expression":"x*x + y*y","x_label":"Weight w₁","y_label":"Bias w₂","z_label":"Loss","x_range":[-3,3],"y_range":[-3,3],"path":[{"x":2.5,"y":2.5},{"x":1.8,"y":1.8},{"x":1.2,"y":1.2},{"x":0.6,"y":0.6},{"x":0.1,"y":0.1}]}
+```
+
+  **Example — 2D regression line:**
+
+```plot
+{"mode":"2d","title":"Linear Regression","expression":"0.8*x + 1.5","x_label":"x","y_label":"y","x_range":[0,5],"annotations":[{"x":0,"text":"intercept"},{"x":2.5,"text":"slope"}]}
+```
+
+  **Example — 2D parabola:**
+
+```plot
+{"mode":"2d","title":"y = x²","expression":"x*x","x_label":"x","y_label":"f(x)","x_range":[-3,3]}
+```
+
+  Use `plot` whenever you would draw an axis, a curve, a data relationship, or any
+  surface. Prefer it over Mermaid for regression lines, loss surfaces, function graphs,
+  or anything with numeric coordinates.
 - For highlights inside running text, use `==term==`; renders as
   `<mark>term</mark>` with the accent color.
 - DO NOT contradict the spoken answer. Quote facts verbatim where
