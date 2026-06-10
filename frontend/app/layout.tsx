@@ -5,6 +5,7 @@ import SpeakerSink from "@/components/SpeakerSink";
 import TeacherCaption from "@/components/TeacherCaption";
 import DesktopBrowserPerception from "@/components/DesktopBrowserPerception";
 import MermaidLoader from "@/components/MermaidLoader";
+import KaTeXGlobal from "@/components/KaTeXGlobal";
 import VadPrewarm from "@/components/VadPrewarm";
 import "./globals.css";
 
@@ -58,6 +59,7 @@ export default function RootLayout({
         <TeacherCaption />
         <DesktopBrowserPerception />
         <MermaidLoader />
+        <KaTeXGlobal />
         <VadPrewarm />
       </body>
     </html>

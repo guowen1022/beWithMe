@@ -299,6 +299,30 @@
       }
     });
 
+    // ---- Math rendering --------------------------------------------------
+    // The server marks `$$...$$` as `.bw-math-block` and `$...$` as
+    // `.bw-math-inline` (raw LaTeX content, HTML-escaped). After innerHTML
+    // is set we ask KaTeX to render each element in place.
+    function renderMath(container) {
+      var katex = window.katex;
+      if (!katex) {
+        // KaTeX not yet loaded; schedule a retry once it's ready.
+        var ready = window.__katexReady;
+        if (ready) ready.then(function(k) { window.katex = k; renderMath(container); });
+        return;
+      }
+      var mathEls = container.querySelectorAll('.math');
+      for (var i = 0; i < mathEls.length; i++) {
+        var el = mathEls[i];
+        if (el.querySelector('.katex')) continue; // already rendered
+        var src = el.textContent || '';
+        var isBlock = el.tagName === 'DIV';
+        try {
+          el.innerHTML = katex.renderToString(src, { displayMode: isBlock, throwOnError: false });
+        } catch (e) { /* leave raw LaTeX visible on error */ }
+      }
+    }
+
     // ---- Skill dispatch --------------------------------------------------
     // Scans `root` for <div data-skill="name" data-config='{...}'> elements
     // emitted by the server's ```plot / ```skill:name fence renderer.
@@ -343,6 +367,7 @@
       body.innerHTML = currentHtml;
       currentSelection = '';
       dispatchSkills(body);
+      renderMath(body);
       if (opts && opts.animate && currentHtml) {
         startReveal([body]);
       }
@@ -490,6 +515,7 @@
         if (where === 'end') host.appendChild(n);
         else host.insertBefore(n, host.firstChild);
       }
+      renderMath(host);
       // Phase 2.6: block-by-block reveal. The reveal hides each
       // matching block via inline opacity then fades them in one at a
       // time at 2x speaking rate. No .bw-edit-enter class — its CSS

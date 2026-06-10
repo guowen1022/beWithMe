@@ -112,6 +112,7 @@ export const STYLES = StyleSheet.create({
   "bw-diagram":      { backgroundColor: BW.surface2, borderWidth: 1, borderColor: BW.border, padding: 8,
                        marginVertical: 12 },
   "bw-image":        { width: "100%", marginVertical: 10 },
+  "math":           { marginVertical: 8 },
   "aspect-1-1":      { aspectRatio: 1 },
   "aspect-4-3":      { aspectRatio: 4 / 3 },
   "aspect-16-9":     { aspectRatio: 16 / 9 },

@@ -68,6 +68,8 @@ ALLOWED_CLASSES: frozenset[str] = frozenset(
         "revision-add", "revision-remove", "revision-changed",
         # media
         "bw-diagram", "bw-image",
+        # math — KaTeX renders client-side; "block"/"inline" get stripped by sanitizer
+        "math",
         "aspect-1-1", "aspect-4-3", "aspect-16-9", "aspect-3-4",
         # layout helpers
         "center", "right",
