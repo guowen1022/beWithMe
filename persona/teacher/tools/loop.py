@@ -183,6 +183,7 @@ async def run(
     timing_origin: Optional[float] = None,
     disable_thinking: bool = False,
     profile: Optional[str] = None,
+    terminal_tools: Optional[set] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
@@ -207,6 +208,14 @@ async def run(
     tight 2000 default to defend its small token budget; Lane R passes
     a larger value (~6000) so browser pages and document chunks survive
     intact for reasoning.
+
+    `terminal_tools` makes named tools end the loop the instant they execute.
+    The canvas writer passes `{"mount_template", "edit_note"}` so it can take
+    one or more *non-terminal* `load_guide` rounds (counting toward
+    `max_iterations`) and then exactly ONE authoring round — re-prompting
+    after an authoring call produced duplicate appends. A terminal round is
+    also exempt from the iteration cap, so the final authoring call always
+    lands even when guide-loading used the budget.
 
     Final `done` shape:
       {"kind": "done", "text": full_answer, "usage": last_usage,
@@ -371,7 +380,13 @@ async def run(
 
         if not pending_calls or stop_reason != "tool_use":
             break
-        if turn >= max_iterations:
+        # A round containing a terminal tool (e.g. the writer's mount/edit) is
+        # exempt from the iteration cap so the final authoring call always
+        # lands even if `load_guide` rounds consumed the budget.
+        is_terminal_round = bool(terminal_tools) and any(
+            c.get("name") in terminal_tools for c in pending_calls
+        )
+        if turn >= max_iterations and not is_terminal_round:
             # Hard cap — unless the previous round was entirely _raw_arguments
             # bails (provider streamed truncated JSON; executor returned an error
             # but did nothing). That round didn't consume a real iteration, so
@@ -392,6 +407,25 @@ async def run(
             for e in executed
         )
         tool_rounds += 1
+        # Terminal-tool round: stop ONLY when a terminal authoring call
+        # (mount/edit) actually SUCCEEDED. Re-prompting after a real mount would
+        # let the model fire a SECOND one (duplicate appends / highlight spam).
+        # But if the terminal call BAILED on truncated `_raw_arguments` (the
+        # provider cut the JSON mid-stream), nothing was authored — fall through
+        # so the model gets its retry, exactly like the non-terminal bail path.
+        # Breaking on a bail here silently drops the note ("writer invoked,
+        # nothing shows"). Non-terminal rounds (e.g. load_guide) also fall
+        # through and continue the loop.
+        terminal_succeeded = bool(terminal_tools) and any(
+            (e.get("call") or {}).get("name") in terminal_tools
+            and not (
+                "_raw_arguments" in ((e.get("call") or {}).get("arguments") or {})
+                and '"error"' in (e.get("result") or "")
+            )
+            for e in executed
+        )
+        if terminal_succeeded:
+            break
         # Propagate snapshot results upstream so callers can capture
         # ARIA refs at record time (used by workshop/research recipes).
         # Other tool results are intentionally NOT propagated — the

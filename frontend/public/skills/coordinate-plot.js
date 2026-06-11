@@ -14,6 +14,13 @@
 //   resolution:  int grid points per axis (default 50)
 //   path:        [{x, y}] gradient descent trail — 3d_surface only
 //   annotations: [{x, y, text}] — 2d only
+//   series:      [trace, …] — 2d only; overlay multiple traces on shared axes.
+//                When present it REPLACES the single `expression` curve. Each item:
+//                  {kind:"scatter", points:[{x,y},…], name, color}  raw data points
+//                  {kind:"curve",   expression:"f(x)", name, color}  analytic curve
+//                  {kind:"line",    points:[{x,y},…], name, color}  explicit polyline
+//                Use for data+fit pictures, e.g. scattered points with an
+//                underfit line and an overfit curve drawn over the same points.
 
 (function (element, config) {
   var PLOTLY_CDN = '/plotly-2.32.0.min.js';
@@ -160,20 +167,65 @@
 
   // ── 2D line ──────────────────────────────────────────────────────────────
 
+  // Theme-consistent default palette for overlaid series — dark-aurora hues
+  // that read on the dark surface. Per-series `color` overrides any of these.
+  function seriesPalette() {
+    return [
+      cssVar('--bw-accent', '#7c6ff7'),
+      '#4fd1c5',  // teal
+      '#ff6b6b',  // coral
+      '#f6c177',  // amber
+      '#63b3ed',  // sky
+    ];
+  }
+
+  // Build ONE Plotly trace from a `series` item. Returns null when it can't
+  // (bad expression, no points). `curve` reuses buildFn's safe-eval — no new
+  // eval surface; scatter/line are plain numeric data.
+  function buildSeriesTrace(s, idx) {
+    if (!s || typeof s !== 'object') return null;
+    var palette = seriesPalette();
+    var color = s.color || palette[idx % palette.length];
+    var kind = s.kind || (s.expression ? 'curve' : 'scatter');
+
+    if (kind === 'scatter' || kind === 'line') {
+      var px = [], py = [];
+      (Array.isArray(s.points) ? s.points : []).forEach(function(p) {
+        if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+          px.push(p.x); py.push(p.y);
+        }
+      });
+      if (!px.length) return null;
+      if (kind === 'scatter') {
+        return {
+          type: 'scatter', mode: 'markers',
+          x: px, y: py, name: s.name || 'data',
+          marker: { color: color, size: 7 },
+        };
+      }
+      return {
+        type: 'scatter', mode: 'lines',
+        x: px, y: py, name: s.name || ('series ' + (idx + 1)),
+        line: { color: color, width: 2.5 },
+      };
+    }
+
+    // kind === 'curve' — sample an analytic f(x) across x_range.
+    var xlo = (config.x_range || [-3, 3])[0];
+    var xhi = (config.x_range || [-3, 3])[1];
+    var res = Math.min(Math.max(config.resolution || 200, 50), 500);
+    var xs = linspace(xlo, xhi, res);
+    var fn = buildFn(s.expression, ['x']);
+    if (!fn) return null;
+    var ys = xs.map(function(x) { try { return fn(x); } catch (_) { return null; } });
+    return {
+      type: 'scatter', mode: 'lines',
+      x: xs, y: ys, name: s.name || ('curve ' + (idx + 1)),
+      line: { color: color, width: 2.5 },
+    };
+  }
+
   function render2d(Plotly) {
-    var expr = config.expression || 'x*x';
-    var xlo  = (config.x_range || [-3, 3])[0];
-    var xhi  = (config.x_range || [-3, 3])[1];
-    var res  = Math.min(Math.max(config.resolution || 200, 50), 500);
-    var xs   = linspace(xlo, xhi, res);
-
-    var fn = buildFn(expr, ['x']);
-    if (!fn) { showStatus('[coordinate-plot] invalid expression'); return; }
-
-    var ys = xs.map(function(x) {
-      try { return fn(x); } catch(_) { return null; }
-    });
-
     var layout = baseLayout(config.title);
     layout.xaxis = {
       title: config.x_label || 'x',
@@ -184,32 +236,58 @@
       gridcolor: layout._grid, zerolinecolor: layout._muted,
     };
 
-    var traces = [{
-      type: 'scatter', mode: 'lines',
-      x: xs, y: ys,
-      name: config.y_label || 'y',
-      line: { color: cssVar('--bw-accent', '#7c6ff7'), width: 2.5 },
-    }];
+    var traces;
 
-    // Optional annotation markers
-    if (Array.isArray(config.annotations)) {
-      var annPx = [], annPy = [], annTexts = [];
-      config.annotations.forEach(function(a) {
-        if (a && typeof a.x === 'number') {
-          var y = typeof a.y === 'number' ? a.y : (function(){ try{return fn(a.x);}catch(_){return 0;}}());
-          annPx.push(a.x); annPy.push(y); annTexts.push(a.text || '');
-        }
+    // Multi-trace path: overlay scatter / curve / line series on shared axes.
+    if (Array.isArray(config.series) && config.series.length) {
+      traces = [];
+      config.series.forEach(function(s, i) {
+        var t = buildSeriesTrace(s, i);
+        if (t) traces.push(t);
       });
-      if (annPx.length) {
-        traces.push({
-          type: 'scatter', mode: 'markers+text',
-          x: annPx, y: annPy, text: annTexts,
-          name: 'points',
-          textposition: 'top center',
-          marker: { color: '#ff4444', size: 8 },
-          textfont: { color: cssVar('--bw-ink', '#e8e8e8'), size: 12 },
-          showlegend: false,
+      if (!traces.length) { showStatus('[coordinate-plot] no valid series'); return; }
+    } else {
+      // Legacy single-expression curve + optional annotation markers (unchanged).
+      var expr = config.expression || 'x*x';
+      var xlo  = (config.x_range || [-3, 3])[0];
+      var xhi  = (config.x_range || [-3, 3])[1];
+      var res  = Math.min(Math.max(config.resolution || 200, 50), 500);
+      var xs   = linspace(xlo, xhi, res);
+
+      var fn = buildFn(expr, ['x']);
+      if (!fn) { showStatus('[coordinate-plot] invalid expression'); return; }
+
+      var ys = xs.map(function(x) {
+        try { return fn(x); } catch(_) { return null; }
+      });
+
+      traces = [{
+        type: 'scatter', mode: 'lines',
+        x: xs, y: ys,
+        name: config.y_label || 'y',
+        line: { color: cssVar('--bw-accent', '#7c6ff7'), width: 2.5 },
+      }];
+
+      // Optional annotation markers
+      if (Array.isArray(config.annotations)) {
+        var annPx = [], annPy = [], annTexts = [];
+        config.annotations.forEach(function(a) {
+          if (a && typeof a.x === 'number') {
+            var y = typeof a.y === 'number' ? a.y : (function(){ try{return fn(a.x);}catch(_){return 0;}}());
+            annPx.push(a.x); annPy.push(y); annTexts.push(a.text || '');
+          }
         });
+        if (annPx.length) {
+          traces.push({
+            type: 'scatter', mode: 'markers+text',
+            x: annPx, y: annPy, text: annTexts,
+            name: 'points',
+            textposition: 'top center',
+            marker: { color: '#ff4444', size: 8 },
+            textfont: { color: cssVar('--bw-ink', '#e8e8e8'), size: 12 },
+            showlegend: false,
+          });
+        }
       }
     }
 
