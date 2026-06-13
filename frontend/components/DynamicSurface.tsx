@@ -14,6 +14,7 @@ import { systemBlocks, isSystemBlockId } from "@/lib/systemBlocks";
 import { fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
+import { DEBUG_UI } from "@/lib/debug";
 
 // Built-in blocks that share the same draggable grid as source-eval blocks.
 // Their ids are namespaced `system:*` so the existing teacher SSE
@@ -234,6 +235,9 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
 
       {/* Built-in blocks — share the grid + drag with source-eval blocks. */}
       {mode === "fullscreen" && SYSTEM_BLOCKS.map((b) => {
+        // The teacher-thinking panel is a debug surface; hide it when
+        // DEBUG_UI is off (BEWITHME_DEBUG=0). The command bar is core UI.
+        if (b.id === "system:teacher-thinking" && !DEBUG_UI) return null;
         if (systemBlocks.isHidden(b.id)) return null;
         const Comp = b.Component;
         return (

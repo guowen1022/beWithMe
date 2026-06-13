@@ -9,11 +9,13 @@ import {
   listUsers,
   type User,
 } from "@/lib/api";
+import { DEBUG_UI } from "@/lib/debug";
 
 // The launcher feed is the landing surface (App owns launcher↔reader view
 // state at "/"), so the nav is intentionally light: the brand returns home
-// (to the feed) and Mirror is the event-stream debug view.
-const NAV_ITEMS = [{ href: "/mirror", label: "Mirror" }];
+// (to the feed) and Mirror is the event-stream debug view. Mirror is a debug
+// surface, so it's hidden when DEBUG_UI is off (BEWITHME_DEBUG=0).
+const NAV_ITEMS = DEBUG_UI ? [{ href: "/mirror", label: "Mirror" }] : [];
 
 export default function NavBar() {
   const pathname = usePathname();

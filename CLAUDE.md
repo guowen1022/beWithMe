@@ -170,6 +170,7 @@ with `include_screenshot=true` are the entry points.
 | `EOU_TOKENIZER_PATH` | Path to the EOU tokenizer dir (containing `tokenizer.json`) or the file itself. Required when `EOU_MODEL_PATH` is set. |
 | `EOU_THRESHOLD` | P(end-of-turn) above which the gate commits. Default `0.55` — lower = more eager commits, higher = absorbs more disfluencies. |
 | `EOU_MAX_TOKENS` | Tail-truncate the EOU input to this many tokens. Default `256`. |
+| `BEWITHME_DEBUG` | Master switch for developer debug surfaces: the Mirror nav/page, the top-right teacher-thinking panel, and the desktop's detached Chromium DevTools window. Default `1` (on); set `0` to hide all three. `scripts/dev-desktop.sh` fans it out to the frontend as `NEXT_PUBLIC_BEWITHME_DEBUG` (inlined by `next dev` at start) and to Electron as `BEWITHME_DEBUG`. To launch clean: `BEWITHME_DEBUG=0 ./scripts/dev-desktop.sh`. |
 | `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites
