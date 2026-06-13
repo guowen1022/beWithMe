@@ -38,8 +38,10 @@ from infra.config import settings
 
 # Patterns we treat as test users by default.
 TEST_PATTERNS = (
-    "e2e-test-%",
-    "e2e-mt-%",
+    "e2e-%",            # all e2e fixtures (inbox, engagement, iact, maestro, …)
+    "debug-eng-%",      # ad-hoc engagement debug probes
+    "spine-%",          # leftover spine probes
+    "browse-phase0-%",  # leftover browse probes
     "public-create-%",
     "voice-test-%",
 )
