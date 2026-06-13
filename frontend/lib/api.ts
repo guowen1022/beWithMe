@@ -874,39 +874,3 @@ export async function speakTextStream(
   const sampleRate = Number(res.headers.get("X-Sample-Rate")) || 24000;
   return { sampleRate, reader: res.body.getReader() };
 }
-
-
-// --- Event stream (PR-7 mirror view) ---
-
-export interface StreamEvent {
-  event_id: string;
-  user_id: string;
-  ts: string;
-  valid_at: string | null;
-  source: string;
-  kind: string;
-  body: Record<string, unknown>;
-  refs: Record<string, unknown> | null;
-  schema_version: number;
-}
-
-export interface StreamQueryBody {
-  kinds?: string[];
-  sources?: string[];
-  since?: string;
-  until?: string;
-  limit?: number;
-  order?: "asc" | "desc";
-}
-
-export async function queryStream(q: StreamQueryBody = {}): Promise<StreamEvent[]> {
-  const body: StreamQueryBody = { limit: 100, order: "desc", ...q };
-  const res = await fetch(`${API_BASE}/event-stream/query`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
-  await throwIfUnknownUser(res);
-  if (!res.ok) throw new Error(`Failed to query event stream (${res.status})`);
-  return res.json();
-}
