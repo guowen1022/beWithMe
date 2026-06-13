@@ -17,6 +17,8 @@ Run standalone:
 from __future__ import annotations
 
 import asyncio
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -37,7 +39,42 @@ from services.maestro import short as _short
 from services.maestro.cache import Cache, CacheEntry, VALID_POSTURES
 
 
-app = FastAPI(title="beWithMe maestro")
+# How often the offline "prepare again after ~a day" scheduler tick runs.
+# Override (e.g. for tests/manual checks) via FEED_SCHED_INTERVAL_SECONDS.
+_SCHED_INTERVAL_SECONDS = float(os.environ.get("FEED_SCHED_INTERVAL_SECONDS", "3600"))
+
+
+async def _feed_scheduler_loop() -> None:
+    """Periodic backstop that keeps every user's feed warm offline. Each tick
+    schedules a (debounced, fire-and-forget) regenerate for users whose feed is
+    stale/empty. Never touches the client open path."""
+    while True:
+        try:
+            await asyncio.sleep(_SCHED_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            break
+        try:
+            n = await _feed.scheduler_tick()
+            if n:
+                print(f"[maestro.scheduler] scheduled regenerate for {n} user(s)", flush=True)
+        except Exception as e:
+            print(f"[maestro.scheduler] tick error: {e}", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_feed_scheduler_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="beWithMe maestro", lifespan=lifespan)
 install_event_log(app, service="maestro")
 
 
@@ -178,6 +215,16 @@ async def post_event(body: WebhookRequest) -> dict:
             error=repr(exc),
         )
         raise HTTPException(status_code=500, detail=f"handle_event failed: {exc}")
+
+    # Session end is the natural moment to prepare the next landing-feed batch
+    # while the user is idle — same event the inbox/kickoff pipeline rides on.
+    # Fire-and-forget + debounced; never affects the kickoff result or the turn.
+    if body.event.kind == "user.engagement_ended":
+        try:
+            _feed.schedule_produce(body.event.user_id)
+        except Exception as exc:
+            log_event("maestro.feed_schedule.error", error=repr(exc))
+
     return {"ok": True, "decision": result.get("decision"), "k": result.get("k", 0)}
 
 

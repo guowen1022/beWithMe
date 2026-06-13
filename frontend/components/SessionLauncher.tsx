@@ -14,15 +14,23 @@ import {
 // one to begin — selecting points the (always-running) engagement machinery
 // at that content. Cinematic dark, single aurora accent, sharp corners — see
 // app/globals.css design tokens.
+//
+// Content is prepared OFFLINE (session-end webhook + Maestro scheduler), so the
+// open path is a pure cache read: getFeed() returns instantly and never blocks
+// on the LLM. When nothing is cached yet we show instant, non-LLM starter cards
+// and quietly re-fetch (on focus) as background-produced cards land.
 
 // One-shot handoff into the Reader: CanvasCommandBar consumes these on mount.
 // SEED_KEY carries the first-turn text; SEED_AUTOSEND_KEY ("1") tells the bar
 // to fire it immediately (Begin) rather than just prefill it (start-from-scratch).
 const SEED_KEY = "bewithme_canvas_seed";
 const SEED_AUTOSEND_KEY = "bewithme_canvas_seed_autosend";
-// How many times to re-poll while the feed is still being prepared.
-const MAX_PREPARE_POLLS = 3;
-const PREPARE_POLL_MS = 4000;
+
+// After a manual "Prepare new options", the server regenerates in the
+// background. Keep the current cards visible and silently re-list a few times
+// until the fresh batch lands (or we hit the ceiling). NOT used on normal open.
+const REFRESH_POLL_MS = 5000;
+const MAX_REFRESH_POLLS = 8;
 
 function personaLabel(p: string): string {
   return p.charAt(0).toUpperCase() + p.slice(1);
@@ -34,6 +42,12 @@ function tagLabel(card: FeedCard): string {
   return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "";
 }
 
+const gridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+  gap: 16,
+};
+
 const ghostButton: CSSProperties = {
   fontFamily: "var(--bw-font-mono)",
   fontSize: 12,
@@ -43,6 +57,58 @@ const ghostButton: CSSProperties = {
   border: "1px solid var(--bw-border)",
   borderRadius: 0,
   padding: "8px 14px",
+  cursor: "pointer",
+};
+
+const cardShell: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  background: "var(--bw-surface)",
+  border: "1px solid var(--bw-border)",
+  borderTop: "2px solid var(--bw-accent)",
+  padding: "18px 18px 16px",
+  minHeight: 190,
+};
+
+const tagChip: CSSProperties = {
+  fontFamily: "var(--bw-font-mono)",
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: "0.12em",
+  color: "var(--bw-accent)",
+  background: "var(--bw-accent-soft)",
+  border: "1px solid color-mix(in oklab, var(--bw-accent) 22%, transparent)",
+  padding: "2px 8px",
+};
+
+const cardTitle: CSSProperties = {
+  fontFamily: "var(--bw-font-sans)",
+  fontSize: 17,
+  fontWeight: 700,
+  letterSpacing: "-0.02em",
+  color: "var(--bw-ink)",
+  lineHeight: 1.25,
+  margin: 0,
+};
+
+const cardBody: CSSProperties = {
+  fontFamily: "var(--bw-font-sans)",
+  fontSize: 13.5,
+  lineHeight: 1.6,
+  color: "var(--bw-ink-muted)",
+  margin: "10px 0 0",
+  flex: 1,
+};
+
+const primaryButton: CSSProperties = {
+  fontFamily: "var(--bw-font-sans)",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#fff",
+  background: "var(--bw-accent)",
+  border: "1px solid var(--bw-accent)",
+  borderRadius: 0,
+  padding: "8px 18px",
   cursor: "pointer",
 };
 
@@ -64,33 +130,10 @@ function Card({
       data-card-id={card.id}
       data-persona={card.source_persona}
       data-posture={card.posture}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bw-surface)",
-        border: "1px solid var(--bw-border)",
-        borderTop: "2px solid var(--bw-accent)",
-        padding: "18px 18px 16px",
-        minHeight: 190,
-      }}
+      style={cardShell}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8 }}>
-        {tag && (
-          <span
-            style={{
-              fontFamily: "var(--bw-font-mono)",
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.12em",
-              color: "var(--bw-accent)",
-              background: "var(--bw-accent-soft)",
-              border: "1px solid color-mix(in oklab, var(--bw-accent) 22%, transparent)",
-              padding: "2px 8px",
-            }}
-          >
-            {tag}
-          </span>
-        )}
+        {tag && <span style={tagChip}>{tag}</span>}
         <span
           style={{
             fontFamily: "var(--bw-font-mono)",
@@ -104,50 +147,15 @@ function Card({
         </span>
       </div>
 
-      <h3
-        style={{
-          fontFamily: "var(--bw-font-sans)",
-          fontSize: 17,
-          fontWeight: 700,
-          letterSpacing: "-0.02em",
-          color: "var(--bw-ink)",
-          lineHeight: 1.25,
-          margin: 0,
-        }}
-      >
-        {card.title}
-      </h3>
-
-      <p
-        style={{
-          fontFamily: "var(--bw-font-sans)",
-          fontSize: 13.5,
-          lineHeight: 1.6,
-          color: "var(--bw-ink-muted)",
-          margin: "10px 0 0",
-          flex: 1,
-        }}
-      >
-        {card.opening}
-      </p>
+      <h3 style={cardTitle}>{card.title}</h3>
+      <p style={cardBody}>{card.opening}</p>
 
       <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
         <button
           data-testid="feed-card-begin"
           disabled={busy}
           onClick={() => onBegin(card)}
-          style={{
-            fontFamily: "var(--bw-font-sans)",
-            fontSize: 13,
-            fontWeight: 600,
-            color: "#fff",
-            background: "var(--bw-accent)",
-            border: "1px solid var(--bw-accent)",
-            borderRadius: 0,
-            padding: "8px 18px",
-            cursor: busy ? "default" : "pointer",
-            opacity: busy ? 0.6 : 1,
-          }}
+          style={{ ...primaryButton, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
         >
           Begin
         </button>
@@ -164,6 +172,37 @@ function Card({
   );
 }
 
+// Instant, non-LLM cold-start cards. Shown only when nothing is cached yet;
+// real personalized cards replace them once the offline producer lands a batch.
+function StarterCard({
+  tag,
+  title,
+  body,
+  cta,
+  onAct,
+}: {
+  tag: string;
+  title: string;
+  body: string;
+  cta: string;
+  onAct: () => void;
+}) {
+  return (
+    <div data-testid="feed-starter-card" data-starter={tag.toLowerCase()} style={cardShell}>
+      <div style={{ display: "flex", marginBottom: 12 }}>
+        <span style={tagChip}>{tag}</span>
+      </div>
+      <h3 style={cardTitle}>{title}</h3>
+      <p style={cardBody}>{body}</p>
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <button data-testid="feed-starter-begin" onClick={onAct} style={primaryButton}>
+          {cta}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function SessionLauncher({
   onEnterReader,
 }: {
@@ -173,30 +212,24 @@ export default function SessionLauncher({
 }) {
   const [cards, setCards] = useState<FeedCard[]>([]);
   const [loading, setLoading] = useState(true);
-  const [preparing, setPreparing] = useState(false);
+  const [hasResumable, setHasResumable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const pollsRef = useRef(0);
   const startedRef = useRef(false);
+  const refreshStartRef = useRef(0);
 
+  // Pure cache read — fast, no LLM. Does NOT flip `loading` true on re-fetch, so
+  // focus/refresh re-lists update the grid in place without a blank flash.
   const load = useCallback(async () => {
     try {
       setError(null);
       const resp = await getFeed();
       setCards(resp.cards);
-      // Empty + stale → the Maestro just kicked off async production; poll a
-      // few times so freshly-produced cards appear without a manual refresh.
-      if (resp.cards.length === 0 && resp.stale && pollsRef.current < MAX_PREPARE_POLLS) {
-        pollsRef.current += 1;
-        setPreparing(true);
-        window.setTimeout(load, PREPARE_POLL_MS);
-      } else {
-        setPreparing(false);
-      }
+      setHasResumable(Boolean(resp.has_resumable));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load your feed");
-      setPreparing(false);
     } finally {
       setLoading(false);
     }
@@ -207,6 +240,46 @@ export default function SessionLauncher({
     startedRef.current = true;
     load();
   }, [load]);
+
+  // Surface background-prepared cards: re-list whenever the window regains
+  // focus (content was likely prepared offline since we last looked).
+  useEffect(() => {
+    const onVisible = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        load();
+      }
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [load]);
+
+  // While a manual refresh is in flight, silently re-list until the fresh batch
+  // lands (a card newer than when we asked) or we hit the ceiling. Current cards
+  // stay visible the whole time — no blank spinner.
+  useEffect(() => {
+    if (!refreshing) return;
+    let tries = 0;
+    const id = window.setInterval(async () => {
+      tries += 1;
+      try {
+        const resp = await getFeed();
+        setCards(resp.cards);
+        setHasResumable(Boolean(resp.has_resumable));
+        const landed = resp.cards.some(
+          (c) => c.created_at && new Date(c.created_at).getTime() >= refreshStartRef.current,
+        );
+        if (landed) setRefreshing(false);
+      } catch {
+        // Keep trying until the ceiling; transient failures are non-fatal.
+      }
+      if (tries >= MAX_REFRESH_POLLS) setRefreshing(false);
+    }, REFRESH_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshing]);
 
   const handleBegin = async (card: FeedCard) => {
     if (busy) return;
@@ -237,17 +310,14 @@ export default function SessionLauncher({
   };
 
   const handlePrepareNew = async () => {
-    if (busy) return;
-    setBusy(true);
-    setPreparing(true);
-    pollsRef.current = 0;
+    if (busy || refreshing) return;
+    setRefreshing(true);
+    refreshStartRef.current = Date.now();
     try {
       await refreshFeed();
     } catch {
-      // Non-fatal — load() below surfaces whatever exists.
+      // Non-fatal — the silent poll / focus refetch still surfaces updates.
     }
-    setBusy(false);
-    await load();
   };
 
   const startFromScratch = () => {
@@ -258,7 +328,49 @@ export default function SessionLauncher({
     onEnterReader(false);
   };
 
-  const showEmpty = !loading && !preparing && cards.length === 0;
+  const handleContinue = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SEED_KEY, "Let's continue where we left off.");
+      window.localStorage.setItem(SEED_AUTOSEND_KEY, "1");
+    }
+    onEnterReader(true);
+  };
+
+  const starters: {
+    key: string;
+    tag: string;
+    title: string;
+    body: string;
+    cta: string;
+    onAct: () => void;
+  }[] = [
+    ...(hasResumable
+      ? [{
+          key: "continue",
+          tag: "Continue",
+          title: "Pick up where you left off",
+          body: "Jump back into your last thread.",
+          cta: "Continue",
+          onAct: handleContinue,
+        }]
+      : []),
+    {
+      key: "explore",
+      tag: "Explore",
+      title: "Browse a new topic",
+      body: "Start a fresh thread on anything you're curious about.",
+      cta: "Begin",
+      onAct: startFromScratch,
+    },
+    {
+      key: "paste",
+      tag: "Paste",
+      title: "Drop in something you're reading",
+      body: "Paste a passage and we'll read it together.",
+      cta: "Begin",
+      onAct: startFromScratch,
+    },
+  ];
 
   return (
     <div
@@ -332,9 +444,9 @@ export default function SessionLauncher({
         )}
 
         <div style={{ marginTop: 40 }}>
-          {loading || preparing ? (
+          {loading ? (
             <div
-              data-testid="feed-preparing"
+              data-testid="feed-loading"
               style={{
                 textAlign: "center",
                 color: "var(--bw-ink-muted)",
@@ -343,42 +455,10 @@ export default function SessionLauncher({
                 padding: "48px 0",
               }}
             >
-              {preparing ? "Preparing your options…" : "Loading…"}
+              Loading…
             </div>
-          ) : showEmpty ? (
-            <div
-              data-testid="feed-empty"
-              style={{ textAlign: "center", padding: "32px 0" }}
-            >
-              <p style={{ color: "var(--bw-ink-muted)", fontSize: 14, margin: "0 0 18px" }}>
-                Nothing prepared yet — tell me what you want to learn and we&apos;ll start fresh.
-              </p>
-              <button
-                onClick={startFromScratch}
-                style={{
-                  fontFamily: "var(--bw-font-sans)",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: "#fff",
-                  background: "var(--bw-accent)",
-                  border: "1px solid var(--bw-accent)",
-                  borderRadius: 0,
-                  padding: "10px 22px",
-                  cursor: "pointer",
-                }}
-              >
-                Start from scratch
-              </button>
-            </div>
-          ) : (
-            <div
-              data-testid="feed-grid"
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-                gap: 16,
-              }}
-            >
+          ) : cards.length > 0 ? (
+            <div data-testid="feed-grid" style={gridStyle}>
               {cards.map((card) => (
                 <Card
                   key={card.id}
@@ -388,6 +468,32 @@ export default function SessionLauncher({
                   busy={busy}
                 />
               ))}
+            </div>
+          ) : (
+            <div data-testid="feed-starters">
+              <div style={gridStyle}>
+                {starters.map((s) => (
+                  <StarterCard
+                    key={s.key}
+                    tag={s.tag}
+                    title={s.title}
+                    body={s.body}
+                    cta={s.cta}
+                    onAct={s.onAct}
+                  />
+                ))}
+              </div>
+              <p
+                style={{
+                  textAlign: "center",
+                  color: "var(--bw-ink-faint)",
+                  fontFamily: "var(--bw-font-mono)",
+                  fontSize: 12,
+                  margin: "20px 0 0",
+                }}
+              >
+                · lining up personalized threads…
+              </p>
             </div>
           )}
         </div>
@@ -401,8 +507,8 @@ export default function SessionLauncher({
               marginTop: 36,
             }}
           >
-            <button onClick={handlePrepareNew} disabled={busy || preparing} style={ghostButton}>
-              ↻ Prepare new options
+            <button onClick={handlePrepareNew} disabled={busy || refreshing} style={ghostButton}>
+              {refreshing ? "Preparing…" : "↻ Prepare new options"}
             </button>
             <button onClick={startFromScratch} style={ghostButton}>
               ✎ Start from scratch

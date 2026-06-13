@@ -171,6 +171,7 @@ with `include_screenshot=true` are the entry points.
 | `EOU_THRESHOLD` | P(end-of-turn) above which the gate commits. Default `0.55` — lower = more eager commits, higher = absorbs more disfluencies. |
 | `EOU_MAX_TOKENS` | Tail-truncate the EOU input to this many tokens. Default `256`. |
 | `BEWITHME_DEBUG` | Master switch for developer debug surfaces: the Mirror nav/page, the top-right teacher-thinking panel, and the desktop's detached Chromium DevTools window. Default `1` (on); set `0` to hide all three. `scripts/dev-desktop.sh` fans it out to the frontend as `NEXT_PUBLIC_BEWITHME_DEBUG` (inlined by `next dev` at start) and to Electron as `BEWITHME_DEBUG`. To launch clean: `BEWITHME_DEBUG=0 ./scripts/dev-desktop.sh`. |
+| `FEED_SCHED_INTERVAL_SECONDS` | How often the Maestro's offline feed scheduler tick runs (seconds). Default `3600`. The landing feed is prepared *offline* — never on app open: the open path (`GET /api/feed`) is a pure cache read, and (re)generation is triggered by the session-end webhook (`user.engagement_ended`) plus this periodic tick (regenerates feeds older than `FEED_STALE_AFTER` ≈ 24h, debounced by `MIN_REGEN_INTERVAL` ≈ 2h; both are code constants in `services/maestro/feed.py`). Lower this to exercise the scheduler in dev. |
 | `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites

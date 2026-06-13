@@ -208,6 +208,19 @@ async def list_candidates(
     return [_to_dto(r) for r in rows]
 
 
+@router.get("/feed-candidates/users", response_model=list[str])
+async def list_feed_user_ids(
+    db: AsyncSession = Depends(get_db),
+):
+    """Distinct user_ids that have any feed-candidate row. Internal — the Maestro
+    scheduler uses it to know whose feed to keep warm. Not user-scoped (it's an
+    enumeration), so it takes no X-User-Id."""
+    rows = (await db.execute(
+        select(FeedCandidate.user_id).distinct()
+    )).scalars().all()
+    return [str(u) for u in rows]
+
+
 async def _load(db: AsyncSession, candidate_id: UUID, user_id: UUID) -> FeedCandidate:
     row = (await db.execute(
         select(FeedCandidate).where(
