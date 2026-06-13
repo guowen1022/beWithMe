@@ -27,8 +27,8 @@ export default function App() {
   // welcome card. "Start from scratch" / go-home leave this false.
   const [autostart, setAutostart] = useState(false);
 
-  // NavBar owns the user-switch UI and dispatches this event when the user
-  // clicks "Switch". Reset our local state so we fall back to UserSelector.
+  // The app_operator persona's `switch_user` app-action dispatches this event
+  // (via DynamicSurface's SSE handler). Reset local state → UserSelector.
   useEffect(() => {
     function onUserChanged() {
       setUserId(null);
@@ -43,7 +43,7 @@ export default function App() {
       window.removeEventListener("bewithme:user-changed", onUserChanged);
   }, []);
 
-  // NavBar's brand click dispatches this to return to the launcher feed.
+  // The app_operator `go_home` app-action dispatches this to return to the feed.
   useEffect(() => {
     function onGoHome() {
       setGoalMode(false);
@@ -86,7 +86,7 @@ export default function App() {
   function handleUserSelected(id: string) {
     // Don't dispatch `bewithme:user-changed` here — that event means
     // "switch / sign out", and our own listener resets userId back to
-    // null on it. NavBar dispatches it when the user clicks "Switch".
+    // null on it. The app_operator `switch_user` action dispatches it.
     setUserId(id);
   }
 

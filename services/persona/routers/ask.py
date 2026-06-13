@@ -21,6 +21,7 @@ from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
+from persona.app_operator import respond as app_operator_respond
 from workshop.canvas.tools.request_ui_block import request_ui_block
 from workshop.canvas.tools.mount_template import mount_template
 from infra.templates import list_templates, load_template
@@ -229,6 +230,60 @@ async def _block_trigger_stream(description: str, user_id: UUID):
 
 
 
+async def _app_operator_stream(question: str, user_id: UUID):
+    """Synthetic SSE flow for an app_operator turn.
+
+    Routes the message to the app_operator persona (the "app actions"
+    persona: switch_user, go_home, show_mirror) instead of the teacher.
+    The persona picks one tool and fires it; the visible effect is the
+    app-action SSE event (or the mounted Mirror) landing on the canvas.
+    Emits status → token (persona stream) → answer, matching the shape the
+    canvas command bar consumes. Like `/block`, this stores no Interaction —
+    it's a tool invocation, not a Q&A turn.
+    """
+    def fmt(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    yield fmt({"type": "status", "status": "thinking", "detail": "delegating to app_operator"})
+    answer_parts: list[str] = []
+    tools_called: list[str] = []
+    try:
+        async for evt in app_operator_respond(question, user_id):
+            kind = evt.get("kind")
+            if kind == "delta":
+                text = evt.get("text", "")
+                if text:
+                    answer_parts.append(text)
+                    yield fmt({"type": "token", "text": text})
+            elif kind == "tool_call":
+                name = evt.get("name") or ""
+                if name:
+                    tools_called.append(name)
+                    yield fmt({"type": "status", "status": "acting", "detail": name})
+        answer = "".join(answer_parts).strip() or (
+            ("Done: " + ", ".join(tools_called)) if tools_called
+            else "No matching app action."
+        )
+        title = ("app_operator: " + ", ".join(tools_called)) if tools_called else "app_operator"
+        yield fmt({"type": "title", "title": title})
+        yield fmt({
+            "type": "answer",
+            "answer": answer,
+            "title": title,
+            "related_interaction_ids": [],
+        })
+    except Exception as e:
+        err = f"app_operator failed: {e}"
+        print(f"[ask/app-operator] {err}", flush=True)
+        yield fmt({"type": "token", "text": err})
+        yield fmt({
+            "type": "answer",
+            "answer": err,
+            "title": "app_operator: error",
+            "related_interaction_ids": [],
+        })
+
+
 @router.post("/ask/stream")
 async def ask_stream(
     body: AskRequest,
@@ -273,6 +328,16 @@ async def ask_stream(
         description = (trigger.group(1) or "").strip()
         return StreamingResponse(
             _block_trigger_stream(description, user_id),
+            media_type="text/event-stream",
+        )
+
+    # Route app-level requests to the app_operator persona (switch user,
+    # go home, show mirror) instead of the teacher. Like the `/block`
+    # shortcut above, this is an early return — not a teacher Q&A turn, so
+    # it skips engagement emission, channel resolution, and context assembly.
+    if getattr(body, "addressee", None) == "app_operator":
+        return StreamingResponse(
+            _app_operator_stream(question, user_id),
             media_type="text/event-stream",
         )
 

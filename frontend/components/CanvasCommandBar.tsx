@@ -21,10 +21,11 @@ const ADDRESSEE_KEY = "bewithme_canvas_addressee";
 const SEED_KEY = "bewithme_canvas_seed";
 const SEED_AUTOSEND_KEY = "bewithme_canvas_seed_autosend";
 
-// Only two valid pairs are reachable: user→teacher (normal flow, runs the
-// LLM intent router) and teacher→frontend_engineer (test mode, bypasses
-// the router). The two selects are linked — changing one snaps the other
-// to its only valid partner.
+// Reachable pairs: user→teacher (normal flow, runs the LLM intent router),
+// user→app_operator ("app actions": switch user / go home / show mirror),
+// and teacher→frontend_engineer (test mode, bypasses the router). Changing
+// the FROM select snaps TO to that sender's default; pick app_operator
+// directly in the TO select.
 const FROM_OPTIONS: { value: Sender; label: string }[] = [
   { value: "user", label: "user" },
   { value: "teacher", label: "teacher" },
@@ -32,11 +33,14 @@ const FROM_OPTIONS: { value: Sender; label: string }[] = [
 
 const TO_OPTIONS: { value: Addressee; label: string }[] = [
   { value: "teacher", label: "teacher" },
+  { value: "app_operator", label: "app_operator" },
   { value: "frontend_engineer", label: "frontend_engineer" },
 ];
 
 function senderForAddressee(a: Addressee): Sender {
-  return a === "teacher" ? "user" : "teacher";
+  // frontend_engineer is addressed by the teacher (test mode); teacher and
+  // app_operator are addressed by the user.
+  return a === "frontend_engineer" ? "teacher" : "user";
 }
 
 function addresseeForSender(s: Sender): Addressee {
@@ -86,7 +90,7 @@ export default function CanvasCommandBar() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem(ADDRESSEE_KEY);
-    if (stored === "teacher" || stored === "frontend_engineer") {
+    if (stored === "teacher" || stored === "frontend_engineer" || stored === "app_operator") {
       setAddressee(stored);
     }
   }, []);
@@ -152,7 +156,7 @@ export default function CanvasCommandBar() {
     if (!command || busy) return;
     setBusy(true);
     setError(null);
-    setDebugText(`> ${addressee === "frontend_engineer" ? "engineer" : "teacher"} ← ${command}\n`);
+    setDebugText(`> ${addressee === "frontend_engineer" ? "engineer" : addressee} ← ${command}\n`);
     const submitT0 = performance.now();
     logEvent("ui.ask.submit", {
       modality: "text",

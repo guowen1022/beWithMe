@@ -177,6 +177,23 @@ class VoicePlay(BaseModel):
     lang: Optional[str] = None
 
 
+class AppAction(BaseModel):
+    """SSE event: 'perform an app-level navigation / state change'.
+
+    Sibling to BlockAction, but app-scoped rather than block-scoped: it
+    drives the whole UI shell (which user is signed in, which surface is
+    shown) instead of one block on the canvas. Emitted by the app_operator
+    persona's "app actions" tools; the frontend's DynamicSurface handler
+    re-dispatches it onto the `bewithme:*` window events App.tsx listens
+    for. `target` is action-specific (e.g. a user_id for switch_user).
+    """
+    model_config = _CFG
+    type: Literal["app-action"] = "app-action"
+    action: Literal["switch_user", "go_home"]
+    target: Optional[str] = None
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
 __all__ = [
     "DeviceClass",
     "DEVICE_GRID_BOUNDS",
@@ -190,4 +207,5 @@ __all__ = [
     "BlockAction",
     "TeacherThinking",
     "VoicePlay",
+    "AppAction",
 ]

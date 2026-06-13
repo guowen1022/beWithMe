@@ -103,8 +103,10 @@ export interface AskRequest {
   prompt_version?: "v1" | "v2";
   /** Routing override. Default "teacher" runs the LLM intent router.
    *  "frontend_engineer" bypasses the router and goes straight to the
-   *  engineer agent — used by the canvas test-mode toggle. */
-  addressee?: "teacher" | "frontend_engineer";
+   *  engineer agent (canvas test-mode toggle). "app_operator" routes to the
+   *  app_operator persona, whose "app actions" change the app shell (switch
+   *  user, go home, show mirror) rather than answer a question. */
+  addressee?: "teacher" | "frontend_engineer" | "app_operator";
 }
 
 export interface AskResponse {
@@ -233,7 +235,8 @@ export type DynamicEvent =
   | { type: "block-error"; block_id: string; error: string }
   | { type: "block-action"; block_id: string; action: "highlight" | "focus" | "scroll_to"; options?: Record<string, unknown> }
   | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null }
-  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string; text?: string | null; tool_calls?: { name?: string; arguments?: Record<string, unknown> }[]; model?: string | null; provider?: string | null; prompt_tokens?: number | null; completion_tokens?: number | null; latency_ms?: number | null };
+  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string; text?: string | null; tool_calls?: { name?: string; arguments?: Record<string, unknown> }[]; model?: string | null; provider?: string | null; prompt_tokens?: number | null; completion_tokens?: number | null; latency_ms?: number | null }
+  | { type: "app-action"; action: "switch_user" | "go_home"; target?: string | null; options?: Record<string, unknown> };
 
 export async function subscribeToDynamicStream(
   onEvent: (event: DynamicEvent) => void,

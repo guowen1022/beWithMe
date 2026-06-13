@@ -11,7 +11,7 @@ import { useDeviceClass } from "@/lib/device";
 import { GRID_SIZES, scaleGridForDevice, type GridCoords } from "@/lib/gridConfig";
 import { dragController, type DragSnapshot } from "@/lib/blockLayout";
 import { systemBlocks, isSystemBlockId } from "@/lib/systemBlocks";
-import { fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
+import { clearCurrentUserId, fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
 import { DEBUG_UI } from "@/lib/debug";
@@ -167,6 +167,21 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
           requestAnimationFrame(apply);
         } else {
           apply();
+        }
+      } else if (event.type === "app-action") {
+        // App-level (not block-level) command from the app_operator persona.
+        // Re-dispatch onto the window events App.tsx already owns, so the
+        // shell's user/view state machine stays the single source of truth.
+        // (Delivered only while the canvas is mounted — the reader — which is
+        // exactly where "switch user" / "go home" are wanted.)
+        if (event.action === "switch_user") {
+          // Sign out → UserSelector, matching the old NavBar "Switch" button.
+          // Direct switch-to-target would need an App.tsx change; the
+          // AppAction.target field is reserved for that follow-up.
+          clearCurrentUserId();
+          window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
+        } else if (event.action === "go_home") {
+          window.dispatchEvent(new CustomEvent("bewithme:go-home"));
         }
       }
       // block-error / open / unknown: ignore on the surface; the bus and

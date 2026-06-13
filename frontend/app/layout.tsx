@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Onest, Fraunces, JetBrains_Mono } from "next/font/google";
-import NavBar from "@/components/NavBar";
 import SpeakerSink from "@/components/SpeakerSink";
 import TeacherCaption from "@/components/TeacherCaption";
 import DesktopBrowserPerception from "@/components/DesktopBrowserPerception";
@@ -53,7 +52,9 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${onest.variable} ${fraunces.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="h-full flex flex-col bg-[var(--bw-void)] text-[var(--bw-ink)]">
-        <NavBar />
+        {/* No chrome above the canvas — everything-on-canvas. The old NavBar's
+            actions (switch user, go home, mirror) are now app_operator tools
+            invoked from the canvas; see DynamicSurface's `app-action` handler. */}
         <main className="flex-1 flex flex-col min-h-0">{children}</main>
         <SpeakerSink />
         <TeacherCaption />
