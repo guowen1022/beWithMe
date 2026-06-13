@@ -19,6 +19,11 @@ import { startWebViewShim } from "./web_view_shim";
 nativeTheme.themeSource = "light";
 
 const DEV = process.env.BEWITHME_DEV === "1";
+// Master switch for developer debug surfaces (shared with the frontend's
+// NEXT_PUBLIC_BEWITHME_DEBUG; both fanned out from BEWITHME_DEBUG by
+// scripts/dev-desktop.sh). Default ON — only an explicit "0" disables.
+// Here it gates the detached Chromium DevTools window.
+const DEBUG = process.env.BEWITHME_DEBUG !== "0";
 const SHELL_URL = process.env.SHELL_URL || "http://localhost:3000/";
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -163,7 +168,7 @@ function createWindow() {
     console.error("shell loadURL failed", err),
   );
 
-  if (DEV) {
+  if (DEV && DEBUG) {
     view.webContents.openDevTools({ mode: "detach" });
   }
 

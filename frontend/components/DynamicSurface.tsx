@@ -11,9 +11,10 @@ import { useDeviceClass } from "@/lib/device";
 import { GRID_SIZES, scaleGridForDevice, type GridCoords } from "@/lib/gridConfig";
 import { dragController, type DragSnapshot } from "@/lib/blockLayout";
 import { systemBlocks, isSystemBlockId } from "@/lib/systemBlocks";
-import { fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
+import { clearCurrentUserId, fetchCanvas, mountTemplate, subscribeToDynamicStream } from "@/lib/api";
 import { loadPdfjs } from "@/lib/pdfjs-loader";
 import { dynamicBlockRegistry } from "@/lib/dynamicBlockRegistry";
+import { DEBUG_UI } from "@/lib/debug";
 
 // Built-in blocks that share the same draggable grid as source-eval blocks.
 // Their ids are namespaced `system:*` so the existing teacher SSE
@@ -94,16 +95,22 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
         for (const b of blocks) {
           sourceRegistry.mount({ id: b.id, source: b.source });
         }
-        if (blocks.length === 0 && !suppressWelcome) {
-          // Mount the welcome card. The mount fans out via SSE — the
-          // useEffect below subscribes to that stream and will pick up
-          // the resulting ui-update mount. Best-effort: if the POST
-          // fails (e.g. backend unreachable) the canvas just stays
-          // empty, which is the prior behavior. Skipped when the feed
-          // launcher's "Begin" auto-sends a seeded first turn — that turn
-          // starts the thread, so the welcome card would only be noise.
-          mountTemplate({ template: "lets_begin" }).catch((err) =>
-            console.warn("[dynamic-surface] lets_begin auto-mount failed", err),
+        if (blocks.length === 0) {
+          // Empty canvas → bring up the voice input so the user can talk to
+          // the teacher. The mount fans out via SSE — the useEffect below
+          // subscribes to that stream and picks up the resulting ui-update.
+          // Best-effort: if the POST fails (e.g. backend unreachable) the
+          // canvas just stays empty, which is the prior behavior.
+          //
+          // Normal entry shows the `lets_begin` welcome CTA, which mounts
+          // `ambient_mic` on click. The feed "Begin" path auto-sends a
+          // seeded first turn, so that CTA is redundant — but the user still
+          // needs the mic, so mount `ambient_mic` directly. Without this,
+          // selecting a feed topic leaves only the text command bar and no
+          // way to *speak* to the teacher.
+          const template = suppressWelcome ? "ambient_mic" : "lets_begin";
+          mountTemplate({ template }).catch((err) =>
+            console.warn(`[dynamic-surface] ${template} auto-mount failed`, err),
           );
         }
       })
@@ -160,6 +167,21 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
           requestAnimationFrame(apply);
         } else {
           apply();
+        }
+      } else if (event.type === "app-action") {
+        // App-level (not block-level) command from the app_operator persona.
+        // Re-dispatch onto the window events App.tsx already owns, so the
+        // shell's user/view state machine stays the single source of truth.
+        // (Delivered only while the canvas is mounted — the reader — which is
+        // exactly where "switch user" / "go home" are wanted.)
+        if (event.action === "switch_user") {
+          // Sign out → UserSelector, matching the old NavBar "Switch" button.
+          // Direct switch-to-target would need an App.tsx change; the
+          // AppAction.target field is reserved for that follow-up.
+          clearCurrentUserId();
+          window.dispatchEvent(new CustomEvent("bewithme:user-changed"));
+        } else if (event.action === "go_home") {
+          window.dispatchEvent(new CustomEvent("bewithme:go-home"));
         }
       }
       // block-error / open / unknown: ignore on the surface; the bus and
@@ -234,6 +256,9 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
 
       {/* Built-in blocks — share the grid + drag with source-eval blocks. */}
       {mode === "fullscreen" && SYSTEM_BLOCKS.map((b) => {
+        // The teacher-thinking panel is a debug surface; hide it when
+        // DEBUG_UI is off (BEWITHME_DEBUG=0). The command bar is core UI.
+        if (b.id === "system:teacher-thinking" && !DEBUG_UI) return null;
         if (systemBlocks.isHidden(b.id)) return null;
         const Comp = b.Component;
         return (
