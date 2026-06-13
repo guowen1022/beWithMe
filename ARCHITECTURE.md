@@ -128,7 +128,7 @@ infra is the toolbox everyone can use. Stateless utilities + the **shared persis
 - `config.py` — `DATABASE_URL`, Ollama URL, embedding model, LLM provider env
 - `contracts/` — DTOs shared on the wire between domains over HTTP
 - `hlr.py` — half-life regression math
-- `model/` — LLM provider facade (deepseek + minimax)
+- `model/` — LLM provider facade (deepseek + minimax); `agent_loop.py` is the generic tool-execution loop shared by personas (relocated here from `persona/teacher/tools/loop.py`, which now re-exports it so a second persona can drive the loop without crossing the persona-to-persona import boundary)
 - `rag/embedding.py` — Ollama embeddings
 - `tools/web_fetch.py` — Playwright + trafilatura helper
 
