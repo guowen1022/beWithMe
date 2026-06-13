@@ -302,6 +302,13 @@ class SiliconBrainClient:
         resp.raise_for_status()
         return [FeedCandidateDTO.model_validate(x) for x in resp.json()]
 
+    async def list_feed_user_ids(self) -> list[UUID]:
+        """Distinct user_ids that have any feed candidate — for the Maestro
+        scheduler. Internal enumeration, not user-scoped."""
+        resp = await self._http.get("/api/feed-candidates/users")
+        resp.raise_for_status()
+        return [UUID(x) for x in resp.json()]
+
     async def select_feed_candidate(
         self, user_id: UUID, candidate_id: UUID,
     ) -> FeedCandidateDTO:

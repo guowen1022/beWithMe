@@ -91,13 +91,18 @@ def test_saturation_stub_returns_neutral_weight():
 
 
 class _FakeClient:
-    def __init__(self, cards):
+    def __init__(self, cards, *, stream_rows=None):
         self._cards = cards
+        self._stream_rows = stream_rows or []
         self.selected = None
         self.dismissed = None
+        self.closed = False
 
     async def list_feed_candidates(self, user_id, *, status=None, source_persona=None, limit=50):
         return list(self._cards)
+
+    async def query_stream(self, user_id, q):
+        return list(self._stream_rows)
 
     async def select_feed_candidate(self, user_id, candidate_id):
         self.selected = candidate_id
@@ -108,46 +113,90 @@ class _FakeClient:
         self.dismissed = candidate_id
         return _dto(id=candidate_id, status="dismissed")
 
+    async def aclose(self):
+        self.closed = True
 
-def test_assemble_blends_and_is_not_stale_with_fresh_cards(monkeypatch):
-    produced = []
-    async def _fake_notify(user_id, *, wait):
-        produced.append((user_id, wait))
-    monkeypatch.setattr(_feed, "_notify_produce", _fake_notify)
+
+def test_assemble_blends_and_is_pure_read(monkeypatch):
+    # The open path must NEVER trigger generation — content is prepared offline.
+    triggered = []
+    monkeypatch.setattr(_feed, "schedule_produce", lambda *a, **k: triggered.append(a))
 
     cards = [_dto(intra_rank=0.3), _dto(intra_rank=0.8)]
     client = _FakeClient(cards)
     out = asyncio.run(_feed.assemble(client, uuid4(), now=_NOW))
 
     assert out["stale"] is False
-    assert produced == []  # fresh → no regeneration
+    assert triggered == []  # no LLM / no produce on open
     assert [c["blended_score"] for c in out["cards"]] == [0.8, 0.3]
+    assert out["has_resumable"] is False  # empty stream
 
 
-def test_assemble_empty_is_stale_and_triggers_async_produce(monkeypatch):
-    produced = []
-    async def _fake_notify(user_id, *, wait):
-        produced.append((user_id, wait))
-    monkeypatch.setattr(_feed, "_notify_produce", _fake_notify)
+def test_assemble_empty_is_stale_but_does_not_trigger(monkeypatch):
+    triggered = []
+    monkeypatch.setattr(_feed, "schedule_produce", lambda *a, **k: triggered.append(a))
 
     client = _FakeClient([])
-    uid = uuid4()
-    out = asyncio.run(_feed.assemble(client, uid, now=_NOW))
+    out = asyncio.run(_feed.assemble(client, uuid4(), now=_NOW))
 
     assert out["cards"] == []
     assert out["stale"] is True
-    assert produced == [(uid, False)]  # fire-and-forget regen
+    assert triggered == []  # the offline producer handles empty, not the open path
 
 
-def test_assemble_stale_when_newest_card_too_old(monkeypatch):
-    monkeypatch.setattr(_feed, "_notify_produce", lambda *a, **k: _noop())
+def test_assemble_reports_resumable_from_stream():
+    client = _FakeClient([_dto()], stream_rows=[object()])
+    out = asyncio.run(_feed.assemble(client, uuid4(), now=_NOW))
+    assert out["has_resumable"] is True
+
+
+def test_assemble_stale_when_newest_card_too_old():
     old = _dto(created_at=_NOW - _feed.FEED_STALE_AFTER - timedelta(hours=1))
     out = asyncio.run(_feed.assemble(_FakeClient([old]), uuid4(), now=_NOW))
     assert out["stale"] is True
 
 
-async def _noop():
-    return None
+# --- offline produce trigger (debounce + scheduler) ------------------------
+
+
+def test_should_regen_true_when_empty():
+    assert asyncio.run(_feed._should_regen(_FakeClient([]), uuid4(), now=_NOW)) is True
+
+
+def test_should_regen_false_when_within_interval():
+    fresh = _dto(created_at=_NOW - (_feed.MIN_REGEN_INTERVAL / 2))
+    assert asyncio.run(_feed._should_regen(_FakeClient([fresh]), uuid4(), now=_NOW)) is False
+
+
+def test_should_regen_true_when_past_interval():
+    old = _dto(created_at=_NOW - _feed.MIN_REGEN_INTERVAL - timedelta(minutes=1))
+    assert asyncio.run(_feed._should_regen(_FakeClient([old]), uuid4(), now=_NOW)) is True
+
+
+def test_scheduler_tick_schedules_only_stale_users(monkeypatch):
+    stale_uid = uuid4()
+    fresh_uid = uuid4()
+    feeds = {
+        stale_uid: [_dto(created_at=_NOW - _feed.FEED_STALE_AFTER - timedelta(hours=1))],
+        fresh_uid: [_dto(created_at=_NOW)],
+    }
+
+    class _SchedClient:
+        async def list_feed_user_ids(self):
+            return [stale_uid, fresh_uid]
+        async def list_feed_candidates(self, user_id, *, status=None, source_persona=None, limit=50):
+            return feeds[user_id]
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(_feed, "SiliconBrainClient", lambda: _SchedClient())
+    scheduled = []
+    monkeypatch.setattr(_feed, "schedule_produce", lambda uid, **k: scheduled.append(uid))
+
+    n = asyncio.run(_feed.scheduler_tick(now=_NOW))
+
+    assert n == 1
+    assert scheduled == [stale_uid]
 
 
 # --- select ----------------------------------------------------------------

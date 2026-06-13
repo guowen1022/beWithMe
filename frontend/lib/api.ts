@@ -656,6 +656,9 @@ export interface FeedCard {
 export interface FeedResponse {
   cards: FeedCard[];
   stale: boolean;
+  // True when the user has any prior engagement to resume — drives whether the
+  // empty-state "Continue where you left off" starter card is offered.
+  has_resumable?: boolean;
 }
 
 export async function getFeed(): Promise<FeedResponse> {

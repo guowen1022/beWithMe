@@ -170,6 +170,7 @@ with `include_screenshot=true` are the entry points.
 | `EOU_TOKENIZER_PATH` | Path to the EOU tokenizer dir (containing `tokenizer.json`) or the file itself. Required when `EOU_MODEL_PATH` is set. |
 | `EOU_THRESHOLD` | P(end-of-turn) above which the gate commits. Default `0.55` — lower = more eager commits, higher = absorbs more disfluencies. |
 | `EOU_MAX_TOKENS` | Tail-truncate the EOU input to this many tokens. Default `256`. |
+| `FEED_SCHED_INTERVAL_SECONDS` | How often the Maestro's offline feed scheduler tick runs (seconds). Default `3600`. The landing feed is prepared *offline* — never on app open: the open path (`GET /api/feed`) is a pure cache read, and (re)generation is triggered by the session-end webhook (`user.engagement_ended`) plus this periodic tick (regenerates feeds older than `FEED_STALE_AFTER` ≈ 24h, debounced by `MIN_REGEN_INTERVAL` ≈ 2h; both are code constants in `services/maestro/feed.py`). Lower this to exercise the scheduler in dev. |
 | `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites
