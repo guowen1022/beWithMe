@@ -22,6 +22,12 @@ cd "$ROOT"
 BACKEND_CMD=${BACKEND_CMD:-"$ROOT/scripts/dev-services.sh"}
 FRONTEND_PORT=${FRONTEND_PORT:-3000}
 SKIP_BACKEND=${SKIP_BACKEND:-0}
+# Master switch for developer debug surfaces (Mirror nav/page, the top-right
+# teacher-thinking panel, and the detached Chromium DevTools window). Default
+# on; run `BEWITHME_DEBUG=0 ./scripts/dev-desktop.sh` to launch with all three
+# hidden. Fanned out below to the frontend (NEXT_PUBLIC_BEWITHME_DEBUG, inlined
+# by `next dev`) and to Electron (BEWITHME_DEBUG).
+BEWITHME_DEBUG=${BEWITHME_DEBUG:-1}
 
 pids=()
 cleanup() {
@@ -54,7 +60,7 @@ if [[ "$SKIP_BACKEND" != "1" ]]; then
 fi
 
 echo "[dev-desktop] starting Next.js renderer on :$FRONTEND_PORT"
-(cd "$ROOT/frontend" && PORT=$FRONTEND_PORT exec npm run dev) &
+(cd "$ROOT/frontend" && PORT=$FRONTEND_PORT NEXT_PUBLIC_BEWITHME_DEBUG=$BEWITHME_DEBUG exec npm run dev) &
 pids+=($!)
 
 echo "[dev-desktop] waiting for Next.js to accept connections..."
@@ -72,7 +78,7 @@ done
 
 echo "[dev-desktop] building desktop TS and launching Electron"
 (cd "$ROOT/desktop" && npm run build >/dev/null)
-(cd "$ROOT/desktop" && SHELL_URL="http://localhost:$FRONTEND_PORT/" npm run dev) &
+(cd "$ROOT/desktop" && SHELL_URL="http://localhost:$FRONTEND_PORT/" BEWITHME_DEBUG=$BEWITHME_DEBUG npm run dev) &
 pids+=($!)
 
 wait

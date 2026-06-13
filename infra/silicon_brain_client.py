@@ -24,6 +24,11 @@ import httpx
 from infra.contracts import DocumentChunkDTO, NoteHitDTO, ProfileDTO, UserProfileDTO
 from infra.contracts.event import EventDTO, EventEmit, StreamQuery
 from infra.contracts.inbox import InboxProposalCreate, InboxProposalDTO
+from infra.contracts.feed import (
+    FeedCandidateCreate,
+    FeedCandidateDTO,
+    FeedCandidateReplace,
+)
 from infra.topology import upstream_url
 
 
@@ -251,3 +256,75 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return InboxProposalDTO.model_validate(resp.json())
+
+    # --- Feed candidates (multi-persona feed store) ---
+
+    async def write_feed_candidate(
+        self, user_id: UUID, candidate: FeedCandidateCreate,
+    ) -> FeedCandidateDTO:
+        resp = await self._http.post(
+            "/api/feed-candidates",
+            headers=_user_headers(user_id),
+            json=candidate.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return FeedCandidateDTO.model_validate(resp.json())
+
+    async def replace_feed_candidates(
+        self, user_id: UUID, source_persona: str,
+        items: list[FeedCandidateCreate],
+    ) -> list[FeedCandidateDTO]:
+        body = FeedCandidateReplace(source_persona=source_persona, items=items)
+        resp = await self._http.post(
+            "/api/feed-candidates/replace",
+            headers=_user_headers(user_id),
+            json=body.model_dump(mode="json"),
+        )
+        resp.raise_for_status()
+        return [FeedCandidateDTO.model_validate(x) for x in resp.json()]
+
+    async def list_feed_candidates(
+        self, user_id: UUID, *,
+        status: Optional[str] = None,
+        source_persona: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[FeedCandidateDTO]:
+        params: dict = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        if source_persona is not None:
+            params["source_persona"] = source_persona
+        resp = await self._http.get(
+            "/api/feed-candidates",
+            headers=_user_headers(user_id),
+            params=params,
+        )
+        resp.raise_for_status()
+        return [FeedCandidateDTO.model_validate(x) for x in resp.json()]
+
+    async def list_feed_user_ids(self) -> list[UUID]:
+        """Distinct user_ids that have any feed candidate — for the Maestro
+        scheduler. Internal enumeration, not user-scoped."""
+        resp = await self._http.get("/api/feed-candidates/users")
+        resp.raise_for_status()
+        return [UUID(x) for x in resp.json()]
+
+    async def select_feed_candidate(
+        self, user_id: UUID, candidate_id: UUID,
+    ) -> FeedCandidateDTO:
+        resp = await self._http.post(
+            f"/api/feed-candidates/{candidate_id}/select",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return FeedCandidateDTO.model_validate(resp.json())
+
+    async def dismiss_feed_candidate(
+        self, user_id: UUID, candidate_id: UUID,
+    ) -> FeedCandidateDTO:
+        resp = await self._http.post(
+            f"/api/feed-candidates/{candidate_id}/dismiss",
+            headers=_user_headers(user_id),
+        )
+        resp.raise_for_status()
+        return FeedCandidateDTO.model_validate(resp.json())

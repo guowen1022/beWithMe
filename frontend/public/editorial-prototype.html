@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>beWithMe — editorial register prototype</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..700,30..100;1,9..144,400..700,30..100&family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bw-void:           #0B0A12;
+      --bw-void-2:         #11101C;
+      --bw-surface:        #161523;
+      --bw-surface-2:      #1D1C2E;
+      --bw-border:         #2A2940;
+      --bw-border-strong:  #3D3C58;
+      --bw-ink:            #E8E4D8;
+      --bw-ink-soft:       #C7C2B5;
+      --bw-ink-muted:      #8E8AA0;
+      --bw-ink-faint:      #4F4E66;
+      --bw-accent:         #5C8CE6;
+      --bw-accent-soft:    rgba(92, 140, 230, 0.16);
+      --bw-aurora-a:       #5C8CE6;
+      --bw-aurora-b:       #B96AF3;
+      --bw-aurora-c:       #E68A5C;
+      --bw-font-sans:      'Onest', system-ui, sans-serif;
+      --bw-font-serif:     'Fraunces', Georgia, 'Times New Roman', serif;
+      --bw-font-mono:      'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+
+    body {
+      background: var(--bw-void);
+      color: var(--bw-ink);
+      font-family: var(--bw-font-sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Aurora atmosphere — matches the saved cinematic-dark direction. */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(ellipse 900px 600px at 78% -10%, rgba(92,140,230,0.10), transparent 60%),
+        radial-gradient(ellipse 700px 500px at 8% 110%, rgba(185,106,243,0.08), transparent 60%),
+        radial-gradient(ellipse 500px 380px at 92% 90%, rgba(230,138,92,0.05), transparent 60%);
+      z-index: 0;
+    }
+
+    /* ────────────────────────────────────────────────────────────
+       VIEW TOGGLE
+       ──────────────────────────────────────────────────────────── */
+    .topbar {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 100;
+      display: flex;
+      gap: 2px;
+      background: rgba(22, 21, 35, 0.85);
+      border: 1px solid var(--bw-border);
+      padding: 3px;
+      backdrop-filter: blur(8px);
+    }
+    .toggle-btn {
+      font-family: var(--bw-font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 6px 14px;
+      background: transparent;
+      color: var(--bw-ink-muted);
+      border: none;
+      cursor: pointer;
+    }
+    .toggle-btn.active {
+      background: var(--bw-accent-soft);
+      color: var(--bw-accent);
+    }
+    .toggle-hint {
+      position: fixed;
+      top: 52px;
+      right: 14px;
+      z-index: 99;
+      font-family: var(--bw-font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.1em;
+      color: var(--bw-ink-faint);
+      text-transform: uppercase;
+    }
+
+    body.view-current   .editorial   { display: none; }
+    body.view-editorial .current     { display: none; }
+
+    /* ════════════════════════════════════════════════════════════
+       STATE A — CURRENT (mocked from screenshot)
+       ════════════════════════════════════════════════════════════ */
+    .current {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .current .top-left {
+      position: absolute;
+      top: 24px;
+      left: 24px;
+      width: 340px;
+    }
+    .current .speak-dropdown {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bw-surface);
+      border: 1px solid var(--bw-border);
+      padding: 9px 12px;
+      font-size: 12.5px;
+    }
+    .current .speak-dropdown .live {
+      color: #7ED4A6;
+    }
+    .current .speak-dropdown .close {
+      margin-left: auto;
+      color: var(--bw-ink-faint);
+      font-family: var(--bw-font-mono);
+      font-size: 11px;
+    }
+    .current .heard {
+      margin-top: 10px;
+      font-family: var(--bw-font-mono);
+      font-size: 11px;
+      color: var(--bw-ink-muted);
+      line-height: 1.55;
+    }
+
+    .current .thinking-panel {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      width: 360px;
+      background: var(--bw-surface);
+      border: 1px solid var(--bw-border);
+      font-family: var(--bw-font-mono);
+      font-size: 11px;
+    }
+    .current .th-header {
+      padding: 7px 11px;
+      background: var(--bw-surface-2);
+      border-bottom: 1px solid var(--bw-border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .current .th-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #7ED4A6;
+    }
+    .current .th-entry {
+      padding: 9px 11px;
+      border-bottom: 1px solid var(--bw-border);
+    }
+    .current .th-entry:last-child { border-bottom: none; }
+    .current .th-trigger {
+      color: var(--bw-accent);
+      font-weight: 600;
+    }
+    .current .th-summary {
+      margin-top: 5px;
+      color: var(--bw-ink-muted);
+      font-size: 10.5px;
+      line-height: 1.5;
+    }
+    .current .th-meta {
+      margin-top: 6px;
+      color: var(--bw-ink-faint);
+      font-size: 10px;
+    }
+
+    .current .mindmap-canvas {
+      max-width: 760px;
+      margin: 130px auto 110px;
+      aspect-ratio: 5/3;
+      background: var(--bw-void-2);
+      border: 1px solid var(--bw-border);
+      position: relative;
+    }
+    .current .mindmap-canvas svg { width: 100%; height: 100%; display: block; }
+
+    .current .command-bar {
+      position: fixed;
+      bottom: 16px;
+      left: 24px;
+      right: 24px;
+      display: grid;
+      grid-template-columns: 44px 140px 1fr 44px;
+      gap: 1px;
+      background: var(--bw-border);
+      border: 1px solid var(--bw-border);
+      z-index: 5;
+    }
+    .current .command-bar > * {
+      background: var(--bw-surface);
+      padding: 11px 14px;
+      font-size: 13px;
+      color: var(--bw-ink-soft);
+      display: flex;
+      align-items: center;
+    }
+    .current .command-bar .placeholder { color: var(--bw-ink-faint); }
+    .current .command-bar .icon, .current .command-bar .send {
+      justify-content: center;
+      font-family: var(--bw-font-mono);
+    }
+    .current .command-bar .send { color: var(--bw-accent); }
+
+    /* ════════════════════════════════════════════════════════════
+       STATE B — EDITORIAL
+       ════════════════════════════════════════════════════════════ */
+    .editorial {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 80px 32px 120px;
+      display: grid;
+      grid-template-columns: 200px minmax(0, 1fr);
+      column-gap: 56px;
+    }
+
+    /* Left rail */
+    .rail {
+      grid-column: 1;
+      font-family: var(--bw-font-sans);
+      font-size: 13px;
+      color: var(--bw-ink-muted);
+      position: sticky;
+      top: 80px;
+      align-self: start;
+      max-height: calc(100vh - 130px);
+      overflow-y: auto;
+      padding-right: 8px;
+    }
+    .rail::-webkit-scrollbar { width: 0; }
+    .rail-section { margin-bottom: 40px; }
+    .rail-label {
+      font-family: var(--bw-font-sans);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--bw-ink-faint);
+      margin-bottom: 14px;
+    }
+    .rail-toc ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .rail-toc li {
+      padding: 5px 0 5px 16px;
+      position: relative;
+      line-height: 1.4;
+      cursor: pointer;
+      transition: color .12s;
+    }
+    .rail-toc li:hover { color: var(--bw-ink-soft); }
+    .rail-toc li.active {
+      color: var(--bw-ink);
+      font-weight: 600;
+    }
+    .rail-toc li.active::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      top: 5px;
+      color: var(--bw-ink);
+      font-size: 14px;
+      line-height: 1.2;
+    }
+    .rail-hearing .quote {
+      font-family: var(--bw-font-mono);
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--bw-ink-soft);
+    }
+    .rail-teacher .live-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 10px;
+      font-family: var(--bw-font-mono);
+      font-size: 11px;
+      color: var(--bw-ink-muted);
+    }
+    .rail-teacher .live-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--bw-accent);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    .rail-teacher .thinking-row {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      font-family: var(--bw-font-mono);
+      font-size: 10.5px;
+      line-height: 1.5;
+      margin-top: 5px;
+    }
+    .rail-teacher .trigger { color: var(--bw-accent); }
+    .rail-teacher .tool { color: var(--bw-ink-faint); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.32; }
+    }
+
+    /* Center article */
+    .article {
+      grid-column: 2;
+      max-width: 64ch;
+      position: relative;
+    }
+
+    .article-meta {
+      font-family: var(--bw-font-mono);
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--bw-ink-faint);
+      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .article-meta .live-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--bw-accent);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    .article-meta span + span::before {
+      content: '·';
+      margin-right: 10px;
+      color: var(--bw-ink-faint);
+    }
+
+    .article h1 {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 144, 'SOFT' 30;
+      font-weight: 500;
+      font-size: 48px;
+      line-height: 1.06;
+      letter-spacing: -0.024em;
+      margin: 0 0 14px;
+      color: var(--bw-ink);
+    }
+
+    .article-deck {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 18, 'SOFT' 50;
+      font-style: italic;
+      font-weight: 400;
+      font-size: 20px;
+      line-height: 1.42;
+      color: var(--bw-ink-muted);
+      margin: 0 0 44px;
+      letter-spacing: -0.004em;
+      max-width: 50ch;
+    }
+
+    .article h2 {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 36, 'SOFT' 30;
+      font-weight: 600;
+      font-size: 26px;
+      line-height: 1.2;
+      letter-spacing: -0.014em;
+      margin: 52px 0 18px;
+      color: var(--bw-ink);
+    }
+
+    .article p {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 14, 'SOFT' 30;
+      font-weight: 400;
+      font-size: 17px;
+      line-height: 1.65;
+      letter-spacing: -0.003em;
+      margin: 0 0 1.05em;
+      color: var(--bw-ink);
+      hyphens: auto;
+      font-feature-settings: 'kern' 1, 'liga' 1, 'onum' 1;
+    }
+
+    .article em {
+      font-style: italic;
+      font-variation-settings: 'opsz' 14, 'SOFT' 50;
+    }
+
+    .article strong {
+      font-family: var(--bw-font-sans);
+      font-weight: 600;
+      font-size: 15.5px;
+      letter-spacing: 0;
+      color: var(--bw-ink);
+    }
+
+    .article sup {
+      font-family: var(--bw-font-sans);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--bw-accent);
+      margin-left: 1.5px;
+      vertical-align: super;
+      line-height: 0;
+      cursor: pointer;
+    }
+
+    /* Tufte-style sidenotes — floated into the right margin. */
+    .sidenote {
+      float: right;
+      clear: right;
+      width: 220px;
+      margin-right: -276px;     /* push into right margin: width + gutter */
+      margin-top: 0.3em;
+      margin-bottom: 1.4em;
+      font-family: var(--bw-font-sans);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--bw-ink-muted);
+      border-left: 1px solid var(--bw-border);
+      padding: 1px 0 1px 12px;
+      letter-spacing: 0;
+    }
+    .sidenote .num {
+      font-family: var(--bw-font-sans);
+      color: var(--bw-accent);
+      font-weight: 700;
+      font-size: 10.5px;
+      margin-right: 6px;
+      letter-spacing: 0.04em;
+    }
+    .sidenote em {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 14, 'SOFT' 50;
+      font-style: italic;
+      color: var(--bw-ink-soft);
+    }
+
+    /* Editorial command bar — same role as the current one, but visually settles into the page. */
+    .ed-command-bar {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(760px, calc(100% - 32px));
+      display: grid;
+      grid-template-columns: 40px 124px 1fr 40px;
+      gap: 1px;
+      background: var(--bw-border);
+      border: 1px solid var(--bw-border);
+      backdrop-filter: blur(10px);
+      z-index: 5;
+    }
+    .ed-command-bar > * {
+      background: rgba(22, 21, 35, 0.86);
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--bw-ink-soft);
+      font-family: var(--bw-font-sans);
+      display: flex;
+      align-items: center;
+    }
+    .ed-command-bar .placeholder { color: var(--bw-ink-faint); }
+    .ed-command-bar .icon, .ed-command-bar .send {
+      justify-content: center;
+      font-family: var(--bw-font-mono);
+    }
+    .ed-command-bar .send { color: var(--bw-accent); }
+
+    /* Top header strip — small breadcrumb in editorial */
+    .ed-header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 44px;
+      background: linear-gradient(180deg, rgba(11,10,18,0.96), rgba(11,10,18,0.5) 70%, transparent);
+      backdrop-filter: blur(8px);
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      padding: 0 28px;
+      font-family: var(--bw-font-mono);
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--bw-ink-muted);
+      gap: 14px;
+      pointer-events: none;
+    }
+    .ed-header .brand { color: var(--bw-ink); font-weight: 600; }
+    .ed-header .sep { color: var(--bw-ink-faint); }
+
+    /* Hide the editorial header when on current view */
+    body.view-current .ed-header { display: none; }
+
+    /* Print-style figure: drop-cap on first paragraph of the body */
+    .article > p:first-of-type::first-letter {
+      font-family: var(--bw-font-serif);
+      font-variation-settings: 'opsz' 144, 'SOFT' 30;
+      font-weight: 600;
+      font-size: 64px;
+      line-height: 0.85;
+      float: left;
+      padding: 6px 10px 0 0;
+      color: var(--bw-ink);
+    }
+
+    /* Responsive: collapse sidenotes inline below ~1100px */
+    @media (max-width: 1100px) {
+      .editorial {
+        grid-template-columns: 1fr;
+        padding: 80px 24px 110px;
+      }
+      .rail { position: static; max-height: none; margin-bottom: 40px; }
+      .sidenote {
+        float: none;
+        clear: none;
+        width: auto;
+        margin: 14px 0;
+      }
+    }
+  </style>
+</head>
+<body class="view-editorial">
+
+  <div class="topbar">
+    <button class="toggle-btn" data-view="current">Current</button>
+    <button class="toggle-btn active" data-view="editorial">Editorial</button>
+  </div>
+  <div class="toggle-hint">tap to compare</div>
+
+  <!-- ════════════════════════════════════════════════════════════
+       STATE A — CURRENT
+       ════════════════════════════════════════════════════════════ -->
+  <div class="current">
+
+    <div class="top-left">
+      <div class="speak-dropdown">
+        <span class="live">●</span>
+        <span>Speak to: Teacher</span>
+        <span class="close">Close mic</span>
+      </div>
+      <div class="heard">"Can you write me something like a paper about kung fu?"</div>
+    </div>
+
+    <div class="thinking-panel">
+      <div class="th-header">
+        <span class="th-dot"></span>
+        <span style="font-weight:600;">teacher thinking</span>
+        <span style="opacity:0.6;">12 events</span>
+        <span style="margin-left:auto; opacity:0.5;">▾</span>
+      </div>
+      <div class="th-entry">
+        <div style="display:flex;gap:8px;">
+          <span class="th-trigger">reflect</span>
+          <span style="margin-left:auto;opacity:0.55;font-size:10px;">done</span>
+        </div>
+        <div class="th-summary">→ layout_blocks(layouts, device_class)<br>The mindmap is on screen — it covers the major styles (Shaolin, Wing Chun, etc.), the philosophical roots (Dao, Yin-Yang, Buddhism), the training methods, and guiding principles.</div>
+        <div class="th-meta">v4-flash · 10.3k tok in · 1.4s</div>
+      </div>
+      <div class="th-entry">
+        <div style="display:flex;gap:8px;">
+          <span class="th-trigger">recall</span>
+          <span style="margin-left:auto;opacity:0.55;font-size:10px;">done</span>
+        </div>
+        <div class="th-summary">→ episodic.search(query="kung fu lineage", k=4)</div>
+        <div class="th-meta">v4-flash · 10.2k tok in</div>
+      </div>
+    </div>
+
+    <div class="mindmap-canvas">
+      <svg viewBox="0 0 720 432">
+        <g stroke="#3A3A52" stroke-width="1.5" fill="none">
+          <line x1="360" y1="216" x2="200" y2="120"/>
+          <line x1="360" y1="216" x2="540" y2="130"/>
+          <line x1="360" y1="216" x2="180" y2="290"/>
+          <line x1="360" y1="216" x2="520" y2="320"/>
+          <line x1="200" y1="120" x2="100" y2="60"/>
+          <line x1="200" y1="120" x2="280" y2="50"/>
+          <line x1="200" y1="120" x2="80" y2="160"/>
+          <line x1="540" y1="130" x2="640" y2="80"/>
+          <line x1="540" y1="130" x2="640" y2="180"/>
+          <line x1="540" y1="130" x2="660" y2="130"/>
+          <line x1="180" y1="290" x2="80" y2="330"/>
+          <line x1="180" y1="290" x2="240" y2="360"/>
+          <line x1="180" y1="290" x2="100" y2="240"/>
+          <line x1="520" y1="320" x2="620" y2="280"/>
+          <line x1="520" y1="320" x2="620" y2="370"/>
+          <line x1="520" y1="320" x2="420" y2="380"/>
+        </g>
+        <circle cx="360" cy="216" r="46" fill="#8E8AA0" opacity="0.65"/>
+        <text x="360" y="212" text-anchor="middle" fill="#fff" font-size="12" font-family="Onest, sans-serif">Kung Fu</text>
+        <text x="360" y="226" text-anchor="middle" fill="#fff" font-size="9" font-family="Onest, sans-serif" opacity="0.85">Chinese Martial Arts</text>
+
+        <g fill="#5C3A1E">
+          <rect x="158" y="108" width="84" height="22" rx="2"/>
+          <rect x="42" y="48" width="116" height="22" rx="2"/>
+          <rect x="232" y="38" width="96" height="22" rx="2"/>
+          <rect x="24" y="148" width="112" height="22" rx="2"/>
+        </g>
+        <g fill="#FFF1E0" font-size="10" font-family="Onest, sans-serif" text-anchor="middle">
+          <text x="200" y="124">Principles</text>
+          <text x="100" y="64">Mind-Body Unity</text>
+          <text x="280" y="54">Self-Defense</text>
+          <text x="80" y="164">Patience</text>
+        </g>
+
+        <g fill="#5C1E48">
+          <rect x="498" y="118" width="84" height="22" rx="2"/>
+          <rect x="586" y="68" width="100" height="22" rx="2"/>
+          <rect x="586" y="168" width="100" height="22" rx="2"/>
+          <rect x="610" y="118" width="80" height="22" rx="2"/>
+        </g>
+        <g fill="#FFD8EC" font-size="10" font-family="Onest, sans-serif" text-anchor="middle">
+          <text x="540" y="134">Philosophy</text>
+          <text x="636" y="84">Dao / The Way</text>
+          <text x="636" y="184">Yin and Yang</text>
+          <text x="650" y="134">Life Energy</text>
+        </g>
+
+        <g fill="#1E4A52">
+          <rect x="138" y="278" width="84" height="22" rx="2"/>
+          <rect x="38" y="318" width="84" height="22" rx="2"/>
+          <rect x="204" y="348" width="74" height="22" rx="2"/>
+          <rect x="58" y="228" width="86" height="22" rx="2"/>
+        </g>
+        <g fill="#D6F2F0" font-size="10" font-family="Onest, sans-serif" text-anchor="middle">
+          <text x="180" y="294">Core Training</text>
+          <text x="80" y="334">Breathing</text>
+          <text x="241" y="364">Taolu</text>
+          <text x="101" y="244">Strength</text>
+        </g>
+
+        <g fill="#1C0F0F">
+          <rect x="478" y="308" width="84" height="22" rx="2"/>
+          <rect x="578" y="268" width="84" height="22" rx="2"/>
+          <rect x="578" y="358" width="84" height="22" rx="2"/>
+          <rect x="378" y="368" width="84" height="22" rx="2"/>
+        </g>
+        <g fill="#E8DAD0" font-size="10" font-family="Onest, sans-serif" text-anchor="middle">
+          <text x="520" y="324">Major Styles</text>
+          <text x="620" y="284">Wing Chun</text>
+          <text x="620" y="374">Shaolin</text>
+          <text x="420" y="384">Baguazhang</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="command-bar">
+      <div class="icon">N</div>
+      <div>teacher</div>
+      <div class="placeholder">Ask the teacher (try: "upload a paper and read it")</div>
+      <div class="send">&gt;_</div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════
+       STATE B — EDITORIAL
+       ════════════════════════════════════════════════════════════ -->
+  <div class="ed-header">
+    <span class="brand">beWithMe</span>
+    <span class="sep">/</span>
+    <span>teacher</span>
+    <span class="sep">/</span>
+    <span>03:24</span>
+  </div>
+
+  <div class="editorial">
+
+    <aside class="rail">
+      <div class="rail-section rail-toc">
+        <div class="rail-label">On this page</div>
+        <ul>
+          <li class="active">Kung fu, properly read</li>
+          <li>The two minds</li>
+          <li>The lineage problem</li>
+          <li>Five families</li>
+          <li>Where to begin</li>
+        </ul>
+      </div>
+
+      <div class="rail-section rail-hearing">
+        <div class="rail-label">Hearing</div>
+        <div class="quote">"Can you write me something like a paper about kung fu?"</div>
+      </div>
+
+      <div class="rail-section rail-teacher">
+        <div class="rail-label">Teacher · 12 events</div>
+        <div class="live-row">
+          <span class="live-dot"></span>
+          <span>thinking</span>
+        </div>
+        <div class="thinking-row"><span class="trigger">reflect</span><span class="tool">layout_blocks(...)</span></div>
+        <div class="thinking-row"><span class="trigger">recall</span><span class="tool">episodic.search</span></div>
+        <div class="thinking-row"><span class="trigger">cite</span><span class="tool">kb.kungfu.shaolin</span></div>
+        <div class="thinking-row"><span class="trigger">write</span><span class="tool">prose_block(64ch)</span></div>
+      </div>
+    </aside>
+
+    <main class="article">
+      <div class="article-meta">
+        <span class="live-dot"></span>
+        <span>beWithMe</span>
+        <span>teacher</span>
+        <span>03:24</span>
+        <span>v4-flash</span>
+      </div>
+
+      <h1>Kung fu, properly read</h1>
+      <p class="article-deck">
+        Less a sport than a thousand-year argument about what a body is for.
+      </p>
+
+      <p>
+        The teacher is going to attempt a thing that the genre called "explainer" rarely attempts — to say what kung fu <em>is</em>, rather than what it does.<sup>1</sup> The two are not the same. To say what it does is to list its motions, its competitions, its films. To say what it <em>is</em> requires a longer breath and an older book.
+        <aside class="sidenote"><span class="num">1</span>The phrasing borrows from Stanley Cavell, who insisted that the question <em>what is film</em> admits a different kind of answer than <em>what does film do</em>.</aside>
+      </p>
+
+      <p>
+        When the monks at the Shaolin temple first systematized what we now call <em>gong fu</em> (功夫) in the seventh century, they were not inventing a martial art. They were inventing a way to inhabit a body that did not flinch<sup>2</sup> — a body that could stand thirty years of dawn practice, twenty of standing meditation, and still arrive at sixty <em>more</em> alert, not less. The combat was always a byproduct.
+        <aside class="sidenote"><span class="num">2</span><em>Wu shu</em> (武术) is the modern PRC competition form — dazzling, but a different species from the temple practice it descends from.</aside>
+      </p>
+
+      <h2>The two minds</h2>
+
+      <p>
+        There is a distinction we inherit from Tang-era manuals between <strong>wu shu</strong> (武术) — the art of combat — and <strong>gong fu</strong> — the labor of perfecting any practice worth perfecting.<sup>3</sup> A cook can have gong fu. A calligrapher can have gong fu. The fighter's gong fu is one species inside a much larger genus.
+        <aside class="sidenote"><span class="num">3</span>Hua Tuo, third-century physician, is the earliest figure recorded as teaching exercises (the <em>wǔ qín xì</em>, or "five animal frolics") for health and longevity rather than combat.</aside>
+      </p>
+
+      <p>
+        This is why the translation "Chinese martial arts" mis-aims. It locks the term inside one room of a much larger house. The house's other rooms — calligraphy, tea, medicine — belong to the same lineage of <em>practice as moral instrument</em>, and the moment you let them back in, the whole subject changes shape.
+      </p>
+
+      <h2>The lineage problem</h2>
+
+      <p>
+        Every claimed lineage in kung fu eventually meets the same wall: the records were burned, the temples sacked, the masters scattered.<sup>4</sup> What survives is a chain of <em>remembered</em> teaching — student to student, often across centuries of disruption. The historian's verdict is usually "we cannot confirm before 1700." The practitioner's verdict is "and yet here is the form, and it works."
+        <aside class="sidenote"><span class="num">4</span>The Qing dynasty's repeated suppression of southern Shaolin lineages in the eighteenth century is the canonical example — evidence and counter-evidence both survive, in roughly equal volume.</aside>
+      </p>
+
+      <p>
+        For a reading assistant whose job is to fit explanation to a particular reader, this is the interesting tension: kung fu is a domain where the lived experience of the lineage is more trustworthy than the written record of it. Most domains are the opposite — and that asymmetry is, if you let it, the whole shape of the subject.
+      </p>
+
+      <h2>Five families</h2>
+
+      <p>
+        The five so-called <em>family styles</em> of southern kung fu — Hung, Lau, Choy, Lei, Mok — are not really five different martial arts. They are five different answers to the same question: <em>given a body that must defend a village while also farming, weaving, and aging, what is the smallest set of motions worth memorizing for life?</em>
+      </p>
+
+      <p>
+        Read this way, the styles stop competing and start completing. Hung Gar is the answer if your terrain is mountainous; Wing Chun is the answer if your fight is in a doorway; Tai Chi Chuan is the answer if your fight is with the next sixty years of your own joints. None of them is the kung fu. The kung fu is the <em>shape of the question itself</em>.
+      </p>
+    </main>
+  </div>
+
+  <div class="ed-command-bar">
+    <div class="icon">N</div>
+    <div>teacher</div>
+    <div class="placeholder">Ask the teacher…</div>
+    <div class="send">&gt;_</div>
+  </div>
+
+  <script>
+    const buttons = document.querySelectorAll('.toggle-btn');
+    const edBar = document.querySelector('.ed-command-bar');
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.dataset.view;
+        document.body.classList.remove('view-current', 'view-editorial');
+        document.body.classList.add('view-' + view);
+        buttons.forEach(b => b.classList.toggle('active', b === btn));
+        edBar.style.display = view === 'editorial' ? '' : 'none';
+      });
+    });
+
+    // Tap '1' or '2' to flip between views.
+    document.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === '1') document.querySelector('[data-view="current"]').click();
+      if (e.key === '2') document.querySelector('[data-view="editorial"]').click();
+    });
+  </script>
+</body>
+</html>

@@ -1,12 +1,15 @@
 """Markdown → note HTML pipeline.
 
 Phase 2.5: the canvas writer authors `note` content in CommonMark
-markdown with two extensions:
+markdown with three extensions:
 
   1. `==hi==`         → `<mark>hi</mark>`  (custom inline rule, ~25 lines)
   2. ```mermaid``` fenced code blocks become `<div class="bw-diagram"
      data-src="..."></div>` which the existing `process()` then
      renders to inline SVG.
+  3. `$$...$$` / `$...$` → `<div class="math">` / `<span class="math">` —
+     KaTeX renders these client-side in note.js after innerHTML is set.
+     The sanitizer keeps the `math` class; `block`/`inline` are stripped.
 
 Inline HTML is enabled so the writer can drop in occasional `<strong>`,
 `<mark>`, `<span class="accent">` etc. for cases markdown alone can't
@@ -24,6 +27,7 @@ from typing import Final
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 
 from infra.render.note import process as preprocess_note
 
@@ -107,6 +111,10 @@ def _build_markdown() -> MarkdownIt:
     md = MarkdownIt("commonmark", {"html": True, "linkify": False, "breaks": False})
     md.enable(["table", "strikethrough"])
     _mark_plugin(md)
+    # Parses $$...$$ (block) and $...$ (inline) into
+    # <div class="math block"> / <span class="math inline"> elements.
+    # The sanitizer keeps the "math" class; note.js renders them via KaTeX.
+    md.use(dollarmath_plugin, allow_space=True, allow_digits=False)
 
     # Override fence renderer so ```mermaid fences become bw-diagram
     # divs that the existing note.process() will pick up and
@@ -122,6 +130,14 @@ def _build_markdown() -> MarkdownIt:
             src = token.content or ""
             escaped = src.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
             return f'<div class="bw-diagram" data-src="{escaped}"></div>\n'
+        # ```plot {...}``` → coordinate-plot skill
+        # ```skill:name {...}``` → named skill (extensible: drop a new .js file in
+        # frontend/public/skills/ and it's available immediately, no code change needed)
+        if lang == "plot" or lang.startswith("skill:"):
+            skill_name = "coordinate-plot" if lang == "plot" else lang[len("skill:"):]
+            src = (token.content or "").strip()
+            escaped = src.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+            return f'<div data-skill="{skill_name}" data-config="{escaped}"></div>\n'
         if default_fence is not None:
             return default_fence(tokens, idx, options, env)
         # Fallback: render as <pre><code>; will be stripped by sanitizer

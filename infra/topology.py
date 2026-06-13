@@ -58,7 +58,6 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     # Agent-driven endpoints — handled by the persona sidecar (the teacher).
     "ask":             "persona",
     "interactions":    "persona",
-    "recommendations": "persona",
     "goals":           "persona",
     "sessions":        "persona",
     "concepts":        "persona",   # teacher's mastery model (ConceptNode)
@@ -66,6 +65,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "dynamic":         "persona",   # dynamic UI back-channel (SSE stream + push/error)
     "perception":      "persona",   # ambient_mic block → /api/perception/utterance
     "agent":           "persona",   # PR-5: /api/agent/kickoff webhook from maestro
+    "skills":          "persona",   # frontend block skill files (JS assets for note block)
     # Stateless infra
     "transcribe": "transcribe",
     "eou":        "transcribe",   # text turn-detector — sibling endpoint
@@ -74,6 +74,8 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     # Maestro long-instance (PR-4). /api/maestro/event webhook fires from
     # the agent layer when a new event worth gating on arrives.
     "maestro":    "maestro",
+    # Multi-persona feed surface — assembled + blended by the Maestro.
+    "feed":       "maestro",
 }
 DEFAULT_SERVICE: Final[str] = "knowledge"
 

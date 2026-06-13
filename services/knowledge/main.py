@@ -23,6 +23,7 @@ from services.knowledge.routers import (
     documents,
     event_stream,
     events,
+    feed_candidates,
     health,
     inbox,
     media,
@@ -52,6 +53,7 @@ app.include_router(notes.router, prefix="/api")
 app.include_router(retrieval.router, prefix="/api")
 app.include_router(event_stream.router, prefix="/api")
 app.include_router(inbox.router, prefix="/api")
+app.include_router(feed_candidates.router, prefix="/api")
 
 
 def main() -> None:

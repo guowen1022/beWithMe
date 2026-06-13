@@ -7,6 +7,7 @@ import {
   getCurrentUserId,
   queryStream,
 } from "@/lib/api";
+import { DEBUG_UI } from "@/lib/debug";
 
 
 const SOURCE_LABEL: Record<string, { label: string; color: string }> = {
@@ -78,6 +79,12 @@ export default function MirrorPage() {
   }, [router]);
 
   useEffect(() => {
+    // Mirror is a debug surface; when disabled (BEWITHME_DEBUG=0) a direct
+    // /mirror URL still resolves, so bounce back to the feed.
+    if (!DEBUG_UI) {
+      router.push("/");
+      return;
+    }
     if (!getCurrentUserId()) {
       router.push("/");
       return;

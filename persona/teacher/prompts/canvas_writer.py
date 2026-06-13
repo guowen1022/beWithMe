@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+from persona.teacher.prompts import canvas_guides
 from persona.teacher.prompts.canvas_renderer import format_canvas_state
 from persona.teacher.prompts.parts import PromptParts
 from persona.teacher.prompts.skills import load_skill
@@ -47,10 +48,17 @@ def build(
             system_parts.append(body)
             system_parts.append("")
 
-    writer_skill = load_skill("teacher/canvas_writer")
+    writer_skill = load_skill("teacher/canvas_writer_core")
     if writer_skill:
         system_parts.append(writer_skill)
         system_parts.append("")
+
+    # Lazy visual-guide menu (Layer-2 skill loading). The core skill ends with
+    # the "VISUAL GUIDES — open before you draw" lead-in; this is the menu it
+    # references. The writer opens a leaf via the `load_guide` tool, pulling
+    # only the chosen modality's fence syntax into context.
+    system_parts.append(canvas_guides.render_root_menu())
+    system_parts.append("")
 
     static_system = "\n".join(system_parts).rstrip() + "\n"
 

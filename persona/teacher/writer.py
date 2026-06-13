@@ -30,6 +30,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 
 from infra.event_log import log_event
+from persona.teacher.prompts import canvas_guides
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
 from infra.silicon_brain_client import SiliconBrainClient
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
@@ -152,15 +153,20 @@ async def run_canvas_writer(
             tools=writer_tools,
             purpose="canvas-writer",
             user_id=user_id,
-            # One iteration only. With 2 iterations the writer would
-            # re-fire edit_note on iteration 1 (it doesn't see
-            # iteration 0's effect in any updated context), producing
-            # duplicate appends and runaway highlight spam — observed
-            # in production logs as edit_ops=['append','append'] and
-            # edit_ops=['highlight'×7,'arrow_to_text'] turns.
-            # The writer's job is decisive: one mount or one edit per
-            # turn, packed into a single tool call.
-            max_iterations=1,
+            # Notes carry a big markdown payload (sections + a mermaid/plot
+            # fence with escaped unicode), which balloons the tool-call JSON.
+            # The 4096 default truncated it mid-args → `_raw_arguments` bail →
+            # nothing mounted. 8192 gives the authoring call room to complete.
+            max_tokens=8192,
+            # Terminal-on-author: mount_template/edit_note STOP the loop the
+            # instant they execute (see terminal_tools below), so the writer
+            # still makes exactly ONE decisive authoring call — re-firing a
+            # second edit_note produced duplicate appends and highlight spam
+            # (observed as edit_ops=['append','append'] in prod). `load_guide`
+            # is non-terminal: it lets the writer pull one modality's fence
+            # syntax first, counting toward MAX_GUIDE_DEPTH, then author.
+            max_iterations=canvas_guides.MAX_GUIDE_DEPTH + 1,
+            terminal_tools={"mount_template", "edit_note"},
             profile="voice",
         ):
             if evt.get("kind") != "tool_call":

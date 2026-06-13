@@ -14,9 +14,12 @@ type Addressee = NonNullable<AskRequest["addressee"]>;
 type Sender = "user" | "teacher";
 
 const ADDRESSEE_KEY = "bewithme_canvas_addressee";
-// One-shot handoff: a recommendation's "Start Learning" stashes a seed
-// question here, then routes to the Reader. Consumed (and cleared) on mount.
+// One-shot handoff: the feed launcher stashes a first-turn line here, then
+// routes to the Reader. Consumed (and cleared) on mount. When the launcher
+// also sets SEED_AUTOSEND_KEY ("1") — the "Begin" path — we fire the turn
+// immediately so the thread starts on its own; otherwise we only prefill.
 const SEED_KEY = "bewithme_canvas_seed";
+const SEED_AUTOSEND_KEY = "bewithme_canvas_seed_autosend";
 
 // Only two valid pairs are reachable: user→teacher (normal flow, runs the
 // LLM intent router) and teacher→frontend_engineer (test mode, bypasses
@@ -75,6 +78,9 @@ export default function CanvasCommandBar() {
   const [debugText, setDebugText] = useState("");
   const sessionIdRef = useRef<string>("");
   const debugScrollRef = useRef<HTMLDivElement>(null);
+  // Always points at the latest runCommand so the once-on-mount auto-send
+  // effect can fire without re-running when runCommand's closure changes.
+  const runCommandRef = useRef<(raw: string) => void>(() => {});
 
   // Hydrate addressee from localStorage on mount, persist on change.
   useEffect(() => {
@@ -89,14 +95,29 @@ export default function CanvasCommandBar() {
     window.localStorage.setItem(ADDRESSEE_KEY, addressee);
   }, [addressee]);
 
-  // Consume a one-shot seed left by a recommendation's "Start Learning".
-  // Prefill the bar so the user lands ready to ask; we do NOT auto-send —
-  // they review and press Enter, keeping the user in control.
+  // Keep the latest runCommand reachable from the mount-only seed effect
+  // below. Declared before that effect so it's current when it fires.
+  useEffect(() => {
+    runCommandRef.current = runCommand;
+  });
+
+  // Consume a one-shot seed left by the feed launcher.
+  //  - "Begin" (autosend) → fire the turn now so the thread starts on its
+  //    own, framed by the posture the Maestro cache was seeded with.
+  //  - "Start from scratch" → prefill only; the user reviews and presses
+  //    Enter, staying in control.
+  // Clear the keys before firing so React StrictMode's double-mount (and any
+  // remount) can't send the same seed twice.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const seed = window.localStorage.getItem(SEED_KEY);
-    if (seed) {
-      window.localStorage.removeItem(SEED_KEY);
+    if (!seed) return;
+    const autosend = window.localStorage.getItem(SEED_AUTOSEND_KEY) === "1";
+    window.localStorage.removeItem(SEED_KEY);
+    window.localStorage.removeItem(SEED_AUTOSEND_KEY);
+    if (autosend) {
+      runCommandRef.current(seed);
+    } else {
       setValue(seed);
     }
   }, []);
@@ -121,7 +142,13 @@ export default function CanvasCommandBar() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const command = value.trim();
+    await runCommand(value);
+  }
+
+  // The actual ask. Shared by the form (user presses Enter) and the
+  // auto-send-on-mount path (feed launcher's "Begin").
+  async function runCommand(raw: string) {
+    const command = raw.trim();
     if (!command || busy) return;
     setBusy(true);
     setError(null);

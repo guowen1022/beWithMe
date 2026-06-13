@@ -125,17 +125,20 @@ async def _replace_active(
     return new_rows
 
 
-async def generate_llm_recommendations(
+async def reason_candidate_items(
     db: AsyncSession,
     user_id: uuid.UUID,
     self_description: str,
-) -> list[Recommendation]:
-    """Generate recommendations by having the LLM reason about the user's learning state.
+) -> list[dict]:
+    """The teacher's intra-source reasoning: snapshot the learner's state
+    (mastery via HLR, knowledge graph, learning-style profile) and have the
+    LLM rank what to study next. Returns the raw item dicts
+    (category/title/summary/reasoning/concept_names/priority), NOT persisted.
 
-    Replaces active LLM recommendations transactionally.
-
-    `self_description` is read by the caller from silicon_brain via the client
-    and passed in (we don't import silicon_brain here).
+    Shared by the legacy recommender (`generate_llm_recommendations`) and the
+    feed producer (`persona/teacher/feed/producer.py`). `self_description` is
+    read by the caller from silicon_brain and passed in (we don't import
+    silicon_brain here).
     """
     profile = await get_user_profile(db, user_id)
     concept_nodes = await get_concepts(db, user_id, limit=50)
@@ -181,6 +184,24 @@ async def generate_llm_recommendations(
         items = json.loads(_strip_code_fence(raw))
     except json.JSONDecodeError:
         print(f"[recommender] Failed to parse LLM response as JSON: {raw[:200]}", flush=True)
+        return []
+    return items if isinstance(items, list) else []
+
+
+async def generate_llm_recommendations(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    self_description: str,
+) -> list[Recommendation]:
+    """Generate recommendations by having the LLM reason about the user's learning state.
+
+    Replaces active LLM recommendations transactionally.
+
+    `self_description` is read by the caller from silicon_brain via the client
+    and passed in (we don't import silicon_brain here).
+    """
+    items = await reason_candidate_items(db, user_id, self_description)
+    if not items:
         return []
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)

@@ -299,10 +299,75 @@
       }
     });
 
+    // ---- Math rendering --------------------------------------------------
+    // The server marks `$$...$$` as `.bw-math-block` and `$...$` as
+    // `.bw-math-inline` (raw LaTeX content, HTML-escaped). After innerHTML
+    // is set we ask KaTeX to render each element in place.
+    function renderMath(container) {
+      var katex = window.katex;
+      if (!katex) {
+        // KaTeX not yet loaded; schedule a retry once it's ready.
+        var ready = window.__katexReady;
+        if (ready) ready.then(function(k) { window.katex = k; renderMath(container); });
+        return;
+      }
+      var mathEls = container.querySelectorAll('.math');
+      for (var i = 0; i < mathEls.length; i++) {
+        var el = mathEls[i];
+        if (el.querySelector('.katex')) continue; // already rendered
+        var src = el.textContent || '';
+        var isBlock = el.tagName === 'DIV';
+        try {
+          el.innerHTML = katex.renderToString(src, { displayMode: isBlock, throwOnError: false });
+        } catch (e) { /* leave raw LaTeX visible on error */ }
+      }
+    }
+
+    // ---- Skill dispatch --------------------------------------------------
+    // Scans `root` for <div data-skill="name" data-config='{...}'> elements
+    // emitted by the server's ```plot / ```skill:name fence renderer.
+    // Fetches /skills/<name>.js once (browser-cached), evals it as a
+    // function(element, config) and calls it on the placeholder div.
+    // Adding a new skill = drop a .js file in frontend/public/skills/.
+    var _skillCache = {};
+    function dispatchSkills(root) {
+      var els = root.querySelectorAll('[data-skill]');
+      if (!els.length) return;
+      els.forEach(function(el) {
+        var name = el.getAttribute('data-skill');
+        if (!name) return;
+        var config = {};
+        try { config = JSON.parse(el.getAttribute('data-config') || '{}'); } catch(_) {}
+        var container = document.createElement('div');
+        container.className = 'bw-skill-container';
+        container.style.cssText = 'width:100%;min-height:360px;position:relative;';
+        if (el.parentNode) el.parentNode.replaceChild(container, el);
+        function runSkill(jsText) {
+          try { new Function('element', 'config', jsText)(container, config); }
+          catch(e) {
+            container.style.cssText += 'display:flex;align-items:center;justify-content:center;color:var(--bw-ink-muted);font-size:13px;';
+            container.textContent = '[skill error: ' + name + ']';
+            if (typeof console !== 'undefined') console.warn('[note] skill error:', name, e);
+          }
+        }
+        if (_skillCache[name]) { runSkill(_skillCache[name]); return; }
+        fetch('/api/skills/' + name, { cache: 'no-cache' })
+          .then(function(r) { return r.ok ? r.text() : Promise.reject(r.status); })
+          .then(function(js) { _skillCache[name] = js; runSkill(js); })
+          .catch(function(err) {
+            container.style.cssText += 'display:flex;align-items:center;justify-content:center;color:var(--bw-ink-muted);font-size:13px;';
+            container.textContent = '[skill not found: ' + name + ']';
+            if (typeof console !== 'undefined') console.warn('[note] skill not found:', name, err);
+          });
+      });
+    }
+
     function setHtml(html, opts) {
       currentHtml = (typeof html === 'string') ? html : '';
       body.innerHTML = currentHtml;
       currentSelection = '';
+      dispatchSkills(body);
+      renderMath(body);
       if (opts && opts.animate && currentHtml) {
         startReveal([body]);
       }
@@ -450,6 +515,7 @@
         if (where === 'end') host.appendChild(n);
         else host.insertBefore(n, host.firstChild);
       }
+      renderMath(host);
       // Phase 2.6: block-by-block reveal. The reveal hides each
       // matching block via inline opacity then fades them in one at a
       // time at 2x speaking rate. No .bw-edit-enter class — its CSS

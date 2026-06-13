@@ -383,6 +383,43 @@ def _build_research_specs(user_id: UUID) -> List[ToolSpec]:
     ]
 
 
+def _build_guide_spec(user_id: UUID) -> ToolSpec:
+    """Canvas-writer visual-guide loader. Pulls ONE modality's fence syntax
+    (plot | mermaid) into context on demand so the writer's base prompt stays
+    thin and a flowchart turn never pays for the plot syntax. Non-authoring —
+    it mounts nothing. See `persona.teacher.prompts.canvas_guides`."""
+    from persona.teacher.prompts import canvas_guides
+
+    async def executor(args: Dict[str, Any]) -> str:
+        return canvas_guides.get_guide(args.get("ids"))
+
+    return ToolSpec(
+        name="load_guide",
+        description=(
+            "Open a VISUAL GUIDE to get the exact fence syntax for a diagram "
+            "or plot BEFORE authoring it. The guide menu in your prompt lists "
+            "the ids (e.g. 'plot', 'mermaid'). Call with the one id you need; "
+            "it returns that guide's full syntax + examples. This is NOT your "
+            "authoring call — after reading the guide, emit your single "
+            "mount_template/edit_note with the fence embedded in the markdown. "
+            "Open only what this turn needs."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": 'Guide ids to open, e.g. ["plot"]. Usually one.',
+                },
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+        executor=executor,
+    )
+
+
 # Tool-name → set of lanes it appears on. Anything not listed defaults to
 # the full set. Keep this map narrow — adding a tool to a wrong lane can
 # cause Lane A to spend its single iteration on a structural call.
@@ -402,6 +439,8 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     "point_arrow":        {"answer", "user_facing", "background", "research"},
     "layout_blocks":      {"answer", "user_facing", "background", "research"},
     "interactive_graph":  {"answer", "user_facing", "background", "research"},
+    # Canvas-writer visual-guide loader (Layer-2 lazy skill loading).
+    "load_guide":         {"writer"},
     # Slow / redundant — Lane A would burn its single iteration here.
     # Lane R needs all of these — that's the point of research mode.
     "read_media":         {"answer", "background", "research"},   # canvas state already in prompt
@@ -480,6 +519,9 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         # PR-5 — kickoff realization ACT tool.
         _write_to_inbox.build_spec(user_id),
         *_build_research_specs(user_id),
+        # Canvas-writer visual-guide loader — appended last so existing tool
+        # order (the provider prompt-cache key) is unchanged.
+        _build_guide_spec(user_id),
     ]
     return [
         t for t in full

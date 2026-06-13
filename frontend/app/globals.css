@@ -501,6 +501,8 @@ body {
 }
 .bw-card .bw-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .bw-card .bw-image { display: block; width: 100%; height: auto; margin: 1em 0; }
+.bw-card div.math { display: block; overflow-x: auto; margin: 1em 0; text-align: center; }
+.bw-card span.math { display: inline; }
 .bw-card .aspect-1-1  { aspect-ratio: 1 / 1;  object-fit: cover; }
 .bw-card .aspect-4-3  { aspect-ratio: 4 / 3;  object-fit: cover; }
 .bw-card .aspect-16-9 { aspect-ratio: 16 / 9; object-fit: cover; }
