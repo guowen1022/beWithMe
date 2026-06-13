@@ -95,16 +95,22 @@ export default function DynamicSurface({ mode = "overlay", suppressWelcome = fal
         for (const b of blocks) {
           sourceRegistry.mount({ id: b.id, source: b.source });
         }
-        if (blocks.length === 0 && !suppressWelcome) {
-          // Mount the welcome card. The mount fans out via SSE — the
-          // useEffect below subscribes to that stream and will pick up
-          // the resulting ui-update mount. Best-effort: if the POST
-          // fails (e.g. backend unreachable) the canvas just stays
-          // empty, which is the prior behavior. Skipped when the feed
-          // launcher's "Begin" auto-sends a seeded first turn — that turn
-          // starts the thread, so the welcome card would only be noise.
-          mountTemplate({ template: "lets_begin" }).catch((err) =>
-            console.warn("[dynamic-surface] lets_begin auto-mount failed", err),
+        if (blocks.length === 0) {
+          // Empty canvas → bring up the voice input so the user can talk to
+          // the teacher. The mount fans out via SSE — the useEffect below
+          // subscribes to that stream and picks up the resulting ui-update.
+          // Best-effort: if the POST fails (e.g. backend unreachable) the
+          // canvas just stays empty, which is the prior behavior.
+          //
+          // Normal entry shows the `lets_begin` welcome CTA, which mounts
+          // `ambient_mic` on click. The feed "Begin" path auto-sends a
+          // seeded first turn, so that CTA is redundant — but the user still
+          // needs the mic, so mount `ambient_mic` directly. Without this,
+          // selecting a feed topic leaves only the text command bar and no
+          // way to *speak* to the teacher.
+          const template = suppressWelcome ? "ambient_mic" : "lets_begin";
+          mountTemplate({ template }).catch((err) =>
+            console.warn(`[dynamic-surface] ${template} auto-mount failed`, err),
           );
         }
       })
