@@ -316,6 +316,7 @@ The current codebase implements the foundation but not the full vision. Don't be
 | silicon_brain | exposed via knowledge sidecar HTTP face | ✅ | persona reads it via the narrow `SiliconBrainClient` (3 methods) |
 | Persona | teacher | ✅ | runtime decoupled from silicon_brain; reads its own data via direct DB |
 | Persona | per-persona own-tables (teacher owns Interaction, ConceptNode, LearningGoal, Recommendation, LearningSession, TeacherPreferenceModel) | ✅ | declared on `infra.db.Base`; queried directly without HTTP |
+| Persona | app_operator (app-level "app actions": switch_user, go_home, show_mirror) | ✅ | minimal sibling persona; no private models, no silicon_brain reads; tools in `tools/app_action.py`; emits the `AppAction` SSE contract (app-scoped sibling of `BlockAction`) |
 | Persona | helper | ❌ | placeholder dir TBD |
 | Persona | engineer | ❌ | needed for frontend-dynamic |
 | Persona | tool registry per persona | ❌ | persona-side tool dispatch not yet implemented |
@@ -330,7 +331,7 @@ The current codebase implements the foundation but not the full vision. Don't be
 
 - The frontend talks to **persona endpoints directly** via fixed URLs (`/api/ask`, `/api/recommendations`, etc.). The persona sidecar's routers live at `services/persona/routers/` and act as static glue. This is the legacy path.
 - Personas don't yet pick from a tool registry; their behavior is hardcoded in `agent.py`.
-- The user has only one persona (teacher) so there's no inter-persona dispatch to test.
+- Two personas exist: teacher and app_operator. There's no generic dispatch yet — both are reached via the `addressee` field on `/api/ask/stream` (default `teacher`; `app_operator` for app actions; `frontend_engineer` for the engineer test path). This is an interim stand-in for the planned `POST /api/persona/<name>/turn` (trajectory step 4 below).
 
 ### The trajectory
 

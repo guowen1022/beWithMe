@@ -12,11 +12,13 @@ class AskRequest(BaseModel):
     document_id: Optional[UUID] = None
     session_id: UUID = Field(default_factory=uuid4)
     parent_interaction_id: Optional[UUID] = None
-    # Test-mode addressee. Default 'teacher' — message goes through the
+    # Routing addressee. Default 'teacher' — message goes through the
     # teacher's intent router. 'frontend_engineer' bypasses the router and
     # forwards the message straight to the engineer (for E2E debugging
-    # without the LLM router round-trip).
-    addressee: Literal["teacher", "frontend_engineer"] = "teacher"
+    # without the LLM router round-trip). 'app_operator' routes to the
+    # app_operator persona, whose "app actions" tools change the app shell
+    # (switch user, go home, show mirror) rather than answer a question.
+    addressee: Literal["teacher", "frontend_engineer", "app_operator"] = "teacher"
 
 
 class SignalRequest(BaseModel):
