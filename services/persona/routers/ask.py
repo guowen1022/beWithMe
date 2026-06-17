@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import re
 import time
 from typing import Optional
 from uuid import UUID
@@ -9,7 +8,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
-from infra.contracts.ui import BlockSpec
 from infra.event_log import log_event
 from persona.teacher.models.interaction import Interaction
 from persona.teacher.schemas import AskRequest, AskResponse
@@ -21,103 +19,18 @@ from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
-from persona.app_operator import respond as app_operator_respond
-from workshop.canvas.tools.request_ui_block import request_ui_block
-from workshop.canvas.tools.mount_template import mount_template
-from infra.templates import list_templates, load_template
-from tools.speak import speak as tool_speak
 from infra.contracts.output_routing import OUTPUT_DEVICE_ID
+from services.persona.routers._ask_addressee import route_addressee
+from services.persona.routers._ask_voice import (
+    AutoSpeakBuffer,
+    normalize_device_class,
+    resolve_active_channel,
+)
 
 router = APIRouter()
 
-# Explicit override: '/block <description>' routes straight to the
-# request_ui_block tool, skipping the LLM router. Useful for testing and
-# for users who know exactly what they want.
-_BLOCK_TRIGGER = re.compile(r"^\s*/block(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
-
-
-def _match_template(description: str) -> str | None:
-    """If the user's `/block <description>` names an existing template
-    (by filename, kebab id, or first-word keyword match), return the
-    template name to mount directly. Skips the engineer LLM round-trip
-    for known-good widgets like ambient_mic and pdf_reader.
-    """
-    if not description:
-        return None
-    norm = description.strip().lower().replace("-", " ").replace("_", " ")
-    norm_compact = norm.replace(" ", "")
-    available = list_templates()
-    # Exact name / kebab match first.
-    for name in available:
-        candidates = {
-            name.lower(),
-            name.lower().replace("_", " "),
-            name.lower().replace("_", "-"),
-            name.lower().replace("_", ""),
-        }
-        if norm in candidates or norm_compact in candidates:
-            return name
-    # Substring match: every space-separated token in the description must
-    # appear in the template name OR in its declared keywords. Avoids
-    # matching "I want to upload a file" → upload_file unintentionally,
-    # but lets "ambient mic" → ambient_mic.
-    user_tokens = [t for t in norm.split() if t]
-    if not user_tokens:
-        return None
-    for name in available:
-        try:
-            tpl = load_template(name)
-        except Exception:
-            continue
-        haystack = (
-            name.lower().replace("_", " ")
-            + " "
-            + " ".join(k.lower() for k in tpl.manifest.keywords)
-        )
-        if all(tok in haystack for tok in user_tokens):
-            return name
-    return None
-
 # Hold references to background tasks so they don't get garbage collected
 _background_tasks: set = set()
-
-# Sentence terminator detector for auto-speak. Mirrors
-# `services/speak/main.py:_SENTENCE_SPLIT` so the boundary the client
-# would split on matches what we fire here. We additionally accept
-# end-of-string when flushing the buffer at stream close.
-_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=\S)")
-
-_VALID_DEVICE_CLASSES = {"desktop", "tablet", "phone"}
-
-
-def _resolve_active_channel(
-    talk_preference: dict | None, device_class: str
-) -> str:
-    """Map (talk_preference, device_class) → 'voice' | 'text' | 'both'.
-
-    Mirrors the LLM's TALK CHANNEL RULE so the backend can pick the
-    right prompt builder + auto-speak behavior without round-tripping
-    through the model. Defaults to 'both' if unset, matching
-    `preferences_block._DEFAULT_TALK_PREF`.
-    """
-    fallback = {"desktop": "both", "tablet": "both", "phone": "text"}
-    pref = talk_preference if isinstance(talk_preference, dict) else {}
-    return pref.get(device_class) or fallback.get(device_class, "both")
-
-
-def _strip_for_speech(text: str) -> str:
-    """Cheap markdown stripper for auto-spoken sentences.
-
-    The voice-mode prompt tells the LLM not to emit markdown, but the
-    model occasionally leaks `**bold**` or stray `*` from training
-    bias. Strip the obvious tokens so the TTS doesn't read them aloud
-    ("asterisk asterisk bold"). Keep this conservative — we only
-    remove characters that are clearly markdown noise.
-    """
-    out = text.replace("**", "").replace("__", "")
-    # Drop leading/trailing whitespace + standalone bullet markers
-    out = re.sub(r"^[\s>*\-]+", "", out)
-    return out.strip()
 
 
 def _get_client(request: Request) -> SiliconBrainClient:
@@ -126,162 +39,6 @@ def _get_client(request: Request) -> SiliconBrainClient:
         client = SiliconBrainClient()
         request.app.state.brain_client = client
     return client
-
-
-async def _block_trigger_stream(description: str, user_id: UUID):
-    """Synthetic SSE flow for any block-build delegation.
-
-    Emits status → token (engineer LLM stream) → token (summary) → answer.
-    The engineer's raw output (plan lines + FILES block) streams through
-    as `token` events so the canvas debug panel can show the model's
-    thinking live. No Interaction is stored — this is a tool invocation,
-    not a Q&A turn. The teacher's tree picks up nothing here; the visible
-    effect is the block(s) appearing on the canvas.
-
-    Fast path: if `description` names a known template (e.g. "ambient mic"
-    → ambient_mic.{md,js}), call `mount_template` directly and skip the
-    engineer LLM. Saves the round-trip and guarantees the canonical block
-    source instead of an LLM rewrite.
-    """
-    def fmt(payload: dict) -> str:
-        return f"data: {json.dumps(payload)}\n\n"
-
-    template_name = _match_template(description)
-    if template_name:
-        yield fmt({
-            "type": "status", "status": "thinking",
-            "detail": f"mounting template '{template_name}'",
-        })
-        try:
-            result = await mount_template(user_id=user_id, template_name=template_name)
-            message = f"Mounted '{result.block_id}' from template {template_name}."
-            yield fmt({"type": "title", "title": f"Block: {result.block_id}"})
-            yield fmt({"type": "token", "text": message})
-            yield fmt({
-                "type": "answer",
-                "answer": message,
-                "title": f"Block: {result.block_id}",
-                "related_interaction_ids": [],
-            })
-        except Exception as e:
-            err = f"failed to mount template {template_name}: {e}"
-            print(f"[ask/block-trigger] {err}", flush=True)
-            yield fmt({"type": "token", "text": err})
-            yield fmt({
-                "type": "answer",
-                "answer": err,
-                "title": "Block: error",
-                "related_interaction_ids": [],
-            })
-        return
-
-    # Bridge the engineer's async-callback stream through an asyncio.Queue
-    # so we can interleave its deltas into our SSE generator.
-    delta_queue: asyncio.Queue = asyncio.Queue()
-
-    async def push_delta(text: str) -> None:
-        await delta_queue.put(text)
-
-    yield fmt({"type": "status", "status": "thinking", "detail": "delegating to frontend_engineer"})
-    try:
-        async def run_engineer():
-            try:
-                return await request_ui_block(
-                    BlockSpec(description=description),
-                    user_id,
-                    on_delta=push_delta,
-                )
-            finally:
-                await delta_queue.put(None)
-
-        engineer_task = asyncio.create_task(run_engineer())
-        while True:
-            chunk = await delta_queue.get()
-            if chunk is None:
-                break
-            yield fmt({"type": "token", "text": chunk})
-        blocks = await engineer_task
-        ids = [b.id for b in blocks]
-        if len(ids) == 1:
-            title = f"Block: {ids[0]}"
-            message = f"Mounted block '{ids[0]}' on canvas."
-        else:
-            title = f"Blocks: {', '.join(ids)}"
-            message = f"Mounted {len(ids)} blocks: {', '.join(ids)}."
-        yield fmt({"type": "title", "title": title})
-        yield fmt({"type": "token", "text": message})
-        yield fmt({
-            "type": "answer",
-            "answer": message,
-            "title": title,
-            "related_interaction_ids": [],
-        })
-    except Exception as e:
-        err = f"failed to build block: {e}"
-        print(f"[ask/block-trigger] {err}", flush=True)
-        yield fmt({"type": "token", "text": err})
-        yield fmt({
-            "type": "answer",
-            "answer": err,
-            "title": "Block: error",
-            "related_interaction_ids": [],
-        })
-
-
-
-
-async def _app_operator_stream(question: str, user_id: UUID):
-    """Synthetic SSE flow for an app_operator turn.
-
-    Routes the message to the app_operator persona (the "app actions"
-    persona: switch_user, go_home, show_mirror) instead of the teacher.
-    The persona picks one tool and fires it; the visible effect is the
-    app-action SSE event (or the mounted Mirror) landing on the canvas.
-    Emits status → token (persona stream) → answer, matching the shape the
-    canvas command bar consumes. Like `/block`, this stores no Interaction —
-    it's a tool invocation, not a Q&A turn.
-    """
-    def fmt(payload: dict) -> str:
-        return f"data: {json.dumps(payload)}\n\n"
-
-    yield fmt({"type": "status", "status": "thinking", "detail": "delegating to app_operator"})
-    answer_parts: list[str] = []
-    tools_called: list[str] = []
-    try:
-        async for evt in app_operator_respond(question, user_id):
-            kind = evt.get("kind")
-            if kind == "delta":
-                text = evt.get("text", "")
-                if text:
-                    answer_parts.append(text)
-                    yield fmt({"type": "token", "text": text})
-            elif kind == "tool_call":
-                name = evt.get("name") or ""
-                if name:
-                    tools_called.append(name)
-                    yield fmt({"type": "status", "status": "acting", "detail": name})
-        answer = "".join(answer_parts).strip() or (
-            ("Done: " + ", ".join(tools_called)) if tools_called
-            else "No matching app action."
-        )
-        title = ("app_operator: " + ", ".join(tools_called)) if tools_called else "app_operator"
-        yield fmt({"type": "title", "title": title})
-        yield fmt({
-            "type": "answer",
-            "answer": answer,
-            "title": title,
-            "related_interaction_ids": [],
-        })
-    except Exception as e:
-        err = f"app_operator failed: {e}"
-        print(f"[ask/app-operator] {err}", flush=True)
-        yield fmt({"type": "token", "text": err})
-        yield fmt({
-            "type": "answer",
-            "answer": err,
-            "title": "app_operator: error",
-            "related_interaction_ids": [],
-        })
 
 
 @router.post("/ask/stream")
@@ -320,26 +77,12 @@ async def ask_stream(
             output_device_uuid = None
     _output_ctx_token = OUTPUT_DEVICE_ID.set(output_device_uuid)
 
-    # Debug shortcut: '/block <description>' bypasses the teacher entirely
-    # and goes straight to the engineer. Kept for smoke testing the
-    # frontend_engineer in isolation.
-    trigger = _BLOCK_TRIGGER.match(question)
-    if trigger:
-        description = (trigger.group(1) or "").strip()
-        return StreamingResponse(
-            _block_trigger_stream(description, user_id),
-            media_type="text/event-stream",
-        )
-
-    # Route app-level requests to the app_operator persona (switch user,
-    # go home, show mirror) instead of the teacher. Like the `/block`
-    # shortcut above, this is an early return — not a teacher Q&A turn, so
-    # it skips engagement emission, channel resolution, and context assembly.
-    if getattr(body, "addressee", None) == "app_operator":
-        return StreamingResponse(
-            _app_operator_stream(question, user_id),
-            media_type="text/event-stream",
-        )
+    # Non-teacher addressees (`/block` engineer shortcut, app_operator persona)
+    # are early returns — not teacher Q&A turns — so they skip engagement
+    # emission, channel resolution, and context assembly.
+    early = route_addressee(question, body, user_id)
+    if early is not None:
+        return early
 
     client = _get_client(request)
 
@@ -347,15 +90,13 @@ async def ask_stream(
     # the right prompt builder (voice_answer vs answer) gets used.
     # talk_preference is fetched fresh by assemble_context anyway, so we
     # pre-fetch it here cheaply.
-    device_class = (x_device_class or "").strip().lower()
-    if device_class not in _VALID_DEVICE_CLASSES:
-        device_class = "desktop"
+    device_class = normalize_device_class(x_device_class)
     try:
         talk_pref = await client.get_talk_preference(user_id)
     except Exception as e:
         print(f"[ask/stream] talk_preference fetch failed: {e}", flush=True)
         talk_pref = None
-    active_channel = _resolve_active_channel(talk_pref, device_class)
+    active_channel = resolve_active_channel(talk_pref, device_class)
     voice_mode = active_channel in ("voice", "both")
 
     # Voice-leads two-call pattern (Phase 1). When the env flag is set and
@@ -382,8 +123,8 @@ async def ask_stream(
     )
 
     # Engagement boundary + signal.turn_arrived emission (PR-3). Runs
-    # AFTER the `/block` debug-shortcut early-return (a `/block` invocation
-    # isn't a real teacher turn) and BEFORE assemble_context so the
+    # AFTER the addressee early-returns (a `/block` invocation isn't a real
+    # teacher turn) and BEFORE assemble_context so the
     # current_engagement_state projection is fresh when the prompt builder
     # reads it. Failures degrade silently — observability shouldn't break
     # the user-facing turn.
@@ -436,48 +177,17 @@ async def ask_stream(
         answer_body = ""
         extracted_title: str | None = None
         usage: dict = {}
-        # Auto-speak state. Only active on voice channels. The buffer
-        # accumulates streamed prose; once a sentence terminator (.!?
-        # followed by whitespace) is found, the sentence fires to Kokoro
-        # in the background via tools.speak.speak(). If the LLM emits
-        # its own `speak` tool call this turn, we shut off auto-speak to
-        # avoid double-voicing the same content.
-        sentence_buffer = ""
-        auto_speak_suppressed = False
-        auto_speak_count = 0
-        auto_speak_first_ms: float | None = None
-
-        async def _fire_sentence(sentence: str):
-            """Background-fire a single sentence to TTS. Errors are
-            logged and swallowed — auto-speak is a best-effort path."""
-            nonlocal auto_speak_count, auto_speak_first_ms
-            cleaned = _strip_for_speech(sentence)
-            if not cleaned:
-                return
-            if auto_speak_first_ms is None:
-                auto_speak_first_ms = round(
-                    (time.perf_counter() - timing_origin) * 1000, 2
-                )
-                phases["auto_speak_first_ms"] = auto_speak_first_ms
-            auto_speak_count += 1
-            phases["auto_speak_count"] = auto_speak_count
-            try:
-                # channel='voice' on voice-only devices, 'both' on both.
-                # Use the resolved active_channel directly — matches the
-                # speak() tool's channel semantics.
-                speak_channel = "voice" if active_channel == "voice" else "both"
-                # Route to the requester's chosen output device when set.
-                # Defaults to broadcasting (None) so existing single-device
-                # behavior is unchanged.
-                target_device = OUTPUT_DEVICE_ID.get()
-                await tool_speak(
-                    user_id=user_id,
-                    text=cleaned,
-                    channel=speak_channel,
-                    target_device_id=target_device,
-                )
-            except Exception as e:
-                print(f"[ask/stream] auto-speak failed: {e}", flush=True)
+        # Auto-speak: only active on voice channels. The buffer accumulates
+        # streamed prose and fires each completed sentence to Kokoro in the
+        # background; if the LLM emits its own `speak` tool call we suppress
+        # it to avoid double-voicing the same content.
+        autospeak = AutoSpeakBuffer(
+            user_id=user_id,
+            active_channel=active_channel,
+            timing_origin=timing_origin,
+            phases=phases,
+            background_tasks=_background_tasks,
+        )
 
         try:
             title_resolved = False
@@ -501,22 +211,10 @@ async def ask_stream(
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]
-                    # Auto-speak: accumulate the streamed prose and fire
-                    # each completed sentence to Kokoro as a background
-                    # task. Voice-mode only; suppressed once the LLM
-                    # calls speak() itself.
-                    if voice_mode and not auto_speak_suppressed and chunk:
-                        sentence_buffer += chunk
-                        while True:
-                            match = _SENTENCE_BOUNDARY.search(sentence_buffer)
-                            if not match:
-                                break
-                            sentence = sentence_buffer[: match.end()].strip()
-                            sentence_buffer = sentence_buffer[match.end():]
-                            if sentence:
-                                task = asyncio.create_task(_fire_sentence(sentence))
-                                _background_tasks.add(task)
-                                task.add_done_callback(_background_tasks.discard)
+                    # Auto-speak: voice-mode only; fires completed sentences
+                    # as background tasks.
+                    if voice_mode:
+                        autospeak.feed(chunk)
                     if not title_resolved:
                         head_buffer += chunk
                         # Only attempt parse_title once we've seen a newline.
@@ -540,11 +238,9 @@ async def ask_stream(
                         await status_queue.put({"type": "token", "text": chunk})
                 elif evt["kind"] == "tool_call":
                     # If the LLM is going to speak() itself, stop the
-                    # auto-speak path — its text wins. Drop any pending
-                    # buffer so we don't double-voice a partial sentence.
+                    # auto-speak path — its text wins.
                     if voice_mode and evt.get("name") == "speak":
-                        auto_speak_suppressed = True
-                        sentence_buffer = ""
+                        autospeak.suppress()
                     # Forward every tool call to the SSE stream so the
                     # frontend / benchmark can observe what the persona
                     # is invoking. Frontend ignores types it doesn't
@@ -570,13 +266,8 @@ async def ask_stream(
 
             # Flush any trailing prose that didn't end in a sentence
             # terminator — the user's last word still needs to be heard.
-            if voice_mode and not auto_speak_suppressed:
-                tail = sentence_buffer.strip()
-                if tail:
-                    task = asyncio.create_task(_fire_sentence(tail))
-                    _background_tasks.add(task)
-                    task.add_done_callback(_background_tasks.discard)
-                    sentence_buffer = ""
+            if voice_mode:
+                autospeak.flush_tail()
 
             final_title, answer_body = parse_title(answer)
             if extracted_title is None:
