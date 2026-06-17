@@ -3,6 +3,8 @@
 > This document is the source of truth for **how beWithMe is structured and why**. Any agent making structural changes (new module, new sidecar, new dependency, new persona) must read this file first.
 >
 > `CLAUDE.md` is the operator's manual (how to run, where logs live, command reference). Keep ops there; keep architecture here.
+>
+> **Per-module docs.** This file is the *system* map. Several modules also carry their own `ARCHITECTURE.md` — an owner reference (territory · protocol consumed/provided · can-work-alone · collisions) from the architecture-review owner simulation, so one owner can work inside a module without changing the shared protocol. See **§11**.
 
 ---
 
@@ -89,7 +91,8 @@ Services don't decide; they execute. Each service is a FastAPI process at a fixe
 | transcribe | +3 | local Whisper + LiveKit text turn-detector (`/api/eou`) — co-located perception primitives |
 | speak | +4 | local Kokoro |
 | browser | +5 | Playwright (headless web fetch + handoff) |
-| **frontend-sandbox** (planned) | +6 | runtime UI generation + validation, see § 5 |
+| maestro | +6 | long-instance reasoning over the event stream + multi-persona landing feed (`/api/maestro`, `/api/feed`) |
+| **frontend-sandbox** (planned) | +7 | runtime UI generation + validation, see § 5 |
 
 Routers always live in `services/`. Never in persona, never in silicon_brain, never in infra.
 
@@ -127,6 +130,7 @@ infra is the toolbox everyone can use. Stateless utilities + the **shared persis
 - `topology.py` — `SERVICE_OFFSETS`, `upstream_url`, route table
 - `config.py` — `DATABASE_URL`, Ollama URL, embedding model, LLM provider env
 - `contracts/` — DTOs shared on the wire between domains over HTTP
+- `devices/` — the infra device/canvas domain: live SSE presence (`registry.py`), the user-keyed `devices` ORM (`models.py`), per-device canvas mount topology (`canvas_layout.py`), and the live SSE **delivery channel + mount tracker** (`delivery.py`) that tools/canvas verbs call to push events to a device; wire DTO in `contracts/devices.py`. User-keyed but infra-owned device topology (media → visual → canvas), not silicon_brain memory. The persona sidecar's `/api/dynamic` router is just the HTTP face onto `delivery.py`.
 - `hlr.py` — half-life regression math
 - `model/` — LLM provider facade (deepseek + minimax); `agent_loop.py` is the generic tool-execution loop shared by personas (relocated here from `persona/teacher/tools/loop.py`, which now re-exports it so a second persona can drive the loop without crossing the persona-to-persona import boundary)
 - `rag/embedding.py` — Ollama embeddings
@@ -255,7 +259,7 @@ UI mutations don't ship to the user directly. They flow through a sandbox:
 
 ```
 engineer persona → tool: replace_widget(spec) →
-  services/frontend-sandbox/  (new sidecar at offset +6)
+  services/frontend-sandbox/  (new sidecar at offset +7)
     1. Receive component spec / source.
     2. Compile (TypeScript/JSX → JS bundle).
     3. Lint + type-check.
@@ -320,10 +324,10 @@ The current codebase implements the foundation but not the full vision. Don't be
 | Persona | helper | ❌ | placeholder dir TBD |
 | Persona | engineer | ❌ | needed for frontend-dynamic |
 | Persona | tool registry per persona | ❌ | persona-side tool dispatch not yet implemented |
-| Tools | tools/ top-level package | ❌ | tools currently live as static FastAPI routers in `services/persona/routers/` |
-| Tools | typed Tool protocol | ❌ | DTOs exist (`infra/contracts/`) but no `Tool` interface |
-| Services | shell, persona, knowledge, transcribe, speak, browser | ✅ | all 6 sidecars running |
-| Services | frontend-sandbox | ❌ | not built |
+| Tools | tools/ top-level package | ✅ | 17 tool modules under `tools/`, assembled via `persona/teacher/tools/manifest.py` (decoupling debt — see architecture-review ledger F2) |
+| Tools | typed Tool protocol | 🚧 | tool modules exist + are wired; a uniform typed `Tool` interface is still partial |
+| Services | shell, persona, knowledge, transcribe, speak, browser, maestro | ✅ | all 7 sidecars running (maestro = +6, event-stream reasoning + feed) |
+| Services | frontend-sandbox | ❌ | not built (would be +7; +6 is maestro) |
 | Frontend | static REST → backend | ✅ | works today |
 | Frontend | dynamic UI mutation by personas | ❌ | needs sandbox + dispatcher |
 
@@ -409,10 +413,37 @@ grep -rnE "^(from|import) silicon_brain" persona/   # exclude TYPE_CHECKING bloc
 .venv/bin/python -c "
 from infra.contracts import BrainStateDTO, RecommendationDTO
 from infra.hlr import compute_mastery
-from silicon_brain.db import Base, engine, async_session, get_db
+from infra.db import Base, engine, async_session, get_db
 import persona.teacher
 from infra.silicon_brain_client import SiliconBrainClient
 import services.persona.main, services.knowledge.main
 print('OK')
 "
 ```
+
+---
+
+## 11. Module docs (per-owner)
+
+This file governs *where* each module sits in the system. Each owned module also carries its own
+`ARCHITECTURE.md` — the owner reference recorded by the architecture-review **owner simulation**
+(`architecture-review/PROCESS.md` Step 4): its territory, the **protocol** it consumes/provides,
+whether its owner can work alone, and its collision points. The per-module doc governs what happens
+*inside* the module and which shared interfaces it must not change unilaterally — so different
+people can own different modules in parallel.
+
+| Module | Doc | Owner role |
+|---|---|---|
+| infra | [`infra/ARCHITECTURE.md`](./infra/ARCHITECTURE.md) | the leaf + **protocol provider** |
+| silicon_brain | [`silicon_brain/ARCHITECTURE.md`](./silicon_brain/ARCHITECTURE.md) | user data + its knowledge-sidecar HTTP face |
+| teacher | [`persona/teacher/ARCHITECTURE.md`](./persona/teacher/ARCHITECTURE.md) | the teaching persona |
+| app_operator | [`persona/app_operator/ARCHITECTURE.md`](./persona/app_operator/ARCHITECTURE.md) | app-level actions |
+| canvas | [`workshop/canvas/ARCHITECTURE.md`](./workshop/canvas/ARCHITECTURE.md) | block / canvas verbs |
+| engineer | [`agents/frontend_engineer/ARCHITECTURE.md`](./agents/frontend_engineer/ARCHITECTURE.md) | dynamic UI block builder |
+| tools | [`tools/ARCHITECTURE.md`](./tools/ARCHITECTURE.md) | general / public verbs |
+| maestro | [`services/maestro/ARCHITECTURE.md`](./services/maestro/ARCHITECTURE.md) | event-stream reasoning + feed |
+| shell | [`services/shell/ARCHITECTURE.md`](./services/shell/ARCHITECTURE.md) | the public proxy + auth gate |
+| frontend | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) | the Next.js + Electron surface |
+
+The shared **protocol** these owners must not change unilaterally is registered in the
+owner-simulation ledger entry (`architecture-review/ledger/2026-06-17-ownership-simulation.md`).

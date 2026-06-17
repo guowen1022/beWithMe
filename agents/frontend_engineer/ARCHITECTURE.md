@@ -173,3 +173,21 @@ already describe the target shape and note today's fallback.
 - Run code. The browser is the sandbox; the agent commits source and
   trusts the runtime to mount it.
 - Manage cross-user state. Each turn is scoped to one `user_id`.
+
+---
+
+## 9. Owner reference — protocol & collisions (architecture-review Step 4)
+
+> Recorded by the architecture-review **owner simulation** so the engineer owner can work without
+> changing the shared protocol. See [`../../architecture-review/PROCESS.md`](../../architecture-review/PROCESS.md) Step 4.
+
+- **Protocol I consume:** `infra.contracts.ui.BlockSource` (my output shape); `infra.sandbox`
+  (validation); the per-user git workspace on disk; the Anthropic agents API.
+- **Protocol I provide:** `BlockSource` artifacts + `list_blocks(user_id)`, and the persisted
+  workspace that the **canvas** tools (`mount_template`, `request_ui_block`) read and deliver.
+- **Can I work alone?** Yes — block-generation logic, skills, and the workspace format are mine.
+- **Collisions:** `infra/contracts/ui.py:BlockSource`; the `request_ui_block` seam in
+  `workshop/canvas/tools` (canvas owner).
+- **Boundary rules:** reached only through the `request_ui_block` tool boundary (no persona imports
+  my code; I import no persona internals); generated source passes `infra.sandbox` before delivery
+  (Principle 9 — LLM-authored UI is gated).
