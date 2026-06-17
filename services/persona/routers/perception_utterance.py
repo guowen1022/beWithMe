@@ -20,7 +20,7 @@ from infra.auth import parse_user_id as get_current_user_id
 from infra.contracts.ui import TeacherThinking
 from infra.event_log import log_event
 from infra.perception import is_likely_echo, record_user_speech
-from services.persona.routers.dynamic import enqueue_for_user
+from infra.devices.delivery import enqueue_for_user
 
 
 router = APIRouter()

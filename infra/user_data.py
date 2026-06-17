@@ -108,6 +108,8 @@ def registered_dirs() -> list[UserDataDir]:
 
 # Model packages: importing them registers every ORM table on Base.metadata.
 _MODEL_MODULES: tuple[str, ...] = (
+    "infra.devices.models",   # infra-owned: the user-keyed `devices` table
+    "infra.devices.canvas_layout",   # infra-owned: per-device canvas mount topology
     "silicon_brain.models",
     "persona.teacher.models",
     "persona.teacher.knowledge.models",

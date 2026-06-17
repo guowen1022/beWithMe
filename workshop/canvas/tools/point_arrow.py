@@ -27,8 +27,8 @@ from agents.frontend_engineer import workspace as ws
 from infra.contracts.ui import BlockMessage, BlockSource, UIUpdate
 from infra.db import async_session
 from infra.devices import registry as device_registry
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
+from infra.devices.canvas_layout import CanvasLayout
 from infra.model.tools import ToolSpec
 
 

@@ -28,7 +28,7 @@ from infra.perception import (
     VoicePerception,
     read_for_user,
 )
-from services.persona.routers.dynamic import mounted_block_ids
+from infra.devices.delivery import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
 

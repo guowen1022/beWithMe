@@ -22,22 +22,15 @@ active device class — both injected into the system prompt.
 """
 from __future__ import annotations
 
+import json
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
-
-from sqlalchemy import select
 
 from infra import perception
 from infra.contracts.ui import BlockMessage, VoicePlay
-from infra.db import async_session
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from silicon_brain.models.user_preferences import (
-    DEFAULT_VOICE_ID,
-    DEFAULT_VOICE_LANG,
-    DEFAULT_VOICE_SPEED,
-    UserPreferences,
-)
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
+from infra.silicon_brain_client import SiliconBrainClient
 
 from infra.model.tools import ToolSpec
 
@@ -50,19 +43,17 @@ _TEACHER_SPEECH_TOPIC = "teacher-speech.text"
 
 
 async def _load_voice_prefs(user_id: UUID) -> tuple[str, float, str]:
-    """Fetch (voice_id, voice_speed, voice_lang) for the user.
+    """Fetch (voice_id, voice_speed, voice_lang) via the knowledge sidecar.
 
-    Falls through to the kokoro-matching defaults if the row doesn't
-    exist yet.
+    The kokoro-matching defaults are applied server-side by
+    `get_or_create_preferences`, so the row always exists by read time.
     """
-    async with async_session() as session:
-        result = await session.execute(
-            select(UserPreferences).where(UserPreferences.user_id == user_id)
-        )
-        row = result.scalar_one_or_none()
-    if row is None:
-        return DEFAULT_VOICE_ID, DEFAULT_VOICE_SPEED, DEFAULT_VOICE_LANG
-    return row.voice_id, float(row.voice_speed), row.voice_lang
+    client = SiliconBrainClient()
+    try:
+        prefs = await client.get_voice_preferences(user_id)
+    finally:
+        await client.aclose()
+    return prefs["voice_id"], float(prefs["voice_speed"]), prefs["voice_lang"]
 
 
 async def _send(user_id: UUID, target_device_id: Optional[UUID], event) -> int:

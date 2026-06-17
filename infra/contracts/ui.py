@@ -3,8 +3,8 @@
 These types are shared between three places that don't import each other:
   * agents/frontend_engineer/ — produces a BlockSource.
   * tools/request_ui_block.py — emits a UIUpdate to the dynamic stream.
-  * services/persona/routers/dynamic.py — multiplexes UIUpdate / BlockMessage /
-    BlockError over SSE to the frontend.
+  * infra/devices/delivery.py — multiplexes UIUpdate / BlockMessage / BlockError
+    over SSE to the frontend (the persona sidecar's /api/dynamic is its HTTP face).
 
 Mirrors the PoC (block-canvas/lib/types.ts) shape so the browser-side eval
 loop and these contracts agree on what a block looks like.

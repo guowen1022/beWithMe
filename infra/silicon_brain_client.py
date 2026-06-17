@@ -66,12 +66,6 @@ class SiliconBrainClient:
             created_at=data.get("created_at"),
         )
 
-    async def get_user_preferences(self, user_id: UUID) -> UserProfileDTO:
-        """User's UserPreferences — what the user explicitly stated."""
-        resp = await self._http.get("/api/preferences", headers=_user_headers(user_id))
-        resp.raise_for_status()
-        return UserProfileDTO.model_validate(resp.json())
-
     async def get_talk_preference(self, user_id: UUID) -> dict:
         """Per-device talk-channel preference.
 
@@ -81,6 +75,30 @@ class SiliconBrainClient:
         on first read.
         """
         resp = await self._http.get("/api/talk-preference", headers=_user_headers(user_id))
+        resp.raise_for_status()
+        return resp.json()
+
+    async def update_talk_preference(
+        self, user_id: UUID, *, desktop: str, tablet: str, phone: str,
+    ) -> dict:
+        """Write the per-device talk-channel preference. All three device
+        classes are required by the endpoint; the caller reads the current
+        values first and overrides only the ones it means to change."""
+        resp = await self._http.put(
+            "/api/talk-preference",
+            headers=_user_headers(user_id),
+            json={"desktop": desktop, "tablet": tablet, "phone": phone},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_voice_preferences(self, user_id: UUID) -> dict:
+        """Voice/TTS output prefs — `{voice_id, voice_speed, voice_lang}`.
+
+        Defaults (af_heart / 1.0 / en-us) are applied server-side, so the
+        `speak` tool never needs to import silicon_brain to seed them.
+        """
+        resp = await self._http.get("/api/voice-preference", headers=_user_headers(user_id))
         resp.raise_for_status()
         return resp.json()
 
@@ -256,6 +274,20 @@ class SiliconBrainClient:
         )
         resp.raise_for_status()
         return InboxProposalDTO.model_validate(resp.json())
+
+    async def inbox_proposal_realized(
+        self, user_id: UUID, kickoff_event_id: UUID, candidate_idx: int,
+    ) -> bool:
+        """True if an inbox proposal already exists for this
+        (kickoff_event_id, candidate_idx) — the kickoff realizer's idempotency
+        check, over HTTP, so the persona side never imports the InboxProposal ORM."""
+        resp = await self._http.get(
+            "/api/inbox/realized",
+            headers=_user_headers(user_id),
+            params={"kickoff_event_id": str(kickoff_event_id), "candidate_idx": candidate_idx},
+        )
+        resp.raise_for_status()
+        return bool(resp.json().get("realized"))
 
     # --- Feed candidates (multi-persona feed store) ---
 

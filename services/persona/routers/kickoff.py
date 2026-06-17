@@ -20,10 +20,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
-
-from infra.db import async_session
-from silicon_brain.models.inbox_proposal import InboxProposal
+from infra.silicon_brain_client import SiliconBrainClient
 from tools.write_to_inbox import write_to_inbox
 
 
@@ -48,19 +45,13 @@ def _parse_user_id(x_user_id: Optional[str]) -> UUID:
 
 
 async def _already_realized(
+    client: SiliconBrainClient,
     user_id: UUID, kickoff_event_id: UUID, candidate_idx: int,
 ) -> bool:
-    """Lookup any prior inbox_proposal with this (user, kickoff, idx)
-    so re-firing the webhook is idempotent."""
-    async with async_session() as db:
-        existing = await db.execute(
-            select(InboxProposal).where(
-                InboxProposal.user_id == user_id,
-                InboxProposal.kickoff_event_id == kickoff_event_id,
-                InboxProposal.candidate_idx == candidate_idx,
-            )
-        )
-        return existing.scalar_one_or_none() is not None
+    """Has this (user, kickoff, idx) already produced an inbox proposal?
+    Checked over HTTP via the knowledge sidecar so the persona side never
+    imports the silicon_brain ORM — the brain stays behind the HTTP boundary."""
+    return await client.inbox_proposal_realized(user_id, kickoff_event_id, candidate_idx)
 
 
 @router.post("/agent/kickoff")
@@ -78,8 +69,10 @@ async def realize_kickoff(
     if not body.candidates:
         return {"written": 0, "skipped": 0}
 
+    client = SiliconBrainClient()
+
     async def _write_one(idx: int, raw: dict) -> dict:
-        if await _already_realized(body.user_id, body.kickoff_event_id, idx):
+        if await _already_realized(client, body.user_id, body.kickoff_event_id, idx):
             return {"idx": idx, "skipped": True}
         result = await write_to_inbox(
             user_id=body.user_id,
@@ -95,10 +88,13 @@ async def realize_kickoff(
 
     # Parallel realization — the SPEC explicitly calls for "K parallel
     # write_to_inbox calls."
-    results = await asyncio.gather(
-        *[_write_one(idx, c) for idx, c in enumerate(body.candidates)],
-        return_exceptions=False,
-    )
+    try:
+        results = await asyncio.gather(
+            *[_write_one(idx, c) for idx, c in enumerate(body.candidates)],
+            return_exceptions=False,
+        )
+    finally:
+        await client.aclose()
     written = sum(1 for r in results if r.get("result"))
     skipped = sum(1 for r in results if r.get("skipped"))
     return {"written": written, "skipped": skipped, "results": results}

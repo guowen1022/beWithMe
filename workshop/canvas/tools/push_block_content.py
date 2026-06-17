@@ -18,7 +18,7 @@ from uuid import UUID
 from infra.contracts.ui import BlockMessage
 from infra.render.note import process as preprocess_note
 from infra.render.note_md import render_markdown as render_note_markdown
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from workshop.canvas.tools import _note_cache, _note_index, _template_registry
 from infra.model.tools import ToolSpec
 

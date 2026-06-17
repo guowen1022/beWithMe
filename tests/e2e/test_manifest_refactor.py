@@ -129,7 +129,7 @@ TOOLS_WITH_BUILD_SPEC = [
     ("tools.stream_emit",                        "stream_emit"),
     ("tools.stream_query",                       "stream_query"),
     ("tools.stream_projection",                  "stream_projection"),
-    ("tools.read_concept_mastery",               "read_concept_mastery"),
+    ("persona.teacher.tools.read_concept_mastery", "read_concept_mastery"),
     ("tools.read_world_knowledge",               "read_world_knowledge"),
     ("tools.read_captures",                      "read_captures"),
     # PR-5 — kickoff realization ACT tool.

@@ -23,7 +23,7 @@ from infra.contracts.devices import (
     Voice,
 )
 from infra.devices import registry as device_registry
-from services.persona.routers.dynamic import mounted_block_ids
+from infra.devices.delivery import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
 from infra.model.tools import ToolSpec
@@ -51,7 +51,7 @@ async def list_media(user_id: UUID) -> MediaInventory:
     }
 
     # device_id (str) → list of block_ids — read from the in-memory
-    # mount tracker maintained by services.persona.routers.dynamic on
+    # mount tracker maintained by infra.devices.delivery on
     # every UIUpdate fan-out. No DB query.
     blocks_by_device: dict[str, list[str]] = mounted_block_ids(user_id)
 

@@ -8,8 +8,8 @@ from silicon_brain.models.inbox_proposal import InboxProposal
 from silicon_brain.models.feed_candidate import FeedCandidate
 from silicon_brain.models.note_chunk import NoteChunk
 from silicon_brain.models.user_preferences import UserPreferences
-from silicon_brain.models.device import Device
-from silicon_brain.models.canvas_layout import CanvasLayout
+# Device ORM lives in infra.devices.models now (infra-level device registry).
+# CanvasLayout ORM lives in infra.devices.canvas_layout now (infra device/canvas topology).
 
 __all__ = [
     "User",
@@ -21,6 +21,4 @@ __all__ = [
     "FeedCandidate",
     "NoteChunk",
     "UserPreferences",
-    "Device",
-    "CanvasLayout",
 ]

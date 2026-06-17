@@ -509,7 +509,7 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     from persona.teacher.tools.manifest import build_tools
     from persona.teacher.tools.loop import run as run_teacher_tool_loop
     from persona.teacher.writer import run_canvas_writer
-    from services.persona.routers.dynamic import enqueue_for_user
+    from infra.devices.delivery import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
 
     # Voice-leads Phase 1: Lane A is the spoken pass. When the flag is on,
@@ -899,7 +899,7 @@ async def _execute_research(
     from persona.teacher.tools.manifest import build_tools
     from persona.teacher.tools.loop import run as run_teacher_tool_loop
     from persona.teacher import research_state
-    from services.persona.routers.dynamic import enqueue_for_user
+    from infra.devices.delivery import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
 
     summary_line = f"research: {goal[:80]}"
@@ -1138,7 +1138,7 @@ async def _execute_research_from_recipe(
     """
     from persona.teacher.contexts.research import assemble as assemble_research
     from persona.teacher import research_state
-    from services.persona.routers.dynamic import enqueue_for_user
+    from infra.devices.delivery import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
     from infra.model.llm import generate_cached
     from workshop.research import recipe_runner, recipe_store
@@ -1339,7 +1339,7 @@ async def _execute_background(user_id: UUID, summary: Any) -> None:
     from persona.teacher.tools.manifest import build_tools
     from persona.teacher.tools.loop import run as run_teacher_tool_loop
     from persona.teacher import notices as teacher_notices
-    from services.persona.routers.dynamic import enqueue_for_user
+    from infra.devices.delivery import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
 
     summary_line = _format_events_summary([summary])

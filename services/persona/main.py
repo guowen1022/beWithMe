@@ -37,6 +37,7 @@ from services.persona.routers import (
     interactions as interactions_router,
     kickoff as kickoff_router,
     perception_utterance as perception_utterance_router,
+    preferences as preferences_router,
     screen_share as screen_share_router,
     sessions as sessions_router,
     skills as skills_router,
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
     teacher_triggers.install()
     # Wire LLM-call observability to the SSE fan-out so every LLM call
     # surfaces in the developer debug panel.
-    from services.persona.routers.dynamic import enqueue_for_user
+    from infra.devices.delivery import enqueue_for_user
     register_emit(enqueue_for_user)
     try:
         yield
@@ -73,6 +74,7 @@ app.include_router(concepts_router.router, prefix="/api")
 app.include_router(dynamic_router.router, prefix="/api")
 app.include_router(teacher_media_router.router, prefix="/api")
 app.include_router(perception_utterance_router.router, prefix="/api")
+app.include_router(preferences_router.router, prefix="/api")
 app.include_router(screen_share_router.router, prefix="/api")
 app.include_router(kickoff_router.router, prefix="/api")
 app.include_router(feed_router.router, prefix="/api")

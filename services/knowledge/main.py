@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-# Register silicon_brain models for SQLAlchemy create_all.
-import silicon_brain.models  # noqa: F401
-# Also register teacher's models — they share infra.db.Base, so create_all
-# needs them visible from anywhere that imports infra.db's metadata.
-import persona.teacher.models  # noqa: F401
+# Populate infra.db.Base.metadata with every domain's ORM via the infra
+# registration manifest (dynamic imports live inside infra), so this sidecar's
+# metadata is complete for SQLAlchemy WITHOUT the knowledge sidecar naming any
+# persona directly — it stays persona-agnostic (F7).
+from infra.user_data import load_domains
+load_domains()
 
 from services.knowledge.routers import (
     auth,
@@ -28,7 +29,6 @@ from services.knowledge.routers import (
     inbox,
     media,
     notes,
-    preferences,
     profile,
     retrieval,
     talk_preference,
@@ -45,7 +45,6 @@ app.include_router(events.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
-app.include_router(preferences.router, prefix="/api")
 app.include_router(talk_preference.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
 app.include_router(media.router, prefix="/api")

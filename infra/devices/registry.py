@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from infra.contracts.devices import Device, DeviceCapabilities, DeviceClass
 from infra.db import async_session
-from silicon_brain.models.device import Device as DeviceORM
+from infra.devices.models import Device as DeviceORM
 
 
 # user_id (str) -> { device_id (str) -> ref_count }

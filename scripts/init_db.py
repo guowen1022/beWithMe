@@ -184,6 +184,8 @@ async def _run_migrate() -> None:
 async def _create_all_models() -> None:
     """Apply the schema from SQLAlchemy models — every Base subclass becomes a table."""
     # Importing these registers every model's class on infra.db.Base.metadata.
+    import infra.devices.models  # noqa: F401  — Device (infra-level device registry; user-keyed `devices` table)
+    import infra.devices.canvas_layout  # noqa: F401  — CanvasLayout (infra device/canvas topology)
     import silicon_brain.models  # noqa: F401  — User, Profile, Document, DocumentChunk, UserPreferences
     import persona.teacher.models  # noqa: F401  — Interaction, LearningGoal, Recommendation, LearningSession, TeacherPreferenceModel, ConceptNode, ConceptEdge
     from infra.db import Base, engine

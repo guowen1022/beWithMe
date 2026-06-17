@@ -66,6 +66,7 @@ PREFIX_TO_SERVICE: Final[dict[str, str]] = {
     "perception":      "persona",   # ambient_mic block → /api/perception/utterance
     "agent":           "persona",   # PR-5: /api/agent/kickoff webhook from maestro
     "skills":          "persona",   # frontend block skill files (JS assets for note block)
+    "preferences":     "persona",   # teacher's distilled preference view (TeacherPreferenceModel); on the persona sidecar so the knowledge sidecar needn't import the teacher (F7)
     # Stateless infra
     "transcribe": "transcribe",
     "eou":        "transcribe",   # text turn-detector — sibling endpoint

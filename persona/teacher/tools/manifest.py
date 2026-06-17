@@ -30,11 +30,11 @@ from tools import (
     look_at_image as _look_at_image,
     look_at_video as _look_at_video,
     read_captures as _read_captures,
-    read_concept_mastery as _read_concept_mastery,
     read_document as _read_document,
     read_url as _read_url,
     read_world_knowledge as _read_world_knowledge,
     search_notes as _search_notes,
+    set_talk_channel as _set_talk_channel,
     speak as _speak,
     stream_emit as _stream_emit,
     stream_projection as _stream_projection,
@@ -42,6 +42,9 @@ from tools import (
     web_view as _web_view,
     write_to_inbox as _write_to_inbox,
 )
+# read_concept_mastery is a teacher tool (reads persona.teacher.knowledge), so it
+# lives under the teacher persona, not in the generic tools/ package.
+from persona.teacher.tools import read_concept_mastery as _read_concept_mastery
 from workshop.canvas.tools import (
     block_action as _block_action,
     edit_note as _edit_note,
@@ -432,6 +435,8 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # tools that themselves invoke the LLM, do RAG, or duplicate
     # context that's already in the prompt go to Lane B only.
     "speak":              {"answer", "user_facing", "research"},
+    # Fast HTTP write (no LLM) — user can flip voice/caption mid-conversation.
+    "set_talk_channel":   {"answer", "user_facing", "background", "research"},
     "mount_template":     {"answer", "user_facing", "background", "research", "writer"},
     "edit_note":     {"answer", "user_facing", "background", "research", "writer"},
     "block_action":       {"answer", "user_facing", "background", "research"},
@@ -505,6 +510,7 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         _push_block_content_tool.build_spec(user_id),
         _point_arrow.build_spec(user_id),
         _speak.build_spec(user_id),
+        _set_talk_channel.build_spec(user_id),
         _layout_blocks.build_spec(user_id),
         _block_action.build_spec(user_id),
         # Maestro-era stream + domain READ tools (PR-2). Appended at

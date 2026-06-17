@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from infra.contracts.ui import BlockAction
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from infra.model.tools import ToolSpec
 
 

@@ -42,12 +42,12 @@ from workshop.canvas.tools._slug import (
     slug_collides_with_existing,
     slug_from_markdown,
 )
-from services.persona.routers.dynamic import (
+from infra.devices.delivery import (
     enqueue_for_device,
     enqueue_for_user,
     mounted_block_ids,
 )
-from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.devices.canvas_layout import CanvasLayout
 from infra.model.tools import ToolSpec
 
 

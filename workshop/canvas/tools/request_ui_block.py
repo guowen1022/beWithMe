@@ -28,8 +28,8 @@ from infra.contracts.ui import BlockSource, BlockSpec, UIUpdate
 from infra.db import async_session
 from infra.devices import registry as device_registry
 from infra.sandbox import validate_block_source
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
-from silicon_brain.models.canvas_layout import CanvasLayout
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
+from infra.devices.canvas_layout import CanvasLayout
 from infra.model.tools import ToolSpec
 
 

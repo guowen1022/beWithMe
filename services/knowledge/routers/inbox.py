@@ -202,6 +202,26 @@ async def list_proposals(
     return [_to_dto(r) for r in rows]
 
 
+@router.get("/inbox/realized")
+async def proposal_realized(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(parse_user_id),
+    kickoff_event_id: UUID = Query(...),
+    candidate_idx: int = Query(...),
+) -> dict:
+    """Idempotency check for kickoff realization: has a proposal already been
+    written for this (user, kickoff_event_id, candidate_idx)? Lets the persona
+    sidecar dedupe re-fired webhooks without importing the InboxProposal ORM."""
+    existing = (await db.execute(
+        select(InboxProposal.id).where(
+            InboxProposal.user_id == user_id,
+            InboxProposal.kickoff_event_id == kickoff_event_id,
+            InboxProposal.candidate_idx == candidate_idx,
+        ).limit(1)
+    )).first()
+    return {"realized": existing is not None}
+
+
 async def _load_and_authorise(
     db: AsyncSession, proposal_id: UUID, user_id: UUID,
 ) -> InboxProposal:

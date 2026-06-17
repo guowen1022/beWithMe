@@ -155,6 +155,13 @@ def services() -> Iterator[dict]:
         pytest.skip(f"venv python not found at {VENV_PYTHON}")
 
     base_port = _free_base_port()
+    # Make in-process upstream_url() calls resolve to THIS e2e topology — e.g. a
+    # test that calls a tool directly (tools.speak) which builds a
+    # SiliconBrainClient internally. base_port() reads os.environ["BASE_PORT"]
+    # dynamically, so setting it here points in-process calls at the e2e sidecars
+    # instead of whatever happens to be on the default base port. Restored below.
+    _prev_base_port = os.environ.get("BASE_PORT")
+    os.environ["BASE_PORT"] = str(base_port)
     log_dir = REPO_ROOT / ".e2e-logs"
     if log_dir.exists():
         shutil.rmtree(log_dir)
@@ -244,6 +251,10 @@ def services() -> Iterator[dict]:
                         proc.kill()
                 except ProcessLookupError:
                     pass
+        if _prev_base_port is None:
+            os.environ.pop("BASE_PORT", None)
+        else:
+            os.environ["BASE_PORT"] = _prev_base_port
 
 
 @pytest.fixture(scope="session")

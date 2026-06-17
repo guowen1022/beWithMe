@@ -22,7 +22,7 @@ from uuid import UUID
 
 from infra.contracts.ui import AppAction
 from infra.model.tools import ToolSpec
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from workshop.canvas.tools.mount_template import mount_template
 
 

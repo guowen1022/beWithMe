@@ -48,7 +48,7 @@ from infra.render.note_md import (
     render_markdown as render_note_markdown,
     render_markdown_fragment as render_note_markdown_fragment,
 )
-from services.persona.routers.dynamic import enqueue_for_device, enqueue_for_user
+from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from workshop.canvas.tools import _note_cache, _note_index, _template_registry
 from infra.model.tools import ToolSpec
 

@@ -89,3 +89,27 @@ async def update_talk_preference(
     await db.commit()
     await db.refresh(prefs)
     return _to_read(prefs)
+
+
+# Voice/TTS output prefs live on the same user-stated UserPreferences row as
+# talk-preference, so the `speak` tool reads them here (not via /api/preferences,
+# which is the teacher's distilled TeacherPreferenceModel view).
+class VoicePreferenceRead(BaseModel):
+    voice_id: str
+    voice_speed: float
+    voice_lang: str
+
+
+@router.get("/voice-preference", response_model=VoicePreferenceRead)
+async def get_voice_preference(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Voice/TTS output prefs for the `speak` tool. Defaults (af_heart /
+    1.0 / en-us) come from the UserPreferences model, applied on first create."""
+    prefs = await _get_or_create_user_preferences(db, user_id)
+    return VoicePreferenceRead(
+        voice_id=prefs.voice_id,
+        voice_speed=float(prefs.voice_speed),
+        voice_lang=prefs.voice_lang,
+    )
