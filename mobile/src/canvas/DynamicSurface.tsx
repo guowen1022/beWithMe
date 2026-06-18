@@ -14,6 +14,7 @@ import { gridForDevice, scaleGridForDevice } from "../lib/grid/gridConfig";
 import { getDeviceClass } from "../lib/device/deviceClass";
 import { subscribeToDynamicStream, type DynamicEvent } from "../lib/api/dynamic";
 import { bus } from "../lib/bus/bus";
+import { useAppStore } from "../state/store";
 import { parseBlockSource, templateFromBlockId } from "./parseBlockSource";
 
 interface DynamicSurfaceProps {
@@ -22,17 +23,21 @@ interface DynamicSurfaceProps {
   autoMountDefault?: boolean;
 }
 
+// The canvas's initial state: just the ambient mic (mobile has no launcher
+// feed, so this doubles as "home" — what go_home resets back to).
+function initialBlocks(autoMountDefault: boolean): BlockInstance[] {
+  if (!autoMountDefault) return [];
+  const entry = blockRegistry.ambient_mic;
+  if (!entry) return [];
+  const desktopGrid = entry.mobileGrid ?? { x: 0, y: 0, w: 4, h: 9 };
+  return [{ id: "ambient_mic_default", template: "ambient_mic", grid: desktopGrid }];
+}
+
 export function DynamicSurface({ autoMountDefault = true }: DynamicSurfaceProps): React.ReactElement {
   const device = getDeviceClass();
   const gridSize = gridForDevice(device);
 
-  const [blocks, setBlocks] = useState<BlockInstance[]>(() => {
-    if (!autoMountDefault) return [];
-    const entry = blockRegistry.ambient_mic;
-    if (!entry) return [];
-    const desktopGrid = entry.mobileGrid ?? { x: 0, y: 0, w: 4, h: 9 };
-    return [{ id: "ambient_mic_default", template: "ambient_mic", grid: desktopGrid }];
-  });
+  const [blocks, setBlocks] = useState<BlockInstance[]>(() => initialBlocks(autoMountDefault));
 
   const [size, setSize] = useState({ w: 0, h: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
@@ -92,6 +97,17 @@ export function DynamicSurface({ autoMountDefault = true }: DynamicSurfaceProps)
     }
     if (event.type === "block-error") {
       console.warn("[DynamicSurface] block-error", event.block_id, event.error);
+      return;
+    }
+    if (event.type === "app-action") {
+      // The teacher's end_session tool (and app_operator's go_home) emit this.
+      // Mobile has no launcher feed, so "home" = reset the canvas to its
+      // initial state and start a fresh session. switch_user has no account
+      // picker on mobile yet, so it's ignored.
+      if (event.action === "go_home") {
+        useAppStore.getState().newSession();
+        setBlocks(initialBlocks(autoMountDefault));
+      }
       return;
     }
     // voice-play, block-action, teacher-thinking: routed to bus for whoever

@@ -15,7 +15,8 @@ export type DynamicEvent =
   | { type: "block-error"; block_id: string; error: string }
   | { type: "block-action"; block_id: string; action: string; options?: Record<string, unknown> }
   | { type: "voice-play"; text: string; voice?: string | null; speed?: number | null; lang?: string | null }
-  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string };
+  | { type: "teacher-thinking"; phase: "start" | "end"; trigger: string; summary?: string }
+  | { type: "app-action"; action: "switch_user" | "go_home"; target?: string | null; options?: Record<string, unknown> };
 
 export async function subscribeToDynamicStream(
   onEvent: (event: DynamicEvent) => void,

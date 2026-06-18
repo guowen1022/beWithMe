@@ -50,20 +50,22 @@ PINNED_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 #       _compute_golden; print(_compute_golden())"
 #
 # and update GOLDEN_ANSWER_LANE_SHA256 + ANSWER_LANE_JSON_BYTES.
-GOLDEN_ANSWER_LANE_SHA256 = "e92352402975696b249b3e2b6b900bb7b7bb7ff6c2f350dacc7fd848dd1f29ee"
-ANSWER_LANE_JSON_BYTES = 46976
+GOLDEN_ANSWER_LANE_SHA256 = "e6092904684b93769293ea9786533b6ce201bbe417bd940cb59919f47820a4eb"
+ANSWER_LANE_JSON_BYTES = 48578
 
 
 # Per-lane counts pinned. These doubled as the verification spec in the
 # refactor plan. Updated for PR-5 (write_to_inbox ACT tool): +1 on
 # answer/background/research (off user_facing — Lane A doesn't write
-# proactive proposals).
+# proactive proposals). Then +1 everywhere except writer for
+# set_talk_channel, and +1 on writer for load_guide. (end_session is NOT a
+# teaching tool — it lives in build_session_tools, reached via the dispatcher.)
 EXPECTED_LANE_COUNTS = {
-    "answer": 26,
-    "user_facing": 14,
-    "background": 24,
-    "research": 26,
-    "writer": 2,
+    "answer": 27,
+    "user_facing": 15,
+    "background": 25,
+    "research": 27,
+    "writer": 3,
 }
 
 
@@ -88,6 +90,7 @@ EXPECTED_ANSWER_LANE_ORDER = [
     "push_block_content",
     "point_arrow",
     "speak",
+    "set_talk_channel",
     "layout_blocks",
     "block_action",
     # PR-2 — stream + domain READ tools.
@@ -186,9 +189,9 @@ def test_answer_lane_wire_form_is_byte_identical_to_golden():
     )
 
 
-def test_writer_lane_is_only_mount_and_edit():
+def test_writer_lane_is_mount_edit_and_guide():
     names = sorted(t.name for t in build_tools(PINNED_USER_ID, "writer"))
-    assert names == ["edit_note", "mount_template"], names
+    assert names == ["edit_note", "load_guide", "mount_template"], names
 
 
 @pytest.mark.parametrize("module_path,expected_name", TOOLS_WITH_BUILD_SPEC)

@@ -21,6 +21,7 @@ import { speakTextStream } from "../api/speak";
 import { SentenceBuffer } from "../audio/sentenceBuffer";
 import { ensurePlayer, writePcm } from "../audio/player";
 import { getOutputDeviceId } from "../../config";
+import { useAppStore } from "../../state/store";
 import type { VoiceMode } from "../../state/mode";
 
 export interface VoiceTurnCallbacks {
@@ -84,7 +85,7 @@ export async function runVoiceTurnFromText(
     });
 
     await askStream(
-      { question: text },
+      { question: text, session_id: useAppStore.getState().sessionId },
       (event: StreamEvent) => {
         if (signal?.aborted) return;
         if (event.type === "token") {

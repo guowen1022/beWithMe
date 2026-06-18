@@ -86,6 +86,13 @@ def build(
         system_parts.append(lane_a_voice)
         system_parts.append("")
 
+    # Stage-1 routing direction: decide in-teaching-loop vs out-of-loop
+    # (session action) and hand off via request_session_control if out.
+    session_routing = load_skill("teacher/session_routing")
+    if session_routing:
+        system_parts.append(session_routing)
+        system_parts.append("")
+
     system_parts.extend(preferences_block.render(user_profile, self_description))
     system_parts.extend(preferences_block.render_talk_preference(talk_preference))
 

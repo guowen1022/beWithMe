@@ -16,7 +16,7 @@ echoing back the full payload.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from infra.model.tools import ToolSpec
@@ -45,6 +45,11 @@ from tools import (
 # read_concept_mastery is a teacher tool (reads persona.teacher.knowledge), so it
 # lives under the teacher persona, not in the generic tools/ package.
 from persona.teacher.tools import read_concept_mastery as _read_concept_mastery
+# end_session is a teacher tool — a thin wrapper over the existing
+# /api/sessions/{id}/end API + the go_home app-action. It is NOT a teaching
+# verb; it lives in the session-tool set (build_session_tools), reached via
+# the heuristic dispatcher, not the answer lane.
+from persona.teacher.tools import end_session as _end_session
 from workshop.canvas.tools import (
     block_action as _block_action,
     edit_note as _edit_note,
@@ -535,4 +540,17 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
     ]
 
 
-__all__ = ["build_tools", "Lane"]
+def build_session_tools(
+    user_id: UUID, session_id: Optional[UUID] = None,
+) -> List[ToolSpec]:
+    """The session-control tool set — invoked by the session-handling pass
+    (reached via the heuristic dispatcher), separate from the teaching tools.
+
+    Today: just `end_session`. Add `pause` / `save & summarize` / etc. here as
+    they land; the dispatcher decides *that* a turn is session-control, this
+    set + the session prompt decide *which* action.
+    """
+    return [_end_session.build_spec(user_id, session_id)]
+
+
+__all__ = ["build_tools", "build_session_tools", "Lane"]

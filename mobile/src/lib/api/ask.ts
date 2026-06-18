@@ -8,6 +8,7 @@ export interface AskRequest {
   selected_text?: string;
   document_id?: string;
   addressee?: string;
+  session_id?: string;
 }
 
 export interface LlmUsage {

@@ -24,7 +24,7 @@ const state: ConfigState = {
 
 let loaded = false;
 
-function uuidv4(): string {
+export function uuidv4(): string {
   // RN doesn't ship crypto.randomUUID; roll a v4 with Math.random.
   // Good enough for a stable per-install device id — not used for security.
   const hex = (n: number) => Math.floor(Math.random() * 16 ** n).toString(16).padStart(n, "0");

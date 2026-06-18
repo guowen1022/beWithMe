@@ -20,7 +20,9 @@ from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from infra.contracts.output_routing import OUTPUT_DEVICE_ID
+from persona.teacher.tools import request_session_control as _request_session_control
 from services.persona.routers._ask_addressee import route_addressee
+from services.persona.routers._ask_session import run_session_control
 from services.persona.routers._ask_voice import (
     AutoSpeakBuffer,
     normalize_device_class,
@@ -166,9 +168,17 @@ async def ask_stream(
         phases=phases, voice_mode=voice_mode, voice_leads=voice_leads_enabled,
     )
     phases["context_total_ms"] = round((time.perf_counter() - with_assemble_t0) * 1000, 2)
-    # Voice-leads: no tools on the voice pass — auto-speak streams the
-    # answer; the canvas-writer pass spawned after `done` handles visuals.
-    teacher_tools = [] if voice_leads_enabled else build_teacher_tools(user_id)
+    # Voice-leads: no teaching tools on the voice pass — auto-speak streams
+    # the answer; the canvas-writer pass spawned after `done` handles visuals.
+    # Both paths get the Stage-1 routing tool: the fast-line LLM decides (with
+    # the teacher/session_routing guidance) whether the turn is out of the
+    # teaching loop and, if so, calls request_session_control to hand off to
+    # Stage-2 session control. Voice-leads Pass 1 stays otherwise tool-free.
+    routing_tool = _request_session_control.build_spec(user_id)
+    teacher_tools = (
+        [routing_tool] if voice_leads_enabled
+        else build_teacher_tools(user_id) + [routing_tool]
+    )
 
     status_queue: asyncio.Queue = asyncio.Queue()
 
@@ -177,6 +187,7 @@ async def ask_stream(
         answer_body = ""
         extracted_title: str | None = None
         usage: dict = {}
+        session_routed = False
         # Auto-speak: only active on voice channels. The buffer accumulates
         # streamed prose and fires each completed sentence to Kokoro in the
         # background; if the LLM emits its own `speak` tool call we suppress
@@ -208,6 +219,7 @@ async def ask_stream(
                 # falls back to plain disable_thinking=True.
                 disable_thinking=disable_thinking,
                 profile=lane_a_profile,
+                terminal_tools={_request_session_control.NAME},
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]
@@ -237,6 +249,14 @@ async def ask_stream(
                     else:
                         await status_queue.put({"type": "token", "text": chunk})
                 elif evt["kind"] == "tool_call":
+                    # Stage-1 hand-off: the model judged this turn to be
+                    # outside the teaching loop. Suppress the spoken reply +
+                    # the canvas draw; Stage-2 session control takes over.
+                    if evt.get("name") == _request_session_control.NAME:
+                        session_routed = True
+                        if voice_mode:
+                            autospeak.suppress()
+                        continue
                     # If the LLM is going to speak() itself, stop the
                     # auto-speak path — its text wins.
                     if voice_mode and evt.get("name") == "speak":
@@ -264,109 +284,120 @@ async def ask_stream(
                             await status_queue.put({"type": "token", "text": head_buffer})
                         title_resolved = True
 
-            # Flush any trailing prose that didn't end in a sentence
-            # terminator — the user's last word still needs to be heard.
-            if voice_mode:
-                autospeak.flush_tail()
+            if session_routed:
+                # Stage-1 routed out of the teaching loop. Run Stage-2 session
+                # control — the model picks a session tool (end_session). No
+                # spoken reply, no canvas draw, no Q&A Interaction.
+                async for sse in run_session_control(question, user_id, body):
+                    await status_queue.put(sse)
+                phases["total_ms"] = round((time.perf_counter() - timing_origin) * 1000, 2)
+                log_event("ask.session_routed", req_id=req_id, user_id=str(user_id))
+            else:
+                # Flush any trailing prose that didn't end in a sentence
+                # terminator — the user's last word still needs to be heard.
+                if voice_mode:
+                    autospeak.flush_tail()
 
-            final_title, answer_body = parse_title(answer)
-            if extracted_title is None:
-                extracted_title = final_title
-            if not answer_body:
-                answer_body = answer
+                final_title, answer_body = parse_title(answer)
+                if extracted_title is None:
+                    extracted_title = final_title
+                if not answer_body:
+                    answer_body = answer
 
-            print(
-                f"[ask/stream] answer length={len(answer_body)}, "
-                f"title={extracted_title!r}, usage={usage}, first 100={answer_body[:100]!r}",
-                flush=True,
-            )
-            await status_queue.put({
-                "type": "debug",
-                "static_system": ctx.parts.static_system,
-                "static_user_passage": ctx.parts.static_user_passage,
-                "dynamic_user": ctx.parts.dynamic_user,
-                "prior_message_count": len(ctx.prior_messages),
-                "usage": usage,
-            })
-            phases["total_ms"] = round((time.perf_counter() - timing_origin) * 1000, 2)
-            log_event(
-                "ask.done",
-                req_id=req_id,
-                user_id=str(user_id),
-                answer_len=len(answer_body),
-                title=extracted_title,
-                usage=usage,
-                phases=phases,
-            )
-            await status_queue.put({
-                "type": "answer",
-                "answer": answer_body,
-                "title": extracted_title,
-                "related_interaction_ids": [],
-                "phase_timings_ms": phases,
-            })
-
-            # Phase 1 voice-leads: spawn the canvas-writer pass now that
-            # the spoken answer is complete. The task runs detached from
-            # the SSE stream — by the time the writer's tool call fires,
-            # the user is already listening to the auto-spoken response,
-            # and the note pops onto the canvas during playback.
-            if voice_leads_enabled and answer_body:
-                writer_task = asyncio.create_task(run_canvas_writer(
-                    question=question,
-                    transcript=answer_body,
-                    user_id=user_id,
-                    req_id=req_id,
-                    origin=timing_origin,
-                    source="ask",
-                ))
-                _background_tasks.add(writer_task)
-                writer_task.add_done_callback(_background_tasks.discard)
+                print(
+                    f"[ask/stream] answer length={len(answer_body)}, "
+                    f"title={extracted_title!r}, usage={usage}, first 100={answer_body[:100]!r}",
+                    flush=True,
+                )
+                await status_queue.put({
+                    "type": "debug",
+                    "static_system": ctx.parts.static_system,
+                    "static_user_passage": ctx.parts.static_user_passage,
+                    "dynamic_user": ctx.parts.dynamic_user,
+                    "prior_message_count": len(ctx.prior_messages),
+                    "usage": usage,
+                })
+                phases["total_ms"] = round((time.perf_counter() - timing_origin) * 1000, 2)
                 log_event(
-                    "ask.voice_done",
+                    "ask.done",
                     req_id=req_id,
                     user_id=str(user_id),
-                    transcript_len=len(answer_body),
-                    auto_speak_first_ms=phases.get("auto_speak_first_ms"),
+                    answer_len=len(answer_body),
+                    title=extracted_title,
+                    usage=usage,
+                    phases=phases,
                 )
+                await status_queue.put({
+                    "type": "answer",
+                    "answer": answer_body,
+                    "title": extracted_title,
+                    "related_interaction_ids": [],
+                    "phase_timings_ms": phases,
+                })
+
+                # Phase 1 voice-leads: spawn the canvas-writer pass now that
+                # the spoken answer is complete. The task runs detached from
+                # the SSE stream — by the time the writer's tool call fires,
+                # the user is already listening to the auto-spoken response,
+                # and the note pops onto the canvas during playback.
+                if voice_leads_enabled and answer_body:
+                    writer_task = asyncio.create_task(run_canvas_writer(
+                        question=question,
+                        transcript=answer_body,
+                        user_id=user_id,
+                        req_id=req_id,
+                        origin=timing_origin,
+                        source="ask",
+                    ))
+                    _background_tasks.add(writer_task)
+                    writer_task.add_done_callback(_background_tasks.discard)
+                    log_event(
+                        "ask.voice_done",
+                        req_id=req_id,
+                        user_id=str(user_id),
+                        transcript_len=len(answer_body),
+                        auto_speak_first_ms=phases.get("auto_speak_first_ms"),
+                    )
         except Exception as e:
             print(f"[ask/stream] error: {e}", flush=True)
             import traceback
             traceback.print_exc()
             await status_queue.put({"type": "error", "message": str(e)})
 
-        try:
-            async with async_session() as bg_db:
-                interaction = Interaction(
-                    user_id=user_id,
-                    session_id=body.session_id,
-                    parent_interaction_id=body.parent_interaction_id,
-                    title=extracted_title,
-                    passage_text=body.passage_text,
-                    question=body.question,
-                    answer=answer_body or answer,
-                    source_document=str(body.document_id) if body.document_id else None,
-                )
-                bg_db.add(interaction)
-                await bg_db.commit()
-                await bg_db.refresh(interaction)
+        # A session action (Stage-2 routed) is not a Q&A turn — store nothing.
+        if not session_routed:
+            try:
+                async with async_session() as bg_db:
+                    interaction = Interaction(
+                        user_id=user_id,
+                        session_id=body.session_id,
+                        parent_interaction_id=body.parent_interaction_id,
+                        title=extracted_title,
+                        passage_text=body.passage_text,
+                        question=body.question,
+                        answer=answer_body or answer,
+                        source_document=str(body.document_id) if body.document_id else None,
+                    )
+                    bg_db.add(interaction)
+                    await bg_db.commit()
+                    await bg_db.refresh(interaction)
 
-                await status_queue.put({
-                    "type": "interaction",
-                    "interaction_id": str(interaction.id),
-                })
+                    await status_queue.put({
+                        "type": "interaction",
+                        "interaction_id": str(interaction.id),
+                    })
 
-                print(f"[ask/stream] scheduling background task for {interaction.id}", flush=True)
-                task = asyncio.get_event_loop().create_task(
-                    post_interaction_update(interaction.id, user_id)
-                )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
-                print(f"[ask/stream] background task scheduled", flush=True)
-        except Exception as e:
-            print(f"[ask/stream] store error: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
+                    print(f"[ask/stream] scheduling background task for {interaction.id}", flush=True)
+                    task = asyncio.get_event_loop().create_task(
+                        post_interaction_update(interaction.id, user_id)
+                    )
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
+                    print(f"[ask/stream] background task scheduled", flush=True)
+            except Exception as e:
+                print(f"[ask/stream] store error: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
 
         await status_queue.put(None)
 
