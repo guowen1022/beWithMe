@@ -21,7 +21,7 @@ from uuid import UUID
 
 from infra.db import async_session
 from infra.hlr import compute_mastery, mastery_to_state
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 from persona.teacher.knowledge import get_concepts
 
 
@@ -133,6 +133,7 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_read_concept_mastery(user_id),
+        domain=ToolDomain.TEACHER,
     )
 
 

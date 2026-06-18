@@ -25,7 +25,7 @@ import httpx
 
 from infra.contracts.ui import AppAction
 from infra.devices.delivery import enqueue_for_user
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 from infra.topology import upstream_url
 
 
@@ -73,6 +73,7 @@ def build_spec(user_id: UUID, session_id: Optional[UUID] = None) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_end_session(user_id, session_id),
+        domain=ToolDomain.TEACHER,
     )
 
 

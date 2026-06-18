@@ -26,7 +26,7 @@ from infra.devices import registry as device_registry
 from infra.devices.delivery import mounted_block_ids
 
 from agents.frontend_engineer import llm_engineer
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
 def _title_from_design_doc(design_doc: str | None) -> str | None:
@@ -125,4 +125,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_list_media(user_id),
+        domain=ToolDomain.CANVAS,
     )

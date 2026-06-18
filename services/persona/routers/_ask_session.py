@@ -21,6 +21,7 @@ from persona.teacher.prompts.skills import load_skill
 from persona.teacher.schemas import AskRequest
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_session_tools
+from persona.teacher.tools.grants import TEACHER_GRANT
 
 
 _FALLBACK_PROMPT = (
@@ -51,6 +52,7 @@ async def run_session_control(question: str, user_id: UUID, body: AskRequest):
             user_id=user_id,
             disable_thinking=True,
             terminal_tools={"end_session"},
+            grant=TEACHER_GRANT,
         ):
             kind = evt.get("kind")
             if kind == "delta":

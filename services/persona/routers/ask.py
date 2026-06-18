@@ -19,6 +19,7 @@ from persona.teacher.brain_builder.background import post_interaction_update
 from infra.auth import parse_user_id as get_current_user_id
 from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
+from persona.teacher.tools.grants import TEACHER_GRANT
 from infra.contracts.output_routing import OUTPUT_DEVICE_ID
 from persona.teacher.tools import request_session_control as _request_session_control
 from services.persona.routers._ask_addressee import route_addressee
@@ -220,6 +221,7 @@ async def ask_stream(
                 disable_thinking=disable_thinking,
                 profile=lane_a_profile,
                 terminal_tools={_request_session_control.NAME},
+                grant=TEACHER_GRANT,
             ):
                 if evt["kind"] == "delta":
                     chunk = evt["text"]

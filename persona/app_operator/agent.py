@@ -17,6 +17,7 @@ from infra.model.agent_loop import run as run_tool_loop
 
 from persona.app_operator.prompt import build_system
 from persona.app_operator.tools.manifest import build_tools
+from persona.app_operator.tools.grants import APP_OPERATOR_GRANT
 
 
 async def respond(
@@ -36,6 +37,7 @@ async def respond(
         max_iterations=2,
         purpose="app_operator",
         user_id=user_id,
+        grant=APP_OPERATOR_GRANT,
     ):
         yield evt
 

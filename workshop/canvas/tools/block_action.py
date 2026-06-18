@@ -14,10 +14,10 @@ from uuid import UUID
 
 from infra.contracts.ui import BlockAction
 from infra.devices.delivery import enqueue_for_device, enqueue_for_user
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
-_ALLOWED_ACTIONS = ("highlight", "focus", "scroll_to", "raise", "set_grid")
+_ALLOWED_ACTIONS =("highlight", "focus", "scroll_to", "raise", "set_grid")
 
 
 async def block_action(
@@ -104,4 +104,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_block_action(user_id),
+        domain=ToolDomain.CANVAS,
     )

@@ -232,13 +232,80 @@ A persona has no FastAPI router. Its HTTP face lives in `services/persona/router
 
 ### 4.2 What makes one persona different from another
 
-- **Tool allowlist**: teacher can `speak_text`, `end_session`, `recommend`, `retrieve_chunks`, … but not `replace_page`. Engineer can `replace_page`, `update_widget`, `compile_component`, but not `end_session`. The allowlist is part of each persona's wiring, not enforced inside the tool.
+- **Tool allowlist**: teacher can `speak_text`, `end_session`, `recommend`, `retrieve_chunks`, … but not `replace_page`. Engineer can `replace_page`, `update_widget`, `compile_component`, but not `end_session`. The allowlist is part of each persona's wiring, not enforced inside the tool — formalized as a per-persona domain-grant capability model; see §4.4.
 - **System prompt**: the persona's voice, judgment style, refusal patterns.
 - **Memory access policy**: which slices of the brain it reads/writes. Teacher reads everything, writes interactions + concepts via `brain_builder`. Engineer might only read the user's preference embedding (for UI personalization) and write nothing.
 
 ### 4.3 Persona-to-persona calls
 
 When teacher needs the engineer to build a page, teacher calls a tool (e.g., `request_ui_component(spec)`). That tool dispatches to the engineer persona — which is just another persona running in the same process or a sibling sidecar. Persona A never imports persona B's Python code. The boundary is the same tool/HTTP one as user → persona.
+
+### 4.4 Tool authorization — persona capabilities
+
+> **Status: implemented (trajectory step 4, §7).** A persona may select only tools its
+> capability grant allows — enforced at assembly (`build_tools` filters through the grant) and
+> re-checked at dispatch (`agent_loop`). Authorization is *not* the same as **dispatch** — how a
+> persona routes a turn — which is its own concern; see §4.5.
+
+A persona is the *untrusted decision-maker*: the LLM chooses the tool calls. Tool authorization is the runtime guard that bounds **which tools a given persona may select**. It is distinct from user authentication (§6): §6 answers "who is the human"; this answers "what may this LLM do." The guard is on **selection only** — a tool's own vetted executor may then compose further effects (e.g. `end_session` emitting the `go_home` `AppAction`) without any extra grant: that code is trusted; the LLM is not.
+
+**Capability = a set of domains.** Every tool belongs to one **domain** — the area of verbs that owns it, ≈ its package:
+
+| domain | tools live in |
+|---|---|
+| `common` | `tools/` — generic verbs (speak, read_document, look_at_image, …) |
+| `canvas` | `workshop/canvas/tools/` — block / canvas verbs |
+| `teacher` | `persona/teacher/tools/` — end_session, request_session_control, research, … |
+| `app` | `persona/app_operator/tools/` — switch_user, go_home, show_mirror |
+| `engineer` | `agents/frontend_engineer/` — dynamic UI verbs |
+
+Each persona carries a **capability grant**: the set of domains it may select from. A tool is selectable **iff its domain is in the persona's grant** — one rule, no exceptions:
+
+```
+authorize(grant, tool) = tool.domain in grant.domains
+```
+
+Grants (`persona/<name>/tools/grants.py`):
+
+| persona | granted domains |
+|---|---|
+| teacher | teacher, common, canvas |
+| app_operator | app |
+| engineer | engineer, common, canvas |
+
+The consequences fall straight out of the table: `switch_user` is app-only because **only** app_operator holds `app`; the engineer can never select `end_session` (teacher); the teacher can never select `replace_page` (engineer). There are deliberately **no** per-tool flags and **no** cross-domain cherry-pick — nothing today makes a persona select a foreign tool, so that machinery would be speculative (deferred; see the proposal's *future extension*).
+
+**Cross-domain *effects* are not cross-domain *selections*.** `end_session` (teacher) produces the `go_home` effect — an app-scoped `AppAction` — by composing it in its own executor, below the tool layer. The LLM never *selected* `go_home`, so authz has nothing to gate. Governing which tools may *emit* which app-scoped contracts would be a separate, stricter layer; out of scope here.
+
+**Where it lives** (the dep graph stays clean — `infra` is the leaf):
+- `domain` is a new field on `ToolSpec` (`infra/model/tools.py`), defaulting to `common` — an add-only extension of protocol **P5**.
+- the grant type + `authorize()` live in `infra/model/authz.py` — stateless, no domain knowledge, unit-testable alone.
+- each persona declares its grant in `persona/<name>/tools/grants.py` (it imports `infra`; `infra` never imports persona).
+- `infra/model/agent_loop.run()` receives the active grant and re-checks every dispatch in `_execute_tool_calls`.
+
+**Two enforcement points:** *assembly* — `build_tools()` builds only the tools the grant authorizes, so the LLM never sees the rest (least privilege at the prompt); *dispatch* — one `authorize()` check before `executor()` runs (catches drift).
+
+**Composition with lanes and modes.** The grant is the *outer* fence — what a persona may *ever* select. Inside it sit two narrower filters: the existing **lane** (`_TOOL_LANES`) and the per-turn **mode** the persona's dispatcher opens (§4.5) — e.g. the teaching set vs. the session-control set. Visible set = `grant ∩ lane ∩ mode`. Capability says *may*; lane/mode say *appropriate now*; the system prompt says *should*.
+
+**The coarse edge.** `common` and `canvas` are shared by teacher and engineer. The day one needs a tool the other must not have (say, the engineer must not `speak`), pure domain grants can't express it; the refinement is a small per-persona deny-set or a domain split. Noted, not built.
+
+This is the concretization of trajectory step 4 (§7). Full rationale, the worked example, and the conformance check of the shipped `end_session`: [`architecture-review/proposals/2026-06-17-tool-authorization.md`](./architecture-review/proposals/2026-06-17-tool-authorization.md).
+
+### 4.5 Persona dispatch — routing a turn (partially realized)
+
+> **Status: realized for the teacher; the generalization is the direction, not yet built for
+> other personas.** Documented here because it is part of the persona model and is easy to
+> confuse with authorization (§4.4). It is **orthogonal**: authz bounds *what a persona may
+> ever select*; dispatch decides *which slice it opens for this turn*.
+
+A persona does not expose all of its authorized tools on every turn. It first decides **what kind of turn this is**, then opens the matching tool set. That decision is **the persona's own — a model decision, guided not ruled, and different per persona.** Not a shell-level router; not a string match.
+
+The teacher realizes it in two stages (`services/persona/routers/ask.py` + `_ask_session.py`):
+
+- **Stage 1 — route, on the fast line.** Before answering, the teacher's model reads the `session_routing` skill and carries one extra tool, `request_session_control`. It calls that tool *only* when it judges the user wants out of the teaching loop ("I'm done, end it"), not when asked a question that merely mentions sessions ("explain the OSI *session* layer"). A normal turn never touches it, so time-to-first-word is unchanged.
+- **Stage 2 — act, only if routed out.** The normal spoken reply and canvas draw are suppressed; `build_session_tools` opens the focused set (today: `end_session`); the model picks the tool. No Q&A Interaction is stored — this turn is an action, not a question.
+
+Generalized, each persona owns a **routing signal** (a `request_*` tool + a routing skill) and one or more **modes**, each a named tool set. Modes are filtered *inside* the persona's §4.4 grant — a persona can only route to tools it is authorized to select. Only the teacher has a non-trivial dispatcher today; helper/engineer define their own when they need more than one mode.
 
 ---
 
@@ -342,7 +409,7 @@ The current codebase implements the foundation but not the full vision. Don't be
 1. ✅ **Persistence root moved to infra** — `infra/db.py` owns `Base`, `engine`, `async_session`, `get_db`. `DATABASE_URL` lives in `infra/config.py`. Every domain inherits from the shared Base.
 2. **Define the `Tool` protocol** in `infra/tools_protocol.py` (or `tools/__init__.py`). Typed input/output schemas; `async def call(...)` shape.
 3. **Wrap existing service calls as tools** under `tools/<name>.py`. Each tool calls a service via HTTP; reuses `infra/contracts/` DTOs for I/O.
-4. **Bind tools to personas** via per-persona allowlists. Add a generic dispatch endpoint `POST /api/persona/<name>/turn` that takes the user's message, lets the LLM pick a tool, executes it, returns the result (and any UI updates).
+4. **Bind tools to personas** via per-persona allowlists. Add a generic dispatch endpoint `POST /api/persona/<name>/turn` that takes the user's message, lets the LLM pick a tool, executes it, returns the result (and any UI updates). The per-persona capability model (§4.4) is **implemented** (see the [tool-authorization proposal](./architecture-review/proposals/2026-06-17-tool-authorization.md)); the generic `POST /api/persona/<name>/turn` endpoint is still pending.
 5. **Collapse static routers** in `services/persona/routers/*` into the generic dispatch. The shell continues forwarding to the persona sidecar at the same offset.
 6. **Add `services/frontend-sandbox/`** as the +6 sidecar. Build the engineer persona on top of it.
 7. **Add `persona/helper/` and `persona/engineer/`** as siblings. When/if a persona needs persona-private state, add `persona/<name>/models/` and inherit from `infra.db.Base`.
@@ -393,6 +460,7 @@ These are the rules every refactor must preserve. If a PR violates one, reject i
 12. Sidecar-local config (model paths, daemon flags) lives with the sidecar, not in any shared config module.
 13. UI mutations driven by an LLM go through the sandbox. Direct LLM-to-DOM is forbidden.
 14. Every store of a user's data is in the user-data map (`infra/user_data.py`): a `user_id` DB column, or a `register_user_dir`-registered disk root. New user data without a map entry fails `tests/unit/test_user_data_map.py`.
+15. A persona may select only tools whose **domain** is in its capability grant (§4.4). A cross-domain *effect* (e.g. a teacher tool emitting `go_home`) comes from a tool's trusted executor composing it — never from the LLM selecting another domain's tool.
 
 ---
 

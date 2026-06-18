@@ -48,7 +48,7 @@ from infra.devices.delivery import (
     mounted_block_ids,
 )
 from infra.devices.canvas_layout import CanvasLayout
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
 # Sane default grid in desktop coordinates (12×9). Each template's
@@ -719,4 +719,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_mount_template(user_id),
+        domain=ToolDomain.CANVAS,
     )

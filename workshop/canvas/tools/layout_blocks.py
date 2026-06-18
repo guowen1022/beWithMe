@@ -14,7 +14,7 @@ from uuid import UUID
 
 from infra.contracts.ui import BlockAction, GridPos, grid_bounds_for
 from infra.devices.delivery import enqueue_for_device, enqueue_for_user
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
 async def layout_blocks(
@@ -177,4 +177,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_layout_blocks(user_id),
+        domain=ToolDomain.CANVAS,
     )

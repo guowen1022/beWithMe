@@ -37,7 +37,7 @@ from infra.contracts.ui import BlockMessage, BlockSource, UIUpdate
 from infra.db import async_session
 from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from infra.devices.canvas_layout import CanvasLayout
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
 _DEFAULT_NAME = "main"
@@ -730,4 +730,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_interactive_graph(user_id),
+        domain=ToolDomain.CANVAS,
     )

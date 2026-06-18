@@ -19,7 +19,7 @@ import json
 from typing import Any, Dict
 from uuid import UUID
 
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 NAME = "request_session_control"
 
@@ -51,6 +51,7 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_executor(user_id),
+        domain=ToolDomain.TEACHER,
     )
 
 

@@ -33,7 +33,7 @@ from infra.devices.delivery import mounted_block_ids
 from agents.frontend_engineer import llm_engineer
 
 from workshop.canvas.tools.list_media import _title_from_design_doc
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 
 
 async def read_media(
@@ -215,4 +215,5 @@ def build_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_read_media(user_id),
+        domain=ToolDomain.CANVAS,
     )

@@ -32,6 +32,7 @@ from uuid import UUID
 from infra.config import settings
 from infra.model.llm import stream_with_tools
 from infra.model.tools import ToolSpec
+from infra.model.authz import CapabilityGrant, authorize
 
 
 _MAX_TOOL_TURNS = 6
@@ -48,6 +49,7 @@ async def _execute_tool_calls(
     calls: List[Dict[str, Any]],
     tools: List[ToolSpec],
     truncate_chars: int,
+    grant: Optional[CapabilityGrant] = None,
 ) -> List[Dict[str, Any]]:
     """Run every tool concurrently. Unknown tools surface as error strings.
 
@@ -61,6 +63,16 @@ async def _execute_tool_calls(
         spec = by_name.get(call.get("name") or "")
         if spec is None:
             err = json.dumps({"error": f"unknown tool {call.get('name')!r}"})
+            return {"call": call, "result": err, "result_raw": err}
+        # Dispatch-time authorization (defense in depth — assembly already
+        # filtered). A persona may select a tool only if its domain is granted.
+        if grant is not None and not authorize(grant, spec):
+            err = json.dumps({
+                "error": (
+                    f"tool {spec.name!r} (domain {spec.domain.value}) not in "
+                    f"persona {grant.persona!r} grant"
+                )
+            })
             return {"call": call, "result": err, "result_raw": err}
         try:
             result_text = await spec.executor(call.get("arguments") or {})
@@ -188,6 +200,7 @@ async def run(
     disable_thinking: bool = False,
     profile: Optional[str] = None,
     terminal_tools: Optional[set] = None,
+    grant: Optional[CapabilityGrant] = None,  # persona capability — gates tool selection (§4.4)
 ) -> AsyncIterator[Dict[str, Any]]:
     """Drive the tool loop. Yields delta + done events to the caller.
 
@@ -400,7 +413,7 @@ async def run(
             _last_round_was_bail = False  # only one free pass per bail
 
         executed = await _execute_tool_calls(
-            pending_calls, tools, tool_result_max_chars
+            pending_calls, tools, tool_result_max_chars, grant=grant
         )
         # Detect whether this round was entirely _raw_arguments bails.
         # Only True when the call had _raw_arguments AND the executor returned

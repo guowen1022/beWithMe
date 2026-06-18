@@ -19,7 +19,9 @@ import json
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
+from infra.model.authz import authorized_tools
+from persona.teacher.tools.grants import TEACHER_GRANT
 
 # Generic verbs — each tool exposes `build_spec(user_id)` next to its impl.
 # Imported individually (not via aggregators) so this file controls the
@@ -318,6 +320,7 @@ def _build_research_specs(user_id: UUID) -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_start_research(user_id),
+            domain=ToolDomain.TEACHER,
         ),
         ToolSpec(
             name="research_plan",
@@ -353,6 +356,7 @@ def _build_research_specs(user_id: UUID) -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_research_plan(user_id),
+            domain=ToolDomain.TEACHER,
         ),
         ToolSpec(
             name="research_note",
@@ -387,6 +391,7 @@ def _build_research_specs(user_id: UUID) -> List[ToolSpec]:
                 "additionalProperties": False,
             },
             executor=_make_research_note(user_id),
+            domain=ToolDomain.TEACHER,
         ),
     ]
 
@@ -425,6 +430,7 @@ def _build_guide_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=executor,
+        domain=ToolDomain.TEACHER,
     )
 
 
@@ -534,8 +540,13 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         # order (the provider prompt-cache key) is unchanged.
         _build_guide_spec(user_id),
     ]
+    # Outer fence: keep only tools the teacher's capability grant authorizes
+    # (§4.4) — a no-op today since the manifest only assembles teacher/common/
+    # canvas tools, but it enforces the invariant if a foreign tool is ever
+    # added here by mistake. Lane is the inner per-turn filter.
+    granted = authorized_tools(TEACHER_GRANT, full)
     return [
-        t for t in full
+        t for t in granted
         if lane in _TOOL_LANES.get(t.name, {"answer", "user_facing", "background"})
     ]
 
@@ -550,7 +561,9 @@ def build_session_tools(
     they land; the dispatcher decides *that* a turn is session-control, this
     set + the session prompt decide *which* action.
     """
-    return [_end_session.build_spec(user_id, session_id)]
+    return authorized_tools(
+        TEACHER_GRANT, [_end_session.build_spec(user_id, session_id)]
+    )
 
 
 __all__ = ["build_tools", "build_session_tools", "Lane"]

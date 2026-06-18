@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from infra.contracts.ui import AppAction
-from infra.model.tools import ToolSpec
+from infra.model.tools import ToolSpec, ToolDomain
 from infra.devices.delivery import enqueue_for_device, enqueue_for_user
 from workshop.canvas.tools.mount_template import mount_template
 
@@ -85,6 +85,7 @@ def _switch_user_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_switch_user(user_id),
+        domain=ToolDomain.APP,
     )
 
 
@@ -117,6 +118,7 @@ def _go_home_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_go_home(user_id),
+        domain=ToolDomain.APP,
     )
 
 
@@ -151,6 +153,7 @@ def _show_mirror_spec(user_id: UUID) -> ToolSpec:
             "additionalProperties": False,
         },
         executor=_make_show_mirror(user_id),
+        domain=ToolDomain.APP,
     )
 
 
