@@ -56,7 +56,11 @@ def _deep_directive(holding_line: str) -> str:
         "(their full markdown is included above) to inspect/verify, then give the "
         "real answer in natural spoken prose. Do NOT re-acknowledge, do NOT say "
         "'let me check' again, and never say you can't see or access something — "
-        "you have the tools and your own materials right here."
+        "you have the tools and your own materials right here.\n"
+        "Your answer prose is voiced to the user automatically. Write it as plain "
+        "spoken sentences ONLY — never write a tool call (e.g. speak(...), "
+        "mount_template(...)) into your spoken text; invoke tools through the "
+        "tool-call mechanism, not as words in your reply."
     )
 
 
@@ -122,7 +126,13 @@ async def run_deep_answer(
                         dynamic_user=f"{preamble}\n\n{ctx.parts.dynamic_user}"
                     )
 
-                tools = build_teacher_tools(user_id)
+                # Drop `speak` from the deep palette: this pass is auto-spoken
+                # (AutoSpeakBuffer voices its streamed prose), so an in-model
+                # `speak` tool is redundant — and a model that emits
+                # `speak(channel=…, text=…)` as PROSE instead of a clean tool
+                # call gets the raw structure read aloud. Removing it makes the
+                # answer-as-prose the only voice path.
+                tools = [t for t in build_teacher_tools(user_id) if t.name != "speak"]
 
                 async for evt in run_teacher_tool_loop(
                     static_system=ctx.parts.static_system,
