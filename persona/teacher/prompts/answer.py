@@ -98,11 +98,12 @@ def build(
         system_parts.append(posture_honoring)
         system_parts.append("")
 
-    # Stage-1 routing direction: decide in-teaching-loop vs out-of-loop
-    # (session action) and hand off via request_session_control if out.
-    session_routing = load_skill("teacher/session_routing")
-    if session_routing:
-        system_parts.append(session_routing)
+    # Routing direction: answer now, or hand off to session control via
+    # request_handoff. This full-palette path already has tools to look/act,
+    # so it rarely needs target="deep" — it just uses its tools inline.
+    lead_routing = load_skill("teacher/lead_routing")
+    if lead_routing:
+        system_parts.append(lead_routing)
         system_parts.append("")
 
     # Preferences + background blocks (cacheable; rare to change).

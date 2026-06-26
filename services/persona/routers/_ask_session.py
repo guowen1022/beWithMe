@@ -1,9 +1,9 @@
 """Stage-2 session control for `/api/ask/stream`.
 
-Reached only after the teacher's fast line (Stage 1) decides — with guidance,
-not a rule — that the turn is *outside* the teaching loop and calls
-`request_session_control`. There is no fixed pre-filter; the language model
-made the routing decision.
+Reached only after the lead pass (Stage 1) decides — with guidance, not a rule
+— that the turn is *outside* the teaching loop and calls
+`request_handoff(target="session")`. There is no fixed pre-filter; the language
+model made the routing decision.
 
 Here we open the session-control decision tree: the small session-tool set
 (`build_session_tools` — today just `end_session`) and a focused prompt, and

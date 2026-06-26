@@ -255,7 +255,7 @@ A persona is the *untrusted decision-maker*: the LLM chooses the tool calls. Too
 |---|---|
 | `common` | `tools/` — generic verbs (speak, read_document, look_at_image, …) |
 | `canvas` | `workshop/canvas/tools/` — block / canvas verbs |
-| `teacher` | `persona/teacher/tools/` — end_session, request_session_control, research, … |
+| `teacher` | `persona/teacher/tools/` — end_session, request_handoff, research, … |
 | `app` | `persona/app_operator/tools/` — switch_user, go_home, show_mirror |
 | `engineer` | `agents/frontend_engineer/` — dynamic UI verbs |
 
@@ -300,10 +300,13 @@ This is the concretization of trajectory step 4 (§7). Full rationale, the worke
 
 A persona does not expose all of its authorized tools on every turn. It first decides **what kind of turn this is**, then opens the matching tool set. That decision is **the persona's own — a model decision, guided not ruled, and different per persona.** Not a shell-level router; not a string match.
 
-The teacher realizes it in two stages (`services/persona/routers/ask.py` + `_ask_session.py`):
+The teacher realizes it under the **lead pass** (`BWM_LEAD=1`, voice channel) in
+`services/persona/routers/ask.py` + `_ask_session.py` + `_ask_deep.py`:
 
-- **Stage 1 — route, on the fast line.** Before answering, the teacher's model reads the `session_routing` skill and carries one extra tool, `request_session_control`. It calls that tool *only* when it judges the user wants out of the teaching loop ("I'm done, end it"), not when asked a question that merely mentions sessions ("explain the OSI *session* layer"). A normal turn never touches it, so time-to-first-word is unchanged.
-- **Stage 2 — act, only if routed out.** The normal spoken reply and canvas draw are suppressed; `build_session_tools` opens the focused set (today: `end_session`); the model picks the tool. No Q&A Interaction is stored — this turn is an action, not a question.
+- **Stage 1 — the lead pass (route + answer fast).** The lead pass is the fast first response the user hears: a quick-judgment + dispatcher that streams a brief, accurate reply through auto-speak (it is *not* "voice" per se — firing TTS early is a side effect). It reads the `lead_routing` skill and carries one routing tool, `request_handoff(target)`. It must **never disclaim** capability ("I can't see that"); instead it picks one of three moves: **answer now** (no tool — most turns); **`request_handoff(target="deep")`** — the turn needs looking at or acting on something the tool-less line can't reach (inspect a diagram it drew, an image, the document, the web), so it says a one-line acknowledgment ("let me check that diagram") and hands off; or **`request_handoff(target="session")`** — the user wants to act on the session itself (end/stop), so it hands off without replying.
+- **Stage 2 — act/answer, only if routed.** Both Stage-2 passes run detached and deliver out-of-band over `/dynamic/stream`. *Session* (`_ask_session.run_session_control`): the spoken reply + canvas draw are suppressed; `build_session_tools` opens the focused set (today: `end_session`); no Q&A Interaction is stored. *Deep* (`_ask_deep.run_deep_answer`): the lead's holding line is kept; the deep pass runs the **full teaching tool palette** plus the durable contents of the teacher's produced notes (`_produced_notes`, read from the note store — not the live-perception tracker), delivers the real answer via `AutoSpeakBuffer` → `tool_speak` (VoicePlay + caption), and stores the real Interaction.
+
+The lead line is also fed a titles-only inventory of the notes it has drawn, so it can name "your LRU diagram" and route deep instead of disclaiming. **Lane A** (ambient reflect) reuses the lead pass's never-disclaim contract but stays single-pass: it is sessionless by design, so it has no `AskRequest`/session to drive the deep pass (deep-routing is ask-path only for now).
 
 Generalized, each persona owns a **routing signal** (a `request_*` tool + a routing skill) and one or more **modes**, each a named tool set. Modes are filtered *inside* the persona's §4.4 grant — a persona can only route to tools it is authorized to select. Only the teacher has a non-trivial dispatcher today; helper/engineer define their own when they need more than one mode.
 

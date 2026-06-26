@@ -96,7 +96,7 @@ def build(
     recent_user_speech: Optional[List["UserUtterance"]] = None,
     recent_notices: Optional[List[str]] = None,
     related_notes: Optional[List[dict]] = None,
-    voice_leads: bool = False,
+    lead_pass: bool = False,
 ) -> PromptParts:
     """Build the reflect-scenario prompt.
 
@@ -105,11 +105,10 @@ def build(
     to read them: act on deterministic next steps, otherwise stay
     silent.
 
-    When `voice_leads=True`, the prompt drops every skill that mentions
+    When `lead_pass=True`, the prompt drops every skill that mentions
     tools (canvas_persona, canvas skills, respond_to_speech) and loads
-    `voice_brief.md` in their place. The Lane A turn becomes a
-    tools-free spoken answer; a separate canvas-writer pass mounts any
-    visuals afterward.
+    `lead_brief.md` in their place. The Lane A turn becomes the fast
+    lead-pass spoken answer; deeper passes handle visuals/tools afterward.
     """
     # ---- STATIC SYSTEM ---------------------------------------------------
     system_parts: List[str] = []
@@ -119,14 +118,14 @@ def build(
         system_parts.append(teaching_principle)
         system_parts.append("")
 
-    if voice_leads:
-        # Voice-leads: no tools on this pass. Load only the brevity rules
-        # plus the reflect policy (which governs "stay silent vs. reply"
-        # — still relevant). Skip canvas skills entirely; the writer pass
-        # owns canvas.
-        voice_brief = load_skill("teacher/voice_brief")
-        if voice_brief:
-            system_parts.append(voice_brief)
+    if lead_pass:
+        # Lead pass: no teaching tools on this pass. Load only the brevity
+        # rules plus the reflect policy (which governs "stay silent vs. reply"
+        # — still relevant). Skip canvas skills entirely; the deeper passes
+        # own canvas.
+        lead_brief = load_skill("teacher/lead_brief")
+        if lead_brief:
+            system_parts.append(lead_brief)
             system_parts.append("")
 
         reflect_policy = load_skill("teacher/reflect_policy")
@@ -155,7 +154,7 @@ def build(
             system_parts.append(respond_to_speech)
             system_parts.append("")
 
-    # Event-stream discipline — applies to both voice_leads + normal
+    # Event-stream discipline — applies to both lead-pass + normal
     # reflect paths since both surface `stream_emit` on the background lane.
     stream_emission = load_skill("teacher/stream_emission")
     if stream_emission:

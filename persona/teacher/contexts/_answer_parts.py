@@ -24,7 +24,7 @@ from persona.teacher.preferences import boost_query_embedding, get_user_profile
 from persona.teacher.prompts.answer import build as build_answer_prompt
 from persona.teacher.prompts.parts import PromptParts, build_history_messages
 from persona.teacher.prompts.voice_answer import build as build_voice_answer_prompt
-from persona.teacher.prompts.voice_brief import build as build_voice_brief_prompt
+from persona.teacher.prompts.lead_brief import build as build_lead_brief_prompt
 from persona.teacher.schemas import AskRequest
 from workshop.canvas.tools.read_media import read_media
 
@@ -203,24 +203,29 @@ async def read_canvas_state(
 
 
 def build_prompt(
-    body: AskRequest, voice_leads: bool, voice_mode: bool, *,
+    body: AskRequest, lead_pass: bool, voice_mode: bool, *,
     self_description: str, doc_chunks: list, user_profile, concept_nodes,
     graph_context: str, canvas_state, talk_preference, phases: Optional[dict] = None,
+    produced_inventory: str = "",
 ) -> PromptParts:
     """8. Dispatch to the right prompt builder and build the PromptParts.
 
-      voice_leads=True  → voice_brief (brevity-first spoken answer; canvas painted by a writer pass)
+      lead_pass=True    → lead_brief (fast front-line answer; deeper work via a later pass)
       voice_mode=True   → voice_answer (single-turn voice with full tool palette — legacy)
       otherwise         → answer (text mode)
+
+    `produced_inventory` (lead pass only) is a lightweight titles-only list of
+    the notes the teacher has drawn, injected at the top of the dynamic message
+    so the lead line can name them and decide to route deep — never disclaim.
     """
-    if voice_leads:
-        builder = build_voice_brief_prompt
+    if lead_pass:
+        builder = build_lead_brief_prompt
     elif voice_mode:
         builder = build_voice_answer_prompt
     else:
         builder = build_answer_prompt
     with _phase(phases, "ctx_build_prompt_ms"):
-        return builder(
+        parts = builder(
             passage=body.passage_text,
             selected_text=body.selected_text,
             question=body.question,
@@ -232,6 +237,11 @@ def build_prompt(
             canvas_state=canvas_state,
             talk_preference=talk_preference,
         )
+    if lead_pass and produced_inventory:
+        parts = parts._replace(
+            dynamic_user=f"{produced_inventory}\n\n{parts.dynamic_user}"
+        )
+    return parts
 
 
 async def apply_maestro_frame(user_id: uuid.UUID, parts: PromptParts) -> PromptParts:

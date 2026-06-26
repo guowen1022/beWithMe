@@ -38,7 +38,7 @@ async def assemble(
     client: SiliconBrainClient,
     phases: Optional[dict] = None,
     voice_mode: bool = False,
-    voice_leads: bool = False,
+    lead_pass: bool = False,
 ) -> TeacherContext:
     """Read silicon_brain (HTTP) + teacher's own DB and build the
     answer-scenario prompt. The full RAG + history pipeline, as an ordered
@@ -48,8 +48,8 @@ async def assemble(
     milliseconds keyed by `ctx_<step>_ms` (benchmark instrumentation).
 
     Prompt builder dispatch:
-      voice_leads=True  → voice_brief (brevity-first spoken answer; canvas
-                          painted by a separate writer pass).
+      lead_pass=True    → lead_brief (fast front-line spoken answer; deeper
+                          work handled by a separate pass).
       voice_mode=True   → voice_answer (single-turn voice, full tool palette).
       otherwise         → answer (text mode).
     """
@@ -68,9 +68,25 @@ async def assemble(
     prior_messages = await parts.load_session_history(db, user_id, body.session_id, phases)
     canvas_state = await parts.read_canvas_state(user_id, body, phases)
 
+    # --- Produced-materials inventory (lead pass only) ---
+    # A titles-only list of notes the teacher has drawn, read from the durable
+    # note store — so the fast line can name "your LRU diagram" and route deep
+    # instead of disclaiming. Skipped on non-lead paths (they have tools).
+    produced_inventory = ""
+    if lead_pass:
+        try:
+            from persona.teacher.contexts._produced_notes import (
+                collect_produced_notes, render_inventory,
+            )
+            produced_inventory = render_inventory(
+                collect_produced_notes(user_id, limit=5, max_age_s=6 * 3600)
+            )
+        except Exception as e:
+            print(f"[teacher.context] produced-notes inventory failed: {e}", flush=True)
+
     # --- Build prompt (+ optional maestro overlay) ---
     prompt_parts = parts.build_prompt(
-        body, voice_leads, voice_mode,
+        body, lead_pass, voice_mode,
         self_description=self_description,
         doc_chunks=doc_chunks,
         user_profile=user_profile,
@@ -79,6 +95,7 @@ async def assemble(
         canvas_state=canvas_state,
         talk_preference=talk_preference,
         phases=phases,
+        produced_inventory=produced_inventory,
     )
     prompt_parts = await parts.apply_maestro_frame(user_id, prompt_parts)
 
