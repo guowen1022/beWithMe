@@ -170,7 +170,7 @@
     var DISPLAY_CPS = 44;            // 2 × Kokoro speed=1.0
     var MIN_BLOCK_INTERVAL_MS = 150; // floor so tiny blocks don't stack
     var BLOCK_FADE_MS = 400;         // per-block fade-in duration
-    var BLOCK_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, .bw-diagram, .bw-image';
+    var BLOCK_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, pre, table, .bw-diagram, .bw-image';
 
     // Single in-flight reveal handle. New reveals cancel the prior one
     // (which snaps remaining blocks visible so the DOM never gets stuck).

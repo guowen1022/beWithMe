@@ -24,6 +24,7 @@ Notes:
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Final
 
@@ -38,6 +39,8 @@ from infra.render.note_grammar import (
     ALLOWED_URL_SCHEMES,
 )
 from infra.render.svg_inline_css import inline_svg_css
+
+logger = logging.getLogger(__name__)
 
 _DIAGRAM_CLASS = "bw-diagram"
 # Defensive: even though mermaid runs with securityLevel='strict' which
@@ -93,10 +96,23 @@ async def process(html_str: str) -> str:
             # surfaces render identically. Desktop sees inline styles win
             # against the original <style> block (kept for @keyframes).
             svg = inline_svg_css(svg)
-        except Exception:  # noqa: BLE001 — render failure should not break the card
-            parent = node.getparent()
-            if parent is not None:
-                parent.remove(node)
+        except Exception as exc:  # noqa: BLE001 — render failure should not break the card
+            # Previously the failed diagram was silently removed, which left a
+            # mysteriously-empty box in a multi-diagram card (e.g. a Poll-vs-
+            # WebSocket comparison where only one side rendered). Instead keep
+            # the source visible as a <pre><code> fallback AND log it, so the
+            # failure is never invisible and the cause is inspectable.
+            logger.warning(
+                "note: mermaid render failed (%s); keeping source as code fallback. src=%r",
+                exc, mermaid_src,
+            )
+            node.attrib.clear()
+            node.tag = "pre"
+            for child in list(node):
+                node.remove(child)
+            node.text = None
+            code_el = etree.SubElement(node, "code")
+            code_el.text = mermaid_src
             continue
         diagram_id = f"d{idx}"
         svg_by_id[diagram_id] = svg
