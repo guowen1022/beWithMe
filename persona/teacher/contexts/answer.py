@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from infra.silicon_brain_client import SiliconBrainClient
 from persona.teacher.prompts.parts import PromptParts
-from persona.teacher.schemas import AskRequest
+from infra.contracts.ask import AskRequest
 from persona.teacher.contexts import _answer_parts as parts
 
 

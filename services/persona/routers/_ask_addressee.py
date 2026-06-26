@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 from infra.contracts.ui import BlockSpec
 from infra.templates import list_templates, load_template
 from persona.app_operator import respond as app_operator_respond
-from persona.teacher.schemas import AskRequest
+from infra.contracts.ask import AskRequest
 from workshop.canvas.tools.mount_template import mount_template
 from workshop.canvas.tools.request_ui_block import request_ui_block
 

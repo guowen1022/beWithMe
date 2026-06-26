@@ -1,24 +1,13 @@
-"""Teacher agent schemas — request/response shapes for the teaching API."""
+"""Teacher agent schemas — request/response shapes for the teaching API.
+
+The shared `AskRequest` entry/dispatch DTO lives in `infra.contracts.ask` (it is
+consumed by every persona, not owned by the teacher — architecture-review F10).
+The shapes below are teacher-specific response/read/signal types.
+"""
 
 from typing import Literal, Optional, List
-from uuid import UUID, uuid4
-from pydantic import BaseModel, Field
-
-
-class AskRequest(BaseModel):
-    passage_text: Optional[str] = None
-    selected_text: Optional[str] = None
-    question: str
-    document_id: Optional[UUID] = None
-    session_id: UUID = Field(default_factory=uuid4)
-    parent_interaction_id: Optional[UUID] = None
-    # Routing addressee. Default 'teacher' — message goes through the
-    # teacher's intent router. 'frontend_engineer' bypasses the router and
-    # forwards the message straight to the engineer (for E2E debugging
-    # without the LLM router round-trip). 'app_operator' routes to the
-    # app_operator persona, whose "app actions" tools change the app shell
-    # (switch user, go home, show mirror) rather than answer a question.
-    addressee: Literal["teacher", "frontend_engineer", "app_operator"] = "teacher"
+from uuid import UUID
+from pydantic import BaseModel
 
 
 class SignalRequest(BaseModel):

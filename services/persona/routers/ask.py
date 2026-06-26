@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from infra.db import get_db, async_session
 from infra.event_log import log_event
 from persona.teacher.models.interaction import Interaction
-from persona.teacher.schemas import AskRequest, AskResponse
+from infra.contracts.ask import AskRequest
+from persona.teacher.schemas import AskResponse
 from persona.teacher import assemble_context, parse_title
 from infra.silicon_brain_client import SiliconBrainClient
 from persona.teacher.writer import run_canvas_writer

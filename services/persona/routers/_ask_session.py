@@ -18,7 +18,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from persona.teacher.prompts.skills import load_skill
-from persona.teacher.schemas import AskRequest
+from infra.contracts.ask import AskRequest
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.manifest import build_session_tools
 from persona.teacher.tools.grants import TEACHER_GRANT
