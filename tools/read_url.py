@@ -11,6 +11,7 @@ user can interact with, use `web_view`.
 """
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from tools.browser_set import browser_set

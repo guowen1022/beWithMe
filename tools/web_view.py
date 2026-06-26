@@ -18,6 +18,7 @@ DeepSeek persona reasons over text only.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 from uuid import UUID
 

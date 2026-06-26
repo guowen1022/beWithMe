@@ -17,6 +17,7 @@ for every currently-online device of that user.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Awaitable, Callable, Optional
 from uuid import UUID

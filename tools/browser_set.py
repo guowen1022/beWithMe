@@ -20,6 +20,7 @@ For the common one-shot read pattern (`goto` + `close`), use the
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 from uuid import UUID  # noqa: F401 — kept for symmetry with other tools
 

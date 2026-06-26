@@ -12,6 +12,7 @@ Accepted source forms:
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from infra.media.video import describe_video_text

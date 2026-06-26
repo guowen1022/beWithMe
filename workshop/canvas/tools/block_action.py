@@ -9,6 +9,7 @@ otherwise it fans out to every open SSE connection for the user.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 from uuid import UUID
 

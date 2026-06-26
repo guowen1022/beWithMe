@@ -18,6 +18,7 @@ Pass `from_block_id == to_block_id == ""` to clear (publishes None).
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 from uuid import UUID
 

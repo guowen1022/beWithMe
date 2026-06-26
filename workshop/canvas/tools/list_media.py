@@ -14,6 +14,7 @@ hit `/api/persona/teacher/media` for browser/curl debugging).
 """
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from infra.contracts.devices import (

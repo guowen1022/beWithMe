@@ -12,6 +12,7 @@ mount time. The block→template mapping is recorded by mount_template
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 from uuid import UUID
 

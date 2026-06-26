@@ -24,6 +24,7 @@ Topics (per instance):
 """
 from __future__ import annotations
 
+import json
 import asyncio
 import re
 from pathlib import Path

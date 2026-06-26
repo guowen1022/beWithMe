@@ -15,6 +15,7 @@ which preserves the role `list_media` played before.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Iterable, Optional
 from uuid import UUID
