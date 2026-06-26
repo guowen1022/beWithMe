@@ -7,5 +7,6 @@ format.
 <!-- format: - [YYYY-MM-DD <slug>](ledger/YYYY-MM-DD-<slug>.md) — D1 <n> · D2 <n> · D3 <n> (<↑/↓/→ what moved>) · <n> open
      D1 = Decoupling, D2 = Self-contained, D3 = Readability (0–10, see PROCESS.md) -->
 
+- [2026-06-26 fullsweep-authz-end-session](ledger/2026-06-26-fullsweep-authz-end-session.md) — D1 min 8 (mean 8.8) · D2 min 3 (mean 7.1) · D3 min 7 (mean 8.5) (↑ tools/infra/persona-sidecar recovered post F1/F2/F3/F6; authz add-only → P12) · **1 open** (F11 mobile absent from map) — same round: **F8** (`import json` ×16, runtime bug) + **F10** (AskRequest → infra/contracts) **resolved**, **F9** (go_home) **accepted/won't-fix**
 - [2026-06-17 ownership-sim](ledger/2026-06-17-ownership-simulation.md) — Step-4 first run · 9 owners all independent ✓ · F7 (knowledge→teacher inversion) found **and resolved** 2026-06-17 · 0 open total
 - [2026-06-13 baseline](ledger/2026-06-13-baseline.md) — D1 min 4 (mean 8.0) · D2 min 3 (mean 7.2) · D3 min 7 (mean 8.2) · baseline · 0 open (F1–F3 + F6 resolved; F4/F5 accepted = e2e coverage)
