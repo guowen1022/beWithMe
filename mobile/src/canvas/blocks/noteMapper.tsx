@@ -139,6 +139,19 @@ function renderBlock(node: Element): React.ReactElement | null {
     case "blockquote":
       return <View key={k} style={[TAG_STYLES.blockquote, ...css]}>{renderBlockChildren(node)}</View>;
 
+    case "pre": {
+      // Fenced code block. <pre><code>…</code></pre>; preserve the raw text
+      // (newlines intact) in a single monospace Text.
+      return (
+        <View key={k} style={TAG_STYLES.pre}>
+          <Text style={TAG_STYLES.preCode}>{extractText(node)}</Text>
+        </View>
+      );
+    }
+
+    case "table":
+      return renderTable(node, k);
+
     case "ul":
     case "ol": {
       const items: React.ReactElement[] = [];
@@ -243,6 +256,56 @@ function renderBlockChildren(parent: Element): React.ReactNode[] {
   }
   flush();
   return out;
+}
+
+// Concatenate all descendant text — used to recover the raw source of a
+// <pre> code block (newlines included) for a single monospace <Text>.
+function extractText(node: Element): string {
+  let s = "";
+  for (const c of node.children || []) {
+    if (isText(c)) s += c.data;
+    else if (isElement(c)) s += extractText(c);
+  }
+  return s;
+}
+
+// Render a GFM <table> as stacked rows of flex cells. RN has no native
+// table, so each <tr> is a flexDirection:row View and each cell flexes
+// equally. Header cells (<th> or anything under <thead>) get the mono
+// uppercase treatment that mirrors `.bw-card thead th` on web.
+function renderTable(node: Element, key: string): React.ReactElement {
+  const rows: React.ReactElement[] = [];
+  const pushRow = (tr: Element, isHead: boolean) => {
+    const cells: React.ReactNode[] = [];
+    for (const cell of tr.children || []) {
+      if (!isElement(cell) || (cell.name !== "td" && cell.name !== "th")) continue;
+      const head = isHead || cell.name === "th";
+      cells.push(
+        <View key={nextKey()} style={TAG_STYLES.tableCell}>
+          <Text style={head ? TAG_STYLES.tableHeadCellText : TAG_STYLES.tableCellText}>
+            {renderInlineChildren(cell)}
+          </Text>
+        </View>
+      );
+    }
+    rows.push(
+      <View key={nextKey()} style={[TAG_STYLES.tableRow, isHead ? TAG_STYLES.tableHeadRow : null]}>
+        {cells}
+      </View>
+    );
+  };
+  for (const section of node.children || []) {
+    if (!isElement(section)) continue;
+    if (section.name === "thead" || section.name === "tbody") {
+      const isHead = section.name === "thead";
+      for (const tr of section.children || []) {
+        if (isElement(tr) && tr.name === "tr") pushRow(tr, isHead);
+      }
+    } else if (section.name === "tr") {
+      pushRow(section, false);
+    }
+  }
+  return <View key={key} style={TAG_STYLES.table}>{rows}</View>;
 }
 
 /** Entry point: parse a sanitized note HTML string into a RN tree. */

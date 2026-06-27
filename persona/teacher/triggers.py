@@ -56,7 +56,7 @@ from infra.perception import (
 )
 
 
-# Sentence terminator detector for Lane A voice-leads auto-speak. Mirrors
+# Sentence terminator detector for Lane A lead-pass auto-speak. Mirrors
 # the boundary used in services/persona/routers/ask.py + speak sidecar
 # so the seam where the audio cuts matches what the rest of the system
 # expects.
@@ -141,7 +141,7 @@ class _LaneAState:
 
 _lane_a: Dict[str, _LaneAState] = {}
 
-# Background canvas-writer tasks spawned by Lane A under voice-leads. We
+# Background deeper-pass tasks spawned by Lane A under the lead pass. We
 # hold strong references so the loop's GC doesn't cancel them mid-mount.
 _lane_a_writer_tasks: set = set()
 
@@ -512,21 +512,21 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     from infra.devices.delivery import enqueue_for_user
     from infra.contracts.ui import TeacherThinking
 
-    # Voice-leads Phase 1: Lane A is the spoken pass. When the flag is on,
-    # we drop the tool palette here so the LLM streams prose directly into
-    # auto-speak with no tool-arg silence, and spawn a canvas-writer task
-    # after the loop to mount any visuals derived from the transcript.
-    voice_leads_enabled = os.environ.get("BWM_VOICE_LEADS", "0") == "1"
+    # Lead pass: Lane A is the fast spoken pass. When the flag is on, we drop
+    # the tool palette here so the LLM streams prose directly into auto-speak
+    # with no tool-arg silence, and spawn a deeper pass after the loop to
+    # handle visuals/tools derived from the transcript.
+    lead_enabled = os.environ.get("BWM_LEAD", "0") == "1"
 
     summary = _format_events_summary(events)
     t0 = time.perf_counter()
     phases: Dict[str, float] = {}
-    phases["voice_leads"] = voice_leads_enabled
+    phases["lead_pass"] = lead_enabled
     log_event(
         "lane_a.start",
         user_id=str(user_id),
         event_count=len(events),
-        voice_leads=voice_leads_enabled,
+        lead_pass=lead_enabled,
     )
 
     await enqueue_for_user(user_id, TeacherThinking(
@@ -550,8 +550,8 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     error_text: Optional[str] = None
     preempted = False
     first_delta_logged = False
-    # Voice-leads auto-speak state. Today Lane A only produces audio
-    # via explicit `speak` tool calls — under voice-leads, no tools fire,
+    # Lead-pass auto-speak state. Today Lane A only produces audio
+    # via explicit `speak` tool calls — under the lead pass, no tools fire,
     # so we stream sentences directly to TTS as deltas arrive.
     sentence_buffer = ""
     auto_speak_first_ms: Optional[float] = None
@@ -580,7 +580,7 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
 
     try:
         ctx_t0 = time.perf_counter()
-        ctx = await assemble_reflect(user_id, events, voice_leads=voice_leads_enabled)
+        ctx = await assemble_reflect(user_id, events, lead_pass=lead_enabled)
         phases["ctx_assemble_ms"] = round((time.perf_counter() - ctx_t0) * 1000, 2)
         log_event(
             "lane_a.ctx_assembled",
@@ -588,9 +588,16 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
             elapsed_ms=phases["ctx_assemble_ms"],
             prior_messages=len(ctx.prior_messages) if ctx.prior_messages else 0,
         )
-        # Voice-leads: empty tool list; auto-speak streams prose only. The
+        # Lead pass: empty tool list; auto-speak streams prose only. The
         # canvas-writer pass spawned after the loop handles any visuals.
-        lane_a_tools = [] if voice_leads_enabled else build_tools(user_id, lane="user_facing")
+        #
+        # No `request_handoff` here (unlike the ask path): Lane A is ambient
+        # and sessionless by design (prior_messages=[], stores no Interaction),
+        # so there's no AskRequest/session to drive the deep answering pass. An
+        # empty tool list also means the lead line physically can't emit a
+        # handoff it can't fulfil. The never-disclaim contract from lead_brief
+        # still applies; deep-routing stays ask-path-only for now.
+        lane_a_tools = [] if lead_enabled else build_tools(user_id, lane="user_facing")
         async for evt in run_teacher_tool_loop(
             static_system=ctx.parts.static_system,
             static_user_passage=ctx.parts.static_user_passage,
@@ -623,10 +630,10 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
                     )
                     first_delta_logged = True
                 text_chunks.append(chunk)
-                # Voice-leads: fire each completed sentence to TTS as
+                # Lead pass: fire each completed sentence to TTS as
                 # soon as it lands. No suppression check needed — tools
                 # are empty so there's no `speak` tool call to race with.
-                if voice_leads_enabled and chunk:
+                if lead_enabled and chunk:
                     sentence_buffer += chunk
                     while True:
                         match = _LANE_A_SENTENCE_BOUNDARY.search(sentence_buffer)
@@ -659,7 +666,7 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
     finally:
         # Flush any trailing prose that didn't end in a sentence
         # terminator — the user's last word still needs to be heard.
-        if voice_leads_enabled and not preempted:
+        if lead_enabled and not preempted:
             tail = sentence_buffer.strip()
             if tail:
                 task = asyncio.create_task(_fire_lane_a_sentence(tail))
@@ -695,10 +702,10 @@ async def _execute_conversation(user_id: UUID, events: List[Any]) -> None:
             tool_calls=tool_calls_seen,
         ))
 
-        # Voice-leads canvas writer. Spawn only when we actually have a
+        # Lead-pass canvas writer. Spawn only when we actually have a
         # substantive spoken answer to base the card on — skip preempts,
         # errors, and the "(silent — no response chosen)" no-op turn.
-        if voice_leads_enabled and not preempted and not error_text and spoken_text:
+        if lead_enabled and not preempted and not error_text and spoken_text:
             question = _extract_user_question(events)
             if question:
                 writer_task = asyncio.create_task(run_canvas_writer(

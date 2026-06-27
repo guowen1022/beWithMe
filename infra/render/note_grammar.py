@@ -29,6 +29,11 @@ ALLOWED_TAGS: frozenset[str] = frozenset(
         "a", "img",
         # quote
         "blockquote",
+        # fenced code blocks — <pre> preserves newlines/indentation so a
+        # ```js fence renders readably instead of collapsing to one line.
+        "pre",
+        # GFM tables — markdown-it emits these for `| a | b |` syntax.
+        "table", "thead", "tbody", "tr", "th", "td",
     }
 )
 

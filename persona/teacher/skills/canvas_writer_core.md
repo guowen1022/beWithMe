@@ -14,6 +14,18 @@ output in the card shell, sanitizes, and renders diagrams to SVG. Don't
 write container `<div>`s or apply manual `t-display`/`t-body` classes —
 markdown headings and paragraphs get sensible styling automatically.
 
+**Code blocks and tables render too.** A fenced \`\`\`js / \`\`\`python block
+keeps its newlines and indentation, and `| a | b |` markdown becomes a real
+table. Two rules so they read well:
+- NEVER drop a bare code block. Precede every fenced code block with one
+  short sentence saying what it shows and why it's there ("Here's the
+  client side of the handshake:"). A code listing with no lead-in reads as
+  noise.
+- Keep code minimal and human-readable — the fewest lines that make the
+  point, broken across lines like a person would write it, not minified
+  onto one line. Use a table for side-by-side comparisons instead of
+  cramming them into prose.
+
 ## EVERY VISUAL MUST MAKE ONE CLAIM
 
 Before you draw anything, name — to yourself — the single claim the picture

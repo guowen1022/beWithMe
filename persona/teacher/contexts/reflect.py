@@ -31,7 +31,7 @@ from infra.perception import read_for_user as read_perception
 async def assemble(
     user_id: uuid.UUID,
     events: List[PerceptionEventSummary],
-    voice_leads: bool = False,
+    lead_pass: bool = False,
 ) -> TeacherContext:
     """Build the reflect-scenario context.
 
@@ -39,9 +39,9 @@ async def assemble(
     closes them before returning. The trigger pipeline is fire-and-
     forget so it doesn't pass these in.
 
-    When `voice_leads=True`, the prompt is built with the brief/tools-free
-    variant so Lane A's spoken turn can stream prose without waiting on
-    tool-call arg generation. The canvas-writer pass runs separately.
+    When `lead_pass=True`, the prompt is built with the brief/tools-free
+    lead variant so Lane A's spoken turn can stream prose without waiting on
+    tool-call arg generation. The deeper passes run separately.
     """
     # 1. Canvas state — what's actually on screen right now.
     canvas_state = None
@@ -132,7 +132,7 @@ async def assemble(
         recent_user_speech=recent_user_speech,
         recent_notices=recent_notices,
         related_notes=related_notes,
-        voice_leads=voice_leads,
+        lead_pass=lead_pass,
     )
 
     # Reflect turns have no chat history — they are not user-initiated.

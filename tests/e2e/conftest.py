@@ -179,13 +179,12 @@ def services() -> Iterator[dict]:
     # Disable note disk persistence so tests don't write to data/notes/.
     env["NOTES_PERSIST"] = "0"
     # Force the single-turn voice path even if the developer has
-    # BWM_VOICE_LEADS=1 in .env for normal dev. The teacher_tools e2e tests
-    # exercise the LLM tool-loop directly; voice-leads strips the tool
-    # palette on the spoken pass and would make them all fail. The flag is
-    # already explicit in `services/persona/routers/ask.py:303` — overriding
+    # BWM_LEAD=1 in .env for normal dev. The teacher_tools e2e tests
+    # exercise the LLM tool-loop directly; the lead pass strips the tool
+    # palette on the fast line and would make them all fail. Overriding
     # in os.environ wins over .env because load_dotenv() respects existing
     # env by default.
-    env["BWM_VOICE_LEADS"] = "0"
+    env["BWM_LEAD"] = "0"
 
     procs: list[tuple[str, int, subprocess.Popen]] = []
 

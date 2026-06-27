@@ -15,6 +15,7 @@ frontend/out/
 .claude/scheduled_tasks.lock
 .gstack/
 .e2e-logs/
+.sim-logs/
 .dev-logs/
 .venv.bak/
 .DS_Store

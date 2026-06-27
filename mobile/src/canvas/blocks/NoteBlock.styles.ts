@@ -58,6 +58,19 @@ export const TAG_STYLES = StyleSheet.create({
   liContent:   { flex: 1 },
   hr:          { height: 1, backgroundColor: BW.border, marginVertical: 12 },
   blockquote:  { borderLeftWidth: 2, borderLeftColor: BW.accent, paddingHorizontal: 12, marginVertical: 10 },
+  // Fenced code blocks — mirror `.bw-card pre` / `pre code` on web. The
+  // wrapping View scrolls horizontally; the Text preserves newlines.
+  pre:         { backgroundColor: BW.surface2, borderWidth: 1, borderColor: BW.border,
+                 borderLeftWidth: 3, borderLeftColor: BW.accent, padding: 12, marginVertical: 10 },
+  preCode:     { fontFamily: "monospace", fontSize: 12, lineHeight: 18, color: BW.ink },
+  // GFM tables — mirror `.bw-card table/th/td/thead`.
+  table:       { borderWidth: 1, borderColor: BW.border, marginVertical: 10 },
+  tableRow:    { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: BW.border },
+  tableHeadRow:{ backgroundColor: BW.surface2 },
+  tableCell:   { flex: 1, paddingVertical: 7, paddingHorizontal: 12, borderRightWidth: 1, borderRightColor: BW.border },
+  tableCellText:    { fontSize: 13, lineHeight: 19, color: BW.ink },
+  tableHeadCellText:{ fontSize: 11, fontWeight: "600", color: BW.ink, fontFamily: "monospace",
+                      textTransform: "uppercase", letterSpacing: 0.6 },
 });
 
 // Class vocabulary — keys here must equal the set in

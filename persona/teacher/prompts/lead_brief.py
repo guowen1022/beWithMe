@@ -1,13 +1,15 @@
-"""Voice-leads voice prompt — even leaner than `voice_answer.py`.
+"""Lead-pass prompt — the fast front-line response. Even leaner than `voice_answer.py`.
 
-Used when `BWM_VOICE_LEADS=1` and the active channel is voice. The voice
-call has NO tools — a separate `canvas_writer` pass paints the canvas
-after the spoken answer completes. So this prompt:
+Used when `BWM_LEAD=1` and the active channel is voice. The lead pass is a
+fast quick-judgment + dispatcher: it gives an immediate, accurate response and
+carries one routing tool (`request_handoff`) to hand off deeper work. A
+separate pass (`canvas_writer`, or the deep answering pass) does the slower
+work after the lead line streams. So this prompt:
 
-  * loads `voice_brief.md` (strict brevity + no-padding rule) instead of
+  * loads `lead_brief.md` (never-disclaim + brevity rule) instead of
     `lane_a_voice.md`
-  * skips the canvas skills entirely — there are no canvas tools to use
-  * skips `canvas_persona` — irrelevant when the model can't act on the canvas
+  * skips the canvas skills entirely — the lead pass doesn't act on the canvas
+  * skips `canvas_persona` — irrelevant on the fast line
   * keeps teaching_principle, preferences, talk_preference, and mastery so
     the spoken answer is still tailored to the user
 
@@ -52,16 +54,16 @@ def build(
         system_parts.append(teaching_principle)
     system_parts.append("")
 
-    voice_brief = load_skill("teacher/voice_brief")
-    if voice_brief:
-        system_parts.append(voice_brief)
+    lead_brief = load_skill("teacher/lead_brief")
+    if lead_brief:
+        system_parts.append(lead_brief)
         system_parts.append("")
 
-    # Stage-1 routing direction: decide in-teaching-loop vs out-of-loop
-    # (session action) and hand off via request_session_control if out.
-    session_routing = load_skill("teacher/session_routing")
-    if session_routing:
-        system_parts.append(session_routing)
+    # Lead-pass routing direction: answer now, hand off deep (a closer
+    # look/action), or hand off to session control — via request_handoff.
+    lead_routing = load_skill("teacher/lead_routing")
+    if lead_routing:
+        system_parts.append(lead_routing)
         system_parts.append("")
 
     system_parts.extend(preferences_block.render(user_profile, self_description))

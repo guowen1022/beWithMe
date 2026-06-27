@@ -22,9 +22,10 @@ from persona.teacher.tools import build_tools as build_teacher_tools
 from persona.teacher.tools.loop import run as run_teacher_tool_loop
 from persona.teacher.tools.grants import TEACHER_GRANT
 from infra.contracts.output_routing import OUTPUT_DEVICE_ID
-from persona.teacher.tools import request_session_control as _request_session_control
+from persona.teacher.tools import request_handoff as _request_handoff
 from services.persona.routers._ask_addressee import route_addressee
 from services.persona.routers._ask_session import run_session_control
+from services.persona.routers._ask_deep import run_deep_answer
 from services.persona.routers._ask_voice import (
     AutoSpeakBuffer,
     normalize_device_class,
@@ -103,14 +104,14 @@ async def ask_stream(
     active_channel = resolve_active_channel(talk_pref, device_class)
     voice_mode = active_channel in ("voice", "both")
 
-    # Voice-leads two-call pattern (Phase 1). When the env flag is set and
-    # the active channel is voice, the request runs as: (1) a tools-free
-    # voice call that streams brief prose through auto-speak; (2) a
-    # background canvas-writer call spawned after the voice `done` event,
-    # which mounts at most one note derived from the voice transcript.
-    # The non-voice path is unchanged; flag-off keeps the existing
-    # single-turn voice path intact.
-    voice_leads_enabled = voice_mode and os.environ.get("BWM_VOICE_LEADS", "0") == "1"
+    # Lead-pass two-stage pattern. When the env flag is set and the active
+    # channel is voice, the request runs as: (1) the fast lead pass — a
+    # tools-free (bar one routing tool) call that streams a brief response
+    # through auto-speak; (2) a deeper pass spawned after the lead `done`
+    # event — either the canvas-writer (mounts a note) or, when the lead
+    # routes deep, the deep answering pass. The non-voice path is unchanged;
+    # flag-off keeps the existing single-turn voice path intact.
+    lead_enabled = voice_mode and os.environ.get("BWM_LEAD", "0") == "1"
 
     req_id = getattr(request.state, "event_req_id", None)
     log_event(
@@ -122,7 +123,7 @@ async def ask_stream(
         device_class=device_class,
         active_channel=active_channel,
         voice_mode=voice_mode,
-        voice_leads=voice_leads_enabled,
+        lead_pass=lead_enabled,
         x_lane_thinking=x_lane_thinking,
     )
 
@@ -162,23 +163,24 @@ async def ask_stream(
         disable_thinking = False
     phases["disable_thinking"] = disable_thinking
     phases["profile"] = lane_a_profile or "(none)"
-    phases["voice_leads"] = voice_leads_enabled
+    phases["lead_pass"] = lead_enabled
 
     with_assemble_t0 = time.perf_counter()
     ctx = await assemble_context(
         body, user_id, db, client,
-        phases=phases, voice_mode=voice_mode, voice_leads=voice_leads_enabled,
+        phases=phases, voice_mode=voice_mode, lead_pass=lead_enabled,
     )
     phases["context_total_ms"] = round((time.perf_counter() - with_assemble_t0) * 1000, 2)
-    # Voice-leads: no teaching tools on the voice pass — auto-speak streams
-    # the answer; the canvas-writer pass spawned after `done` handles visuals.
-    # Both paths get the Stage-1 routing tool: the fast-line LLM decides (with
-    # the teacher/session_routing guidance) whether the turn is out of the
-    # teaching loop and, if so, calls request_session_control to hand off to
-    # Stage-2 session control. Voice-leads Pass 1 stays otherwise tool-free.
-    routing_tool = _request_session_control.build_spec(user_id)
+    # Lead pass: no teaching tools on the fast line — auto-speak streams
+    # the answer; a deeper pass spawned after `done` handles visuals/tools.
+    # Both paths get the Stage-1 routing tool: the lead-line LLM decides (with
+    # the teacher/lead_routing guidance) whether the turn is answer-now,
+    # needs a deeper look (request_handoff target="deep"), or is a session
+    # action (request_handoff target="session"). The lead pass stays
+    # otherwise tool-free.
+    routing_tool = _request_handoff.build_spec(user_id)
     teacher_tools = (
-        [routing_tool] if voice_leads_enabled
+        [routing_tool] if lead_enabled
         else build_teacher_tools(user_id) + [routing_tool]
     )
 
@@ -190,6 +192,7 @@ async def ask_stream(
         extracted_title: str | None = None
         usage: dict = {}
         session_routed = False
+        deep_routed = False
         # Auto-speak: only active on voice channels. The buffer accumulates
         # streamed prose and fires each completed sentence to Kokoro in the
         # background; if the LLM emits its own `speak` tool call we suppress
@@ -221,7 +224,7 @@ async def ask_stream(
                 # falls back to plain disable_thinking=True.
                 disable_thinking=disable_thinking,
                 profile=lane_a_profile,
-                terminal_tools={_request_session_control.NAME},
+                terminal_tools={_request_handoff.NAME},
                 grant=TEACHER_GRANT,
             ):
                 if evt["kind"] == "delta":
@@ -252,13 +255,25 @@ async def ask_stream(
                     else:
                         await status_queue.put({"type": "token", "text": chunk})
                 elif evt["kind"] == "tool_call":
-                    # Stage-1 hand-off: the model judged this turn to be
-                    # outside the teaching loop. Suppress the spoken reply +
-                    # the canvas draw; Stage-2 session control takes over.
-                    if evt.get("name") == _request_session_control.NAME:
-                        session_routed = True
-                        if voice_mode:
-                            autospeak.suppress()
+                    # Lead-pass hand-off: the model routed this turn to a deeper
+                    # pass. Branch on `target`.
+                    if evt.get("name") == _request_handoff.NAME:
+                        target = (evt.get("arguments") or {}).get("target")
+                        if target == _request_handoff.TARGET_SESSION:
+                            # Session action: suppress the spoken reply + the
+                            # canvas draw; Stage-2 session control takes over.
+                            session_routed = True
+                            if voice_mode:
+                                autospeak.suppress()
+                        elif lead_enabled:
+                            # Deep look/action (lead path only): KEEP the lead's
+                            # short spoken holding line ("let me check that
+                            # diagram") — the deep answering pass (spawned after
+                            # the loop) does the real work and replies. On
+                            # non-lead, full-palette paths a deep handoff is a
+                            # misfire (the model already has the tools to look),
+                            # so we ignore it and let the turn complete normally.
+                            deep_routed = True
                         continue
                     # If the LLM is going to speak() itself, stop the
                     # auto-speak path — its text wins.
@@ -338,12 +353,37 @@ async def ask_stream(
                     "phase_timings_ms": phases,
                 })
 
-                # Phase 1 voice-leads: spawn the canvas-writer pass now that
-                # the spoken answer is complete. The task runs detached from
-                # the SSE stream — by the time the writer's tool call fires,
-                # the user is already listening to the auto-spoken response,
-                # and the note pops onto the canvas during playback.
-                if voice_leads_enabled and answer_body:
+                # Lead pass: spawn the deeper Stage-2 pass now that the lead
+                # line is complete. The task runs detached from the SSE stream
+                # and delivers out-of-band over /dynamic/stream.
+                if lead_enabled and answer_body and deep_routed:
+                    # Routed deep: the lead line was a short acknowledgment
+                    # ("let me check that diagram"). The deep answering pass —
+                    # full tool palette + the contents of the notes the teacher
+                    # drew — does the real work and speaks the actual answer.
+                    deep_task = asyncio.create_task(run_deep_answer(
+                        question=question,
+                        holding_line=answer_body,
+                        user_id=user_id,
+                        body=body,
+                        active_channel=active_channel,
+                        req_id=req_id,
+                        origin=timing_origin,
+                    ))
+                    _background_tasks.add(deep_task)
+                    deep_task.add_done_callback(_background_tasks.discard)
+                    log_event(
+                        "ask.deep_routed",
+                        req_id=req_id,
+                        user_id=str(user_id),
+                        holding_len=len(answer_body),
+                        auto_speak_first_ms=phases.get("auto_speak_first_ms"),
+                    )
+                elif lead_enabled and answer_body:
+                    # Answer-now: the lead line fully answered. Spawn the
+                    # canvas-writer to paint a note during playback. Detached —
+                    # by the time the writer's tool call fires, the user is
+                    # already listening to the auto-spoken response.
                     writer_task = asyncio.create_task(run_canvas_writer(
                         question=question,
                         transcript=answer_body,
@@ -367,8 +407,10 @@ async def ask_stream(
             traceback.print_exc()
             await status_queue.put({"type": "error", "message": str(e)})
 
-        # A session action (Stage-2 routed) is not a Q&A turn — store nothing.
-        if not session_routed:
+        # Store the Interaction only when the lead line IS the answer. A
+        # session action stores nothing; a deep-routed turn defers storage to
+        # the deep pass (which holds the real answer, not the holding line).
+        if not session_routed and not deep_routed:
             try:
                 async with async_session() as bg_db:
                     interaction = Interaction(
