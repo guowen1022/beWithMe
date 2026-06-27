@@ -60,11 +60,13 @@ def build_spec(user_id: UUID, session_id: Optional[UUID] = None) -> ToolSpec:
         name="end_session",
         description=(
             "End the current learning session and return the user to the home "
-            "feed. Call this when the user signals they're finished: 'end the "
-            "session', 'I'm done', 'wrap up', 'let's stop here', 'that's all for "
-            "today', 'close this out'. This SAVES the session (transcript + "
-            "summary) before leaving. Takes effect on the user's canvas "
-            "immediately; you do not need to call speak afterward."
+            "feed. Call this when the user signals they're finished OR wants to "
+            "leave for the feed: 'end the session', 'I'm done', 'wrap up', "
+            "'let's stop here', 'that's all for today', 'close this out', 'go "
+            "home', 'take me home', 'go back to the feed', 'back to the home "
+            "page'. This SAVES the session (transcript + summary) before "
+            "leaving. Takes effect on the user's canvas immediately; you do not "
+            "need to call speak afterward."
         ),
         params_schema={
             "type": "object",
