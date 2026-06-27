@@ -21,6 +21,7 @@ from infra.tools.web_fetch import fetch_readable, WebFetchError
 from persona.teacher.knowledge import get_concepts, get_graph_context
 from persona.teacher.models.recommendation import Recommendation
 from persona.teacher.preferences import get_user_profile
+from persona.teacher.prompts.skills import load_skill
 
 
 RECOMMEND_SYSTEM_PROMPT = """\
@@ -33,7 +34,11 @@ The goal is small pieces that connect to each other, so users can learn with alm
 Categories and their scope:
 - "review" (~1 min): ONE concept only. A quick refresher — 5-6 sentences max to jog memory.
 - "explore" (~3 min): ONE new concept. A brief introduction — just enough for the user to \
-decide if they want to go deeper. 5-6 sentences covering the core idea.
+decide if they want to go deeper. 5-6 sentences that OPEN WITH MOTIVATION before any mechanism: \
+the problem the concept solves, what it replaced or the world before it, who introduced it and \
+roughly when, and how it's positioned against the obvious alternatives — THEN the core idea of how \
+it works. Do NOT lead with a mechanical definition ("X is a framework that uses Y and Z"); that \
+tells the user how without telling them why they'd care.
 - "deepen" (~5 min): ONE concept the user partially knows. Go one level deeper with a \
 concrete example or connection to something they already understand.
 
@@ -45,7 +50,9 @@ it exists and what it covers, not to learn everything in it.
 Output a JSON array of 5-8 recommendations. Each recommendation must have:
 - "category": one of "review", "explore", "deepen"
 - "title": short, actionable title (e.g., "Review: Gradient Descent Basics")
-- "summary": 1-2 sentence explanation of what to study and why
+- "summary": the intro blurb shown on the card and used to seed the session. Lead with WHY the \
+concept exists (problem it solves / what it replaced / how it's positioned vs alternatives) before \
+any mechanism — never open with a bare "X is a … that uses …" definition.
 - "reasoning": why this is recommended based on their learning state
 - "concept_names": list with 1-2 concept names only (keep it focused)
 - "priority": float 0-1 (1 = most urgent)
@@ -176,8 +183,16 @@ async def reason_candidate_items(
     snapshot = _build_learner_snapshot(self_description, profile, concept_masteries, graph_context)
     prompt = f"Here is the learner's current state:\n\n{snapshot}\n\nGenerate recommendations."
 
+    # Share the canonical teaching principles with the feed seed so the
+    # blurb honors the same orientation-before-mechanism rule the answering
+    # passes do. Single source of truth: persona/teacher/skills/teaching_principle.md.
+    system_prompt = RECOMMEND_SYSTEM_PROMPT
+    teaching_principle = load_skill("teacher/teaching_principle")
+    if teaching_principle:
+        system_prompt = f"{teaching_principle}\n\n{RECOMMEND_SYSTEM_PROMPT}"
+
     raw = await llm.generate(
-        prompt, system=RECOMMEND_SYSTEM_PROMPT, max_tokens=2048,
+        prompt, system=system_prompt, max_tokens=2048,
         purpose="recommender", user_id=user_id,
     )
     try:
