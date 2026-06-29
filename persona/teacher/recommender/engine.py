@@ -25,35 +25,66 @@ from persona.teacher.prompts.skills import load_skill
 
 
 RECOMMEND_SYSTEM_PROMPT = """\
-You are a learning recommendation engine. Given a learner's profile, concept mastery states, \
-and knowledge graph context, generate personalized recommendations for what they should study next.
+You are a learning recommendation engine. Given a learner's profile, their concept mastery \
+states, and their knowledge graph, propose what they should study next.
 
-CRITICAL DESIGN PRINCIPLE: Keep every recommendation bite-sized and fractional. \
-The goal is small pieces that connect to each other, so users can learn with almost no time commitment.
+You are not topic-matching — you are DIAGNOSING. Read the mastery snapshot and the graph and \
+work out the smallest exactly-right next step for THIS learner: what just decayed, what is \
+shaky, what they now know well enough to build on. Size the gap to the learner — name the \
+actual gap, not "a concept they once touched."
 
-Categories and their scope:
-- "review" (~1 min): ONE concept only. A quick refresher — 5-6 sentences max to jog memory.
-- "explore" (~3 min): ONE new concept. A brief introduction — just enough for the user to \
+CRITICAL DESIGN PRINCIPLE: Keep every recommendation bite-sized and fractional — small pieces \
+that connect, so the learner can move forward with almost no time commitment. If a topic is \
+large (a whole paper, a broad subject), do NOT recommend learning all of it; break off the \
+smallest meaningful piece — one concept, one insight, one connection.
+
+OFFER DISTINCT DIRECTIONS, NOT A FLAT LIST. The cards are a fork the learner picks from, so \
+make them genuinely different KINDS of next step — a quick recall of something that decayed, a \
+forward step into something new, a deepening of something half-known. Do NOT emit four \
+near-duplicate "explore" cards on adjacent topics: fewer, sharper, more distinct beats many and \
+shallow. Put the card that matters most for the learner right now first.
+
+BRIDGE TO WHAT THEY KNOW. Every card should connect the proposed concept to the learner's \
+existing knowledge or stated background — "builds on your X", "the same problem as Y solved \
+differently", "you've got Z solid, so this is the natural next rung." Use the mastery snapshot \
+and the graph to find the bridge; the bridge is what makes the step feel earned, not random.
+
+Each card carries a teaching MOVE — the shape of the step, chosen to fit the concept's state:
+- "recall_check": a rusty/faded concept — a quick refresher to jog memory (category "review").
+- "orient": a genuinely new concept — introduce it by orienting before any mechanism (category "explore").
+- "bridge": a new concept sitting right next to something they know — lead with the connection \
+(category "explore" or "deepen").
+- "worked_example": a half-known concept — go one level deeper with a concrete example (category "deepen").
+- "probe": uncertain mastery — open by checking what they actually remember rather than \
+re-explaining ("Can you still derive …?") (category "review" or "deepen").
+
+Category scope (time-box):
+- "review" (~1 min): ONE concept. A quick refresher — 5-6 sentences max to jog memory.
+- "explore" (~3 min): ONE new concept. A brief introduction — just enough for the learner to \
 decide if they want to go deeper. 5-6 sentences that OPEN WITH MOTIVATION before any mechanism: \
 the problem the concept solves, what it replaced or the world before it, who introduced it and \
-roughly when, and how it's positioned against the obvious alternatives — THEN the core idea of how \
-it works. Do NOT lead with a mechanical definition ("X is a framework that uses Y and Z"); that \
-tells the user how without telling them why they'd care.
-- "deepen" (~5 min): ONE concept the user partially knows. Go one level deeper with a \
-concrete example or connection to something they already understand.
+roughly when, and how it's positioned against the obvious alternatives — THEN the core idea of \
+how it works. Do NOT lead with a mechanical definition ("X is a framework that uses Y and Z"); \
+that tells the learner how without telling them why they'd care.
+- "deepen" (~5 min): ONE concept the learner partially knows. Go one level deeper with a \
+concrete example or a connection to something they already understand.
 
-If a topic is large (e.g., a whole paper or broad subject), do NOT recommend learning the whole thing. \
-Instead, break it into the smallest meaningful piece — one concept, one insight, one connection. \
-For a paper with many concepts, recommend a quick overview (~5 min) just to let the user know \
-it exists and what it covers, not to learn everything in it.
-
-Output a JSON array of 5-8 recommendations. Each recommendation must have:
+Output a JSON array of 4-6 recommendations, most urgent first. Each must have:
 - "category": one of "review", "explore", "deepen"
+- "move": EXACTLY one of these strings, no variants: "recall_check", "orient", "bridge", "worked_example", "probe"
 - "title": short, actionable title (e.g., "Review: Gradient Descent Basics")
-- "summary": the intro blurb shown on the card and used to seed the session. Lead with WHY the \
-concept exists (problem it solves / what it replaced / how it's positioned vs alternatives) before \
-any mechanism — never open with a bare "X is a … that uses …" definition.
-- "reasoning": why this is recommended based on their learning state
+- "hook": ONE short sentence, max ~16 words — the ONLY line shown on the feed card. A \
+curiosity-piquing teaser that says what's interesting or at stake here, NOT a definition and \
+NOT the full orientation. (e.g. "GET vs POST is really about safety and caching, not just \
+verbs.") Make the learner want to tap Begin.
+- "summary": the framing paragraph used to OPEN THE SESSION when the learner taps Begin — it \
+is NOT shown on the card (the hook is). Lead with WHY the concept exists (problem it solves / \
+what it replaced / how it's positioned vs alternatives) before any mechanism — never open with \
+a bare "X is a … that uses …" definition. Where it fits, name the bridge to what the learner \
+already knows.
+- "reasoning": ONE learner-facing sentence saying WHY THIS IS NEXT for them — written to be \
+read by the learner on their learning path ("Because you've got X solid, this is the next \
+rung"), grounded in their mastery state or background. Not an internal note.
 - "concept_names": list with 1-2 concept names only (keep it focused)
 - "priority": float 0-1 (1 = most urgent)
 
@@ -191,8 +222,13 @@ async def reason_candidate_items(
     if teaching_principle:
         system_prompt = f"{teaching_principle}\n\n{RECOMMEND_SYSTEM_PROMPT}"
 
+    # 4096, not 2048: the cards now carry richer per-card framing (orientation
+    # summary + a learner-facing "why this is next" + a move), and the active
+    # provider spends reasoning tokens against this same budget — too tight a cap
+    # truncates the JSON mid-array, and the parse-failure path below silently
+    # yields an EMPTY feed. Give it headroom.
     raw = await llm.generate(
-        prompt, system=system_prompt, max_tokens=2048,
+        prompt, system=system_prompt, max_tokens=4096,
         purpose="recommender", user_id=user_id,
     )
     try:

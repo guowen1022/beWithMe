@@ -42,6 +42,15 @@ function tagLabel(card: FeedCard): string {
   return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "";
 }
 
+// The card shows a short one-line hook, not the full `opening` (that long
+// paragraph is the session-seed framing, delivered when the learner taps Begin).
+// Fall back to `opening` for older cards minted before hooks existed — the
+// cardBody clamp keeps even that from running long.
+function cardHook(card: FeedCard): string {
+  const h = card.body && typeof card.body.hook === "string" ? (card.body.hook as string).trim() : "";
+  return h || card.opening;
+}
+
 const gridStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
@@ -98,6 +107,12 @@ const cardBody: CSSProperties = {
   color: "var(--bw-ink-muted)",
   margin: "10px 0 0",
   flex: 1,
+  // Hard cap at 3 lines so a long hook (or a fallback `opening`) can't turn the
+  // card back into a wall of text.
+  display: "-webkit-box",
+  WebkitBoxOrient: "vertical",
+  WebkitLineClamp: 3,
+  overflow: "hidden",
 };
 
 const primaryButton: CSSProperties = {
@@ -148,7 +163,7 @@ function Card({
       </div>
 
       <h3 style={cardTitle}>{card.title}</h3>
-      <p style={cardBody}>{card.opening}</p>
+      <p style={cardBody}>{cardHook(card)}</p>
 
       <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
         <button
@@ -205,10 +220,17 @@ function StarterCard({
 
 export default function SessionLauncher({
   onEnterReader,
+  onViewPath,
+  onStartProject,
 }: {
   // `autostart` true means the Reader should fire the seeded turn immediately
   // (Begin) and skip the welcome card; false/omitted is the manual entry.
   onEnterReader: (autostart?: boolean) => void;
+  // Open the learning-path view (the learner's journey). Optional so the
+  // launcher still renders without it.
+  onViewPath?: () => void;
+  // Start the goal-anchored project demo (Phase A: run Brightwell's books).
+  onStartProject?: () => void;
 }) {
   const [cards, setCards] = useState<FeedCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -513,6 +535,16 @@ export default function SessionLauncher({
             <button onClick={startFromScratch} style={ghostButton}>
               ✎ Start from scratch
             </button>
+            {onStartProject && (
+              <button data-testid="start-project" onClick={onStartProject} style={primaryButton}>
+                ▣ Run a company&apos;s books
+              </button>
+            )}
+            {onViewPath && (
+              <button data-testid="view-path" onClick={onViewPath} style={ghostButton}>
+                ◈ Your learning path
+              </button>
+            )}
           </div>
         )}
       </div>

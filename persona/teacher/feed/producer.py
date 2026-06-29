@@ -36,6 +36,11 @@ _CATEGORY_TO_POSTURE = {
     "deepen": "deepen",
 }
 
+# The teaching MOVE the engine chose for the card (shape of the step, fit to the
+# concept's mastery state). Stamped into `body` so the learning-path surface can
+# label it; an unrecognized/missing value just renders no move tag.
+_KNOWN_MOVES = {"recall_check", "orient", "bridge", "worked_example", "probe"}
+
 
 def _clamp01(x: float) -> float:
     try:
@@ -66,6 +71,10 @@ async def produce_teacher_feed(
         if not title or not summary:
             continue
         category = str(it.get("category") or "explore").strip().lower()
+        move = str(it.get("move") or "").strip().lower()
+        # `opening` keeps the long framing paragraph (it seeds the first turn via
+        # the Maestro cache); the short `hook` is what the card actually shows.
+        hook = str(it.get("hook") or "").strip()
         creates.append(FeedCandidateCreate(
             source_persona=SOURCE_PERSONA,
             purpose=PURPOSE,
@@ -77,6 +86,8 @@ async def produce_teacher_feed(
             body={
                 "concept_names": it.get("concept_names", []),
                 "reasoning": str(it.get("reasoning") or ""),
+                "move": move if move in _KNOWN_MOVES else "",
+                "hook": hook,
             },
         ))
 
