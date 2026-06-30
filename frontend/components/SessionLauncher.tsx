@@ -220,17 +220,10 @@ function StarterCard({
 
 export default function SessionLauncher({
   onEnterReader,
-  onViewPath,
-  onStartProject,
 }: {
   // `autostart` true means the Reader should fire the seeded turn immediately
   // (Begin) and skip the welcome card; false/omitted is the manual entry.
   onEnterReader: (autostart?: boolean) => void;
-  // Open the learning-path view (the learner's journey). Optional so the
-  // launcher still renders without it.
-  onViewPath?: () => void;
-  // Start the goal-anchored project demo (Phase A: run Brightwell's books).
-  onStartProject?: () => void;
 }) {
   const [cards, setCards] = useState<FeedCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -535,16 +528,6 @@ export default function SessionLauncher({
             <button onClick={startFromScratch} style={ghostButton}>
               ✎ Start from scratch
             </button>
-            {onStartProject && (
-              <button data-testid="start-project" onClick={onStartProject} style={primaryButton}>
-                ▣ Run a company&apos;s books
-              </button>
-            )}
-            {onViewPath && (
-              <button data-testid="view-path" onClick={onViewPath} style={ghostButton}>
-                ◈ Your learning path
-              </button>
-            )}
           </div>
         )}
       </div>
