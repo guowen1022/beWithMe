@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict
 from uuid import UUID
 
+from infra import skillforge_client
 from infra.model.tools import ToolDomain, ToolSpec
 from infra.user_data import register_user_dir
 from workshop.canvas.tools import _manim_scene
@@ -37,6 +38,11 @@ RENDERS_ROOT = register_user_dir(
     "Manim-rendered coordinate-grid videos (mp4) keyed by user.",
 )
 
+# skillforge tunable id — fail-open in every direction: with skillforge
+# absent/disabled, resolve() yields the baseline (description below,
+# no duration override) and collect_result() is a no-op.
+_TUNABLE_ID = "tool.present_coordinate_grid"
+
 
 async def present_coordinate_grid(
     *, user_id: UUID, args: Dict[str, Any]
@@ -44,10 +50,21 @@ async def present_coordinate_grid(
     """Validate, render, and mount. Returns a result dict; all failure
     modes come back as ``{"error": ...}`` so the teacher's LLM can fix
     its spec and retry in the same turn."""
+    tuned = skillforge_client.resolve(_TUNABLE_ID)
     try:
         spec = _manim_scene.normalize_spec(args)
     except ValueError as exc:
+        # A bad spec is signal about the description variant (the LLM
+        # misread the contract) — report it, then let the LLM retry.
+        skillforge_client.collect_result(_TUNABLE_ID, ok=False, outcome_scalar=0.0)
         return {"error": str(exc)}
+
+    # Tuned, bounded override: skillforge may tighten the duration budget
+    # but never exceed the code-owned cap.
+    max_duration = tuned.config.get("max_duration")
+    if (isinstance(max_duration, (int, float))
+            and _manim_scene.DURATION_MIN_S <= max_duration <= _manim_scene.DURATION_MAX_S):
+        spec["duration"] = min(spec["duration"], float(max_duration))
 
     scene_source, video_seconds = _manim_scene.generate_scene(spec)
     name = f"{_uuid.uuid4().hex}.mp4"
@@ -55,7 +72,16 @@ async def present_coordinate_grid(
     try:
         render_seconds = await _manim_scene.render_scene(scene_source, out_path)
     except RuntimeError as exc:
+        skillforge_client.collect_result(_TUNABLE_ID, ok=False, outcome_scalar=0.0)
         return {"error": str(exc)}
+    # Outcome scalar is render-success for now; the real teaching-quality
+    # signal (engagement with the mounted block) comes later.
+    skillforge_client.collect_result(
+        _TUNABLE_ID,
+        ok=True,
+        latency_ms=int(render_seconds * 1000),
+        outcome_scalar=1.0,
+    )
 
     video_url = f"/api/renders/{name}"
     fence_config = json.dumps({"video_url": video_url})
@@ -88,22 +114,36 @@ def _make_executor(user_id: UUID):
     return executor
 
 
+_DESCRIPTION = (
+    "Render a short ANIMATED coordinate-grid VIDEO (Manim) and "
+    "mount it on the canvas as a note. Use this when the concept "
+    "is inherently about motion or change over time — a grid "
+    "warping under a 2x2 linear transform, a point traveling "
+    "along a curve, functions being drawn in sequence. For a "
+    "quick static or interactive chart, embed a ```plot fence "
+    "in a note instead (instant, no render wait); this tool "
+    "takes several seconds to render. Functions are plain math "
+    "expressions in x (e.g. 'x*x - 2', 'sin(2*x)', 'exp(-x)'); "
+    "use ** for powers, never ^. No data scatter — analytic "
+    "curves only."
+)
+
+
+def _tuned_description() -> str:
+    """The description is skillforge's primary tuning surface for this
+    tool (which phrasings make the teacher reach for it at the right
+    moments). Bounded: any non-string / empty / oversized variant falls
+    back to the baseline."""
+    desc = skillforge_client.resolve(_TUNABLE_ID).config.get("description")
+    if isinstance(desc, str) and 0 < len(desc) <= 2000:
+        return desc
+    return _DESCRIPTION
+
+
 def build_spec(user_id: UUID) -> ToolSpec:
     return ToolSpec(
         name="present_coordinate_grid",
-        description=(
-            "Render a short ANIMATED coordinate-grid VIDEO (Manim) and "
-            "mount it on the canvas as a note. Use this when the concept "
-            "is inherently about motion or change over time — a grid "
-            "warping under a 2x2 linear transform, a point traveling "
-            "along a curve, functions being drawn in sequence. For a "
-            "quick static or interactive chart, embed a ```plot fence "
-            "in a note instead (instant, no render wait); this tool "
-            "takes several seconds to render. Functions are plain math "
-            "expressions in x (e.g. 'x*x - 2', 'sin(2*x)', 'exp(-x)'); "
-            "use ** for powers, never ^. No data scatter — analytic "
-            "curves only."
-        ),
+        description=_tuned_description(),
         params_schema={
             "type": "object",
             "properties": {

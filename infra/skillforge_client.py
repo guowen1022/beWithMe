@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -116,6 +117,30 @@ def collect(event: Dict[str, Any]) -> None:
             pass
 
     threading.Thread(target=_post, daemon=True).start()
+
+
+def collect_result(
+    tunable_id: str,
+    *,
+    ok: bool,
+    latency_ms: Optional[int] = None,
+    outcome_scalar: Optional[float] = None,
+    correlation_id: Optional[str] = None,
+) -> None:
+    """Compose a TelemetryEvent-shaped record for one tunable execution and
+    fire it. This is the call sites' surface — they report an outcome, not
+    the wire shape. Derived signals only (never raw user content). No-op
+    when disabled; never raises/blocks."""
+    if not enabled():
+        return
+    collect({
+        "correlation_id": correlation_id or uuid.uuid4().hex,
+        "host": _host,
+        "tunable_id": tunable_id,
+        "variant_version": resolve(tunable_id).version,
+        "result": {"ok": ok, "latency_ms": latency_ms},
+        "outcome_scalar": outcome_scalar,
+    })
 
 
 # ---- test helpers (used by tests to inject a snapshot without a live edge) ----

@@ -57,3 +57,86 @@ def test_gate_drops_a_disabled_tool_when_enabled():
     names = {t.name for t in build_tools(uuid.uuid4())}
     assert "speak" not in names        # skillforge disabled it
     assert "mount_template" in names    # other tools unaffected
+
+
+# --- collect_result (telemetry composition) ---------------------------------
+
+def test_collect_result_noop_when_disabled(monkeypatch):
+    fired = []
+    monkeypatch.setattr(sf, "collect", fired.append)
+    sf.collect_result("tool.x", ok=True)
+    assert fired == []
+
+
+def test_collect_result_composes_telemetry_event(monkeypatch):
+    fired = []
+    monkeypatch.setattr(sf, "collect", fired.append)
+    sf._set_for_test("http://edge", {"tool.x": {"enabled": True, "version": "v3"}})
+    sf.collect_result("tool.x", ok=True, latency_ms=1200, outcome_scalar=1.0)
+    (event,) = fired
+    assert event["tunable_id"] == "tool.x"
+    assert event["host"] == "beWithMe"
+    assert event["variant_version"] == "v3"          # from the active snapshot
+    assert event["result"] == {"ok": True, "latency_ms": 1200}
+    assert event["outcome_scalar"] == 1.0
+    assert event["correlation_id"]
+
+
+# --- present_coordinate_grid: description/config injection + telemetry ------
+
+_PCG_ID = "tool.present_coordinate_grid"
+
+
+def test_pcg_description_injected_and_bounded():
+    from workshop.canvas.tools import present_coordinate_grid as pcg
+    # baseline when off
+    assert pcg.build_spec(uuid.uuid4()).description == pcg._DESCRIPTION
+    # injected variant wins
+    sf._set_for_test("http://edge", {_PCG_ID: {"config": {"description": "tuned!"}}})
+    assert pcg.build_spec(uuid.uuid4()).description == "tuned!"
+    # out-of-bounds variants fall back
+    sf._set_for_test("http://edge", {_PCG_ID: {"config": {"description": "x" * 3000}}})
+    assert pcg.build_spec(uuid.uuid4()).description == pcg._DESCRIPTION
+
+
+def test_pcg_telemetry_and_max_duration(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from workshop.canvas.tools import present_coordinate_grid as pcg
+    from workshop.canvas.tools import _manim_scene
+
+    fired = []
+    monkeypatch.setattr(sf, "collect", fired.append)
+    sf._set_for_test("http://edge", {_PCG_ID: {"config": {"max_duration": 5}}})
+
+    # bad spec → ok=False telemetry, error result
+    result = asyncio.run(pcg.present_coordinate_grid(
+        user_id=uuid.uuid4(), args={"functions": []}))
+    assert "error" in result
+    assert fired[-1]["result"]["ok"] is False
+
+    # success path (render + mount stubbed) → duration capped, ok=True
+    seen = {}
+    real_generate = _manim_scene.generate_scene
+
+    def spy_generate(spec):
+        seen["duration"] = spec["duration"]
+        return real_generate(spec)
+
+    async def fake_render(source, out_path, **kw):
+        return 0.4
+
+    async def fake_mount(**kw):
+        return SimpleNamespace(block_id="tick-check", template="note", deleted=[])
+
+    monkeypatch.setattr(pcg._manim_scene, "generate_scene", spy_generate)
+    monkeypatch.setattr(pcg._manim_scene, "render_scene", fake_render)
+    monkeypatch.setattr(pcg, "mount_template", fake_mount)
+    result = asyncio.run(pcg.present_coordinate_grid(
+        user_id=uuid.uuid4(),
+        args={"title": "T", "functions": [{"expression": "x*x"}], "duration": 18},
+    ))
+    assert result["block_id"] == "tick-check"
+    assert seen["duration"] == 5.0                   # tuned cap applied
+    assert fired[-1]["result"]["ok"] is True
+    assert fired[-1]["result"]["latency_ms"] == 400
