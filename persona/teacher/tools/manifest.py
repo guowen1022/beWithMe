@@ -21,6 +21,7 @@ from uuid import UUID
 
 from infra.model.tools import ToolSpec, ToolDomain
 from infra.model.authz import authorized_tools
+from infra import skillforge_client
 from persona.teacher.tools.grants import TEACHER_GRANT
 
 # Generic verbs — each tool exposes `build_spec(user_id)` next to its impl.
@@ -545,10 +546,16 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
     # canvas tools, but it enforces the invariant if a foreign tool is ever
     # added here by mistake. Lane is the inner per-turn filter.
     granted = authorized_tools(TEACHER_GRANT, full)
-    return [
+    lane_filtered = [
         t for t in granted
         if lane in _TOOL_LANES.get(t.name, {"answer", "user_facing", "background"})
     ]
+    # skillforge tuning gate — the innermost filter in the §4.4 chain
+    # (grant ∩ lane ∩ mode ∩ tuning). DEFAULT OFF: resolve() returns enabled for
+    # every tool, so this is a no-op and the tool array (the LLM prompt-cache key)
+    # is unchanged. When skillforge is enabled it can disable a tool by publishing
+    # `tool.<name>` with enabled=false.
+    return [t for t in lane_filtered if skillforge_client.resolve(f"tool.{t.name}").enabled]
 
 
 def build_session_tools(

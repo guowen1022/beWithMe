@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     doubao_base_url: str = ""
     doubao_vision_model: str = ""
 
+    # skillforge — the external tuning framework (separate project). DEFAULT OFF:
+    # empty url → the adapter (infra/skillforge_client.py) fails open and beWithMe
+    # behaves exactly as today. Set to the edge service URL to enable tuning.
+    skillforge_edge_url: str = ""
+    skillforge_host: str = "beWithMe"
+
     class Config:
         env_file = ".env"
         extra = "ignore"
