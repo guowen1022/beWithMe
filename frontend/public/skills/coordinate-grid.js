@@ -59,14 +59,23 @@
     .then(function (blob) {
       clearStatus();
       var video = document.createElement('video');
-      video.src = URL.createObjectURL(blob);
+      // note.js re-dispatches skills on every content push; without this
+      // revoke, each re-render pins another multi-MB blob for the life of
+      // the document. Revoke once the element has the data (it keeps playing
+      // and looping after the URL is gone) and on failure.
+      var objectUrl = URL.createObjectURL(blob);
+      video.src = objectUrl;
       video.autoplay = true;
       video.loop = true;
       video.muted = true;
       video.playsInline = true;
       video.controls = true;
       video.style.cssText = 'width:100%;max-width:100%;display:block;background:#000;';
+      video.addEventListener('loadeddata', function () {
+        URL.revokeObjectURL(objectUrl);
+      });
       video.addEventListener('error', function () {
+        URL.revokeObjectURL(objectUrl);
         showStatus('[coordinate-grid] video failed to play');
       });
       element.appendChild(video);

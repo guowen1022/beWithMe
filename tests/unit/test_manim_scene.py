@@ -13,6 +13,8 @@ import asyncio
 import pytest
 
 from workshop.canvas.tools._manim_scene import (
+    _float_source,
+    _tick_decimals,
     compile_expression,
     generate_scene,
     manim_available,
@@ -113,6 +115,83 @@ def test_normalize_rejects_bad_shapes():
 def test_normalize_clamps_duration():
     assert normalize_spec(_spec(duration=1))["duration"] == 4.0
     assert normalize_spec(_spec(duration=600))["duration"] == 20.0
+
+
+def test_normalize_rejects_bool_where_int_expected():
+    # bool is an int subclass; True must not sail through as index 1 (→ a
+    # codegen NameError) or as a duration of 1.0s.
+    with pytest.raises(ValueError, match="moving_point.on"):
+        normalize_spec(_spec(
+            functions=[{"expression": "x"}, {"expression": "x + 1"}],
+            moving_point={"on": True},
+        ))
+    with pytest.raises(ValueError, match="duration"):
+        normalize_spec(_spec(duration=True))
+
+
+# --------------------------------------------------- bignum-DoS / float codegen
+
+@pytest.mark.parametrize("step,dec", [
+    (0.25, 2), (0.5, 1), (1.0, 0), (2.0, 0), (5.0, 0), (10.0, 0),
+])
+def test_tick_decimals_from_step_precision(step, dec):
+    # a flat `0 if integer else 1` mislabels a 0.25 step as 0.2/0.5/0.8
+    assert _tick_decimals(step) == dec
+
+
+def test_quarter_step_axis_labels_two_decimals():
+    # x span 2 → _nice_step picks 0.25 → ticks need 2 decimals to be exact
+    source, _ = generate_scene(normalize_spec(_spec(x_range=[-1, 1])))
+    assert "num_decimal_places': 2" in source
+
+
+def test_render_lambda_uses_float_literals():
+    # integer literals in the render lambda become floats; the label stays
+    # integer-clean because it is built from the canonical form, not this one
+    spec = normalize_spec(_spec(functions=[{"expression": "x*x - 2"}]))
+    source, _ = generate_scene(spec)
+    assert "_guard(lambda x: x * x - 2.0" in source
+    assert spec["functions"][0]["label"] == "y = x*x-2"
+
+
+@pytest.mark.parametrize("expr", [
+    "999999**999999",          # bare composed power
+    "2**(999999*999999)",      # power of a product
+    "((10**12)**12)**12",      # nested powers
+])
+def test_composed_powers_overflow_instead_of_bignum(expr):
+    # each literal clears the per-node cap (abs ≤ 1e6) but composes an
+    # unbounded integer — a render-subprocess DoS. Float codegen turns that
+    # into an O(1) OverflowError, which _guard catches.
+    src = _float_source(compile_expression(expr))
+    with pytest.raises(OverflowError):
+        eval(src, {"__builtins__": {}}, {"x": 1.5})
+
+
+# ------------------------------------------------------ duration as a ceiling
+
+def test_duration_ceiling_speeds_up_long_animation():
+    # fixed choreography here is ~10.9s; a 5s target must scale run_times
+    # down (bounded at half-speed) instead of only trimming the wait.
+    spec = normalize_spec({
+        "x_range": [-4, 4], "y_range": [-2, 6],
+        "functions": [{"expression": "x*x"}, {"expression": "sin(x)"},
+                      {"expression": "x"}],
+        "transform": [[1, 1], [0, 1]],
+        "moving_point": {"on": 0},
+        "duration": 5,
+    })
+    source, seconds = generate_scene(spec)
+    compile(source, "<generated>", "exec")
+    assert seconds <= 6.5                 # was ~11.9 before the fix
+    assert "run_time=0.6)" in source      # curves sped 1.2 -> 0.6 (0.5x cap)
+
+
+def test_duration_floor_pads_short_animation():
+    # target above the fixed choreography: no speed-up, wait pads to target
+    source, seconds = generate_scene(normalize_spec(_spec(duration=15)))
+    assert seconds == 15.0
+    assert "run_time=1.2)" in source      # curve unscaled (scale 1.0)
 
 
 # ------------------------------------------------------------------ codegen

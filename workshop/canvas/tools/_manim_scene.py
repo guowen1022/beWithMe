@@ -24,7 +24,9 @@ import ast
 import asyncio
 import importlib.util
 import math
+import os
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -209,14 +211,18 @@ def normalize_spec(args: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(moving_point, dict):
             raise ValueError('moving_point must be an object like {"on": 0}')
         on = moving_point.get("on", 0)
-        if not isinstance(on, int) or not (0 <= on < len(functions)):
+        # bool is an int subclass — True would sail through as index 1 and
+        # codegen `curveTrue` → NameError after a wasted render subprocess.
+        if (isinstance(on, bool) or not isinstance(on, int)
+                or not (0 <= on < len(functions))):
             raise ValueError(
                 f"moving_point.on must be a function index 0..{len(functions) - 1}"
             )
         moving_point = {"on": on}
 
     duration = args.get("duration", DURATION_DEFAULT_S)
-    if not isinstance(duration, (int, float)) or not math.isfinite(duration):
+    if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+            or not math.isfinite(duration)):
         raise ValueError("duration must be a number of seconds")
     duration = min(max(float(duration), DURATION_MIN_S), DURATION_MAX_S)
 
@@ -269,6 +275,72 @@ def _nice_step(span: float) -> float:
     return 50.0
 
 
+def _tick_decimals(step: float) -> int:
+    """Decimal places needed to label `step`'s ticks exactly: 0.25 -> 2,
+    0.5 -> 1, integer steps -> 0. Derived from the step itself so any new
+    `_nice_step` candidate stays correct (a flat `0 if integer else 1`
+    mislabels 0.25 as 0.2/0.5/0.8)."""
+    step = round(step, 6)
+    if step == int(step):
+        return 0
+    return len(f"{step:.6f}".rstrip("0").partition(".")[2])
+
+
+class _FloatConstants(ast.NodeTransformer):
+    """Rewrite every integer literal to a float. `x**2` stays exact, but the
+    emitted lambda then does all arithmetic in float space."""
+    def visit_Constant(self, node: ast.Constant) -> ast.Constant:
+        if isinstance(node.value, int) and not isinstance(node.value, bool):
+            return ast.copy_location(ast.Constant(float(node.value)), node)
+        return node
+
+
+def _float_source(expr: str) -> str:
+    """Re-emit an already-whitelisted expression with float literals.
+
+    The per-node constant cap (abs <= 1e6) bounds each literal but not
+    composition: whitelisted `**`/`*` chains (`999999**999999`,
+    `2**(999999*999999)`, nested `((10**12)**12)...`) build unbounded
+    *integer* results — a RAM/CPU DoS in the render subprocess, behind the
+    Semaphore(1) that queues every other render. In float space those same
+    expressions raise OverflowError or yield inf in O(1), and `_guard`
+    already catches both. Labels are built from the canonical (int) form,
+    so this stays confined to the render lambda."""
+    tree = _FloatConstants().visit(ast.parse(expr, mode="eval"))
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+# Per-segment animation run-times (seconds). The trailing self.wait() soaks
+# up any leftover duration budget; everything else is fixed choreography.
+_RT_TITLE = 0.5
+_RT_PLANE = 1.0
+_RT_AXES = 1.0
+_RT_CURVE = 1.2
+_RT_POINT_IN = 0.3
+_RT_POINT_MOVE = 2.5
+_RT_TRANSFORM = 2.5
+
+# `duration` is a ceiling: when the fixed choreography runs longer than the
+# target, scale run-times down to fit — but never below half-speed, so a
+# tight budget can't compress the animation into an unwatchable blur.
+_MIN_SPEEDUP_SCALE = 0.5
+
+
+def _fixed_choreography_seconds(spec: Dict[str, Any]) -> float:
+    """Total run-time of the fixed animation (everything but the trailing
+    wait). The speed-up scale is derived from this so `duration` becomes a
+    real ceiling instead of only trimming the final hold."""
+    t = _RT_AXES + _RT_CURVE * len(spec["functions"])
+    if spec["title"]:
+        t += _RT_TITLE
+    if spec["moving_point"] is not None:
+        t += _RT_POINT_IN + _RT_POINT_MOVE
+    if spec["transform"] is not None:
+        t += _RT_PLANE + _RT_TRANSFORM
+    return t
+
+
 def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
     """Codegen a complete Manim scene file from a normalized spec.
     Returns (source, estimated_seconds). Deterministic — the spec's
@@ -277,10 +349,21 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
     y0, y1 = spec["y_range"]
     xstep = _nice_step(x1 - x0)
     ystep = _nice_step(y1 - y0)
-    # fractional tick steps need a decimal place, else labels duplicate
-    # (step 0.5 with 0 decimals renders ... 2 2 1 1 0 0 ...)
-    xdec = 0 if xstep.is_integer() else 1
-    ydec = 0 if ystep.is_integer() else 1
+    # decimals from the step's actual precision, else labels are wrong:
+    # 0-decimals duplicates a 0.5 step (2 2 1 1 0 0 ...) and 1-decimal
+    # mislabels a 0.25 step (0.2 0.5 0.8 instead of 0.25 0.5 0.75).
+    xdec = _tick_decimals(xstep)
+    ydec = _tick_decimals(ystep)
+
+    # `duration` as a ceiling: if the fixed choreography is longer than the
+    # target, speed every play() up proportionally (bounded at half-speed);
+    # otherwise scale=1.0 and the trailing wait() pads up to the target.
+    target = spec["duration"]
+    fixed = _fixed_choreography_seconds(spec)
+    scale = max(target / fixed, _MIN_SPEEDUP_SCALE) if fixed > target else 1.0
+
+    def rt(base: float) -> float:
+        return round(base * scale, 2)
 
     body: List[str] = []
     used = 0.0
@@ -289,9 +372,9 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
         body += [
             f"title = Text({spec['title']!r}, font_size=30)",
             "title.to_edge(UP, buff=0.25)",
-            "self.play(FadeIn(title), run_time=0.5)",
+            f"self.play(FadeIn(title), run_time={rt(_RT_TITLE)!r})",
         ]
-        used += 0.5
+        used += rt(_RT_TITLE)
 
     axes_kwargs = (
         f"x_range=[{x0!r}, {x1!r}, {xstep!r}], "
@@ -316,34 +399,34 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
             "x_length=11, y_length=5.5, "
             "background_line_style={'stroke_opacity': 0.35})",
             "plane.shift(DOWN * 0.3)",
-            "self.play(Create(plane), run_time=1.0)",
+            f"self.play(Create(plane), run_time={rt(_RT_PLANE)!r})",
         ]
-        used += 1.0
+        used += rt(_RT_PLANE)
 
-    body.append("self.play(Create(axes), run_time=1.0)")
-    used += 1.0
+    body.append(f"self.play(Create(axes), run_time={rt(_RT_AXES)!r})")
+    used += rt(_RT_AXES)
 
     for i, fn in enumerate(spec["functions"]):
         body += [
-            f"f{i} = _guard(lambda x: {fn['expression']}, {y0!r}, {y1!r})",
+            f"f{i} = _guard(lambda x: {_float_source(fn['expression'])}, {y0!r}, {y1!r})",
             f"curve{i} = axes.plot(f{i}, x_range=[{x0!r}, {x1!r}], "
             f"color={fn['color']}, use_smoothing=False)",
             f"label{i} = Text({fn['label']!r}, font_size=20, color={fn['color']})",
             f"label{i}.to_corner(UR, buff=0.3).shift(DOWN * {i * 0.45!r})",
-            f"self.play(Create(curve{i}), FadeIn(label{i}), run_time=1.2)",
+            f"self.play(Create(curve{i}), FadeIn(label{i}), run_time={rt(_RT_CURVE)!r})",
         ]
-        used += 1.2
+        used += rt(_RT_CURVE)
 
     if spec["moving_point"] is not None:
         on = spec["moving_point"]["on"]
         body += [
             f"dot = Dot(color={spec['functions'][on]['color']}, radius=0.07)",
             f"dot.move_to(curve{on}.get_start())",
-            "self.play(FadeIn(dot), run_time=0.3)",
-            f"self.play(MoveAlongPath(dot, curve{on}), run_time=2.5, "
+            f"self.play(FadeIn(dot), run_time={rt(_RT_POINT_IN)!r})",
+            f"self.play(MoveAlongPath(dot, curve{on}), run_time={rt(_RT_POINT_MOVE)!r}, "
             "rate_func=linear)",
         ]
-        used += 2.8
+        used += rt(_RT_POINT_IN) + rt(_RT_POINT_MOVE)
 
     if spec["transform"] is not None:
         (a, b), (c, d) = spec["transform"]
@@ -355,11 +438,13 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
         body += [
             f"warped = VGroup({warped})",
             f"self.play(ApplyMatrix([[{a!r}, {b!r}], [{c!r}, {d!r}]], warped, "
-            "about_point=axes.c2p(0, 0)), run_time=2.5)",
+            f"about_point=axes.c2p(0, 0)), run_time={rt(_RT_TRANSFORM)!r})",
         ]
-        used += 2.5
+        used += rt(_RT_TRANSFORM)
 
-    wait = max(0.5, spec["duration"] - used)
+    # Speed-up (scale<1) lands `used` near the target; otherwise the wait
+    # pads up to it. The final hold keeps its 0.5s floor either way.
+    wait = max(0.5, target - used)
     body.append(f"self.wait({round(wait, 2)!r})")
 
     source = _SCENE_HEADER + "".join(f"        {line}\n" for line in body)
@@ -375,6 +460,24 @@ def manim_available() -> bool:
 # Manim renders are CPU-heavy (~20s each at -ql); serialize them so
 # concurrent tool calls queue instead of thrashing the machine.
 _render_lock = asyncio.Semaphore(1)
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Kill the render subprocess *and its child tree* (manim spawns ffmpeg),
+    then reap it. Called on both timeout and cancellation so an aborted turn
+    can't leave orphaned renders, race TemporaryDirectory cleanup against live
+    children, or release the semaphore around a still-running process."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await proc.wait()
+    except ProcessLookupError:
+        pass
 
 
 async def render_scene(
@@ -405,19 +508,23 @@ async def render_scene(
                 cwd=tmp,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,  # own process group, so we can killpg the tree
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout_s
                 )
             except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+                await _terminate(proc)
                 raise RuntimeError(
                     f"manim render timed out after {timeout_s:.0f}s"
                 )
+            except BaseException:
+                # Cancellation (SSE disconnect / turn abort propagates
+                # CancelledError) or any other error while awaiting: tear the
+                # subprocess down before we unwind out of the temp dir.
+                await _terminate(proc)
+                raise
             if proc.returncode != 0:
                 tail = (stderr or stdout or b"").decode(
                     "utf-8", errors="replace"

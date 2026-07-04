@@ -56,7 +56,10 @@ async def present_coordinate_grid(
     except ValueError as exc:
         # A bad spec is signal about the description variant (the LLM
         # misread the contract) — report it, then let the LLM retry.
-        skillforge_client.collect_result(_TUNABLE_ID, ok=False, outcome_scalar=0.0)
+        skillforge_client.collect_result(
+            _TUNABLE_ID, ok=False, outcome_scalar=0.0,
+            variant_version=tuned.version,
+        )
         return {"error": str(exc)}
 
     # Tuned, bounded override: skillforge may tighten the duration budget
@@ -72,16 +75,11 @@ async def present_coordinate_grid(
     try:
         render_seconds = await _manim_scene.render_scene(scene_source, out_path)
     except RuntimeError as exc:
-        skillforge_client.collect_result(_TUNABLE_ID, ok=False, outcome_scalar=0.0)
+        skillforge_client.collect_result(
+            _TUNABLE_ID, ok=False, outcome_scalar=0.0,
+            variant_version=tuned.version,
+        )
         return {"error": str(exc)}
-    # Outcome scalar is render-success for now; the real teaching-quality
-    # signal (engagement with the mounted block) comes later.
-    skillforge_client.collect_result(
-        _TUNABLE_ID,
-        ok=True,
-        latency_ms=int(render_seconds * 1000),
-        outcome_scalar=1.0,
-    )
 
     video_url = f"/api/renders/{name}"
     fence_config = json.dumps({"video_url": video_url})
@@ -99,6 +97,18 @@ async def present_coordinate_grid(
     except ValueError as exc:
         return {"error": str(exc)}
 
+    # Record the win only after the mount succeeds — a mount failure (e.g. a
+    # slug collision) that returns an error to the LLM must not also bank a
+    # skillforge success, or promote/rollback trains on a phantom win.
+    # Outcome scalar is render-success for now; the real teaching-quality
+    # signal (engagement with the mounted block) comes later.
+    skillforge_client.collect_result(
+        _TUNABLE_ID,
+        ok=True,
+        latency_ms=int(render_seconds * 1000),
+        outcome_scalar=1.0,
+        variant_version=tuned.version,
+    )
     return {
         "block_id": result.block_id,
         "video_url": video_url,

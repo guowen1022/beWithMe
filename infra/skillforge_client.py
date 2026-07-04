@@ -126,18 +126,27 @@ def collect_result(
     latency_ms: Optional[int] = None,
     outcome_scalar: Optional[float] = None,
     correlation_id: Optional[str] = None,
+    variant_version: Optional[str] = None,
 ) -> None:
     """Compose a TelemetryEvent-shaped record for one tunable execution and
     fire it. This is the call sites' surface — they report an outcome, not
     the wire shape. Derived signals only (never raw user content). No-op
-    when disabled; never raises/blocks."""
+    when disabled; never raises/blocks.
+
+    Pass `variant_version` (from the `resolve()` the execution actually used)
+    so the outcome is attributed to the config that ran. Re-resolving here
+    would mis-stamp any execution that straddles a background snapshot
+    refresh (TTL 60s) — exactly at promotion boundaries, contaminating A/B.
+    Falls back to a fresh resolve() only when the caller omits it."""
     if not enabled():
         return
+    if variant_version is None:
+        variant_version = resolve(tunable_id).version
     collect({
         "correlation_id": correlation_id or uuid.uuid4().hex,
         "host": _host,
         "tunable_id": tunable_id,
-        "variant_version": resolve(tunable_id).version,
+        "variant_version": variant_version,
         "result": {"ok": ok, "latency_ms": latency_ms},
         "outcome_scalar": outcome_scalar,
     })

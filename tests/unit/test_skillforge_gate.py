@@ -82,6 +82,16 @@ def test_collect_result_composes_telemetry_event(monkeypatch):
     assert event["correlation_id"]
 
 
+def test_collect_result_honors_explicit_variant_version(monkeypatch):
+    # The version the execution actually ran under must win over a re-resolve
+    # here (which drifts if a background snapshot refresh lands mid-render).
+    fired = []
+    monkeypatch.setattr(sf, "collect", fired.append)
+    sf._set_for_test("http://edge", {"tool.x": {"enabled": True, "version": "v9"}})
+    sf.collect_result("tool.x", ok=True, variant_version="v-that-ran")
+    assert fired[-1]["variant_version"] == "v-that-ran"   # not the snapshot's v9
+
+
 # --- present_coordinate_grid: description/config injection + telemetry ------
 
 _PCG_ID = "tool.present_coordinate_grid"
@@ -140,3 +150,30 @@ def test_pcg_telemetry_and_max_duration(monkeypatch):
     assert seen["duration"] == 5.0                   # tuned cap applied
     assert fired[-1]["result"]["ok"] is True
     assert fired[-1]["result"]["latency_ms"] == 400
+
+
+def test_pcg_no_success_telemetry_when_mount_fails(monkeypatch):
+    # Render succeeds but the mount raises (e.g. slug collision): the tool
+    # returns an error to the LLM, so it must NOT also bank a skillforge win
+    # — otherwise promote/rollback trains on a phantom success.
+    import asyncio
+    from workshop.canvas.tools import present_coordinate_grid as pcg
+
+    fired = []
+    monkeypatch.setattr(sf, "collect", fired.append)
+    sf._set_for_test("http://edge", {_PCG_ID: {"enabled": True, "version": "v1"}})
+
+    async def fake_render(source, out_path, **kw):
+        return 0.4
+
+    async def boom_mount(**kw):
+        raise ValueError("slug collision")
+
+    monkeypatch.setattr(pcg._manim_scene, "render_scene", fake_render)
+    monkeypatch.setattr(pcg, "mount_template", boom_mount)
+    result = asyncio.run(pcg.present_coordinate_grid(
+        user_id=uuid.uuid4(),
+        args={"title": "T", "functions": [{"expression": "x*x"}]},
+    ))
+    assert "error" in result
+    assert not any(e["result"]["ok"] for e in fired)   # no phantom win recorded
