@@ -277,6 +277,10 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
     y0, y1 = spec["y_range"]
     xstep = _nice_step(x1 - x0)
     ystep = _nice_step(y1 - y0)
+    # fractional tick steps need a decimal place, else labels duplicate
+    # (step 0.5 with 0 decimals renders ... 2 2 1 1 0 0 ...)
+    xdec = 0 if xstep.is_integer() else 1
+    ydec = 0 if ystep.is_integer() else 1
 
     body: List[str] = []
     used = 0.0
@@ -294,7 +298,9 @@ def generate_scene(spec: Dict[str, Any]) -> tuple[str, float]:
         f"y_range=[{y0!r}, {y1!r}, {ystep!r}], "
         "x_length=11, y_length=5.5, tips=False, "
         "axis_config={'include_numbers': True, 'label_constructor': Text, "
-        "'font_size': 18, 'decimal_number_config': {'num_decimal_places': 0}}"
+        "'font_size': 18}, "
+        f"x_axis_config={{'decimal_number_config': {{'num_decimal_places': {xdec}}}}}, "
+        f"y_axis_config={{'decimal_number_config': {{'num_decimal_places': {ydec}}}}}"
     )
     body += [
         f"axes = Axes({axes_kwargs})",
