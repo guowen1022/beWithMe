@@ -119,6 +119,7 @@ _MODEL_MODULES: tuple[str, ...] = (
 _DISK_MODULES: tuple[str, ...] = (
     "persona.teacher.session.transcriber",   # data/sessions
     "workshop.canvas.tools._note_cache",     # data/notes
+    "workshop.canvas.tools.present_coordinate_grid",  # data/renders
     "workshop.research.recipe_store",        # data/research
     "services.knowledge.routers.media",      # data/uploads
     "agents.frontend_engineer.workspace",    # data/canvases

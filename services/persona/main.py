@@ -38,6 +38,7 @@ from services.persona.routers import (
     kickoff as kickoff_router,
     perception_utterance as perception_utterance_router,
     preferences as preferences_router,
+    renders as renders_router,
     screen_share as screen_share_router,
     sessions as sessions_router,
     skills as skills_router,
@@ -79,6 +80,7 @@ app.include_router(screen_share_router.router, prefix="/api")
 app.include_router(kickoff_router.router, prefix="/api")
 app.include_router(feed_router.router, prefix="/api")
 app.include_router(skills_router.router)
+app.include_router(renders_router.router)
 
 
 def main() -> None:

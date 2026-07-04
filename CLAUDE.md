@@ -181,6 +181,7 @@ with `include_screenshot=true` are the entry points.
 - Python 3.9+ with dependencies from `requirements.txt`
 - Node.js for the frontend
 - `ffmpeg` (with `ffprobe`) on PATH — `brew install ffmpeg`. Required by `services/transcribe` and `infra/media` (video understanding).
+- **Optional:** Manim CE for the teacher's `present_coordinate_grid` animated-video tool — `brew install cairo pango pkgconf` then `.venv/bin/python -m pip install manim`. Deliberately NOT in `requirements.txt` (heavy dep); when absent the tool returns a clear install-hint error and everything else works. No LaTeX needed (scenes use `Text` only).
 
 ## Frontend Note
 

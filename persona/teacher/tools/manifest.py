@@ -61,6 +61,7 @@ from workshop.canvas.tools import (
     list_media as _list_media,
     mount_template as _mount_template_tool,
     point_arrow as _point_arrow,
+    present_coordinate_grid as _present_coordinate_grid,
     push_block_content as _push_block_content_tool,
     read_media as _read_media,
     request_ui_block as _request_ui_block,
@@ -492,6 +493,8 @@ _TOOL_LANES: Dict[str, set[Lane]] = {
     # candidate. Off user_facing because Lane A's spoken turn shouldn't
     # be writing proactive proposals — those come from the maestro path.
     "write_to_inbox":       {"answer", "background", "research"},
+    # Manim subprocess render, ~2-30s — slow like look_at_video.
+    "present_coordinate_grid": {"answer", "background", "research"},
 }
 
 
@@ -540,6 +543,9 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         # Canvas-writer visual-guide loader — appended last so existing tool
         # order (the provider prompt-cache key) is unchanged.
         _build_guide_spec(user_id),
+        # Manim animated-grid video — appended at the end, same
+        # prompt-cache-preserving rule as above.
+        _present_coordinate_grid.build_spec(user_id),
     ]
     # Outer fence: keep only tools the teacher's capability grant authorizes
     # (§4.4) — a no-op today since the manifest only assembles teacher/common/
