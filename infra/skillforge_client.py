@@ -105,6 +105,20 @@ def resolve(tunable_id: str) -> Resolved:
     )
 
 
+def tuned_text(config: dict, key: str, baseline: str, *, max_len: int = 2000) -> str:
+    """Bounded string override from a resolved config.
+
+    Return ``config[key]`` when it is a non-empty string within ``max_len``,
+    else ``baseline``. This is the one place a tuned description/label is
+    applied, so no variant can blow the LLM-facing bound. The tool manifest
+    calls it to inject ``config.description`` for any tunable tool — per-tool
+    code just ships its baseline string, no bespoke override boilerplate."""
+    val = config.get(key)
+    if isinstance(val, str) and 0 < len(val) <= max_len:
+        return val
+    return baseline
+
+
 def collect(event: Dict[str, Any]) -> None:
     """Fire-and-forget telemetry. No-op when disabled; never raises/blocks."""
     if not enabled():

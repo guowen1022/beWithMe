@@ -327,9 +327,40 @@
     // Scans `root` for <div data-skill="name" data-config='{...}'> elements
     // emitted by the server's ```plot / ```skill:name fence renderer.
     // Fetches /skills/<name>.js once (browser-cached), evals it as a
-    // function(element, config) and calls it on the placeholder div.
+    // function(element, config, helpers) and calls it on the placeholder div.
     // Adding a new skill = drop a .js file in frontend/public/skills/.
     var _skillCache = {};
+
+    // Shared helpers injected as every skill's 3rd arg, bound to that skill's
+    // own container — so skills don't each re-implement cssVar / showStatus /
+    // clearStatus. New skills destructure what they need from `helpers`.
+    function makeSkillHelpers(element) {
+      function cssVar(name, fallback) {
+        try {
+          var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+          return v || fallback;
+        } catch (_) { return fallback; }
+      }
+      function showStatus(msg) {
+        var existing = element.querySelector('[data-skill-status]');
+        if (existing) { existing.textContent = msg; return; }
+        var div = document.createElement('div');
+        div.setAttribute('data-skill-status', '1');
+        div.style.cssText = [
+          'display:flex', 'align-items:center', 'justify-content:center',
+          'color:' + cssVar('--bw-ink-muted', '#888'),
+          'font-size:13px', 'font-family:' + cssVar('--bw-font-sans', 'sans-serif'),
+          'height:360px', 'width:100%',
+        ].join(';');
+        div.textContent = msg;
+        element.appendChild(div);
+      }
+      function clearStatus() {
+        var existing = element.querySelector('[data-skill-status]');
+        if (existing) element.removeChild(existing);
+      }
+      return { cssVar: cssVar, showStatus: showStatus, clearStatus: clearStatus };
+    }
     function dispatchSkills(root) {
       var els = root.querySelectorAll('[data-skill]');
       if (!els.length) return;
@@ -343,7 +374,7 @@
         container.style.cssText = 'width:100%;min-height:360px;position:relative;';
         if (el.parentNode) el.parentNode.replaceChild(container, el);
         function runSkill(jsText) {
-          try { new Function('element', 'config', jsText)(container, config); }
+          try { new Function('element', 'config', 'helpers', jsText)(container, config, makeSkillHelpers(container)); }
           catch(e) {
             container.style.cssText += 'display:flex;align-items:center;justify-content:center;color:var(--bw-ink-muted);font-size:13px;';
             container.textContent = '[skill error: ' + name + ']';

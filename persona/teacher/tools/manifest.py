@@ -16,6 +16,7 @@ echoing back the full payload.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -556,12 +557,21 @@ def build_tools(user_id: UUID, lane: Lane = "answer") -> List[ToolSpec]:
         t for t in granted
         if lane in _TOOL_LANES.get(t.name, {"answer", "user_facing", "background"})
     ]
-    # skillforge tuning gate — the innermost filter in the §4.4 chain
-    # (grant ∩ lane ∩ mode ∩ tuning). DEFAULT OFF: resolve() returns enabled for
-    # every tool, so this is a no-op and the tool array (the LLM prompt-cache key)
-    # is unchanged. When skillforge is enabled it can disable a tool by publishing
-    # `tool.<name>` with enabled=false.
-    return [t for t in lane_filtered if skillforge_client.resolve(f"tool.{t.name}").enabled]
+    # skillforge tuning gate + config injection — the innermost filter in the
+    # §4.4 chain (grant ∩ lane ∩ mode ∩ tuning). DEFAULT OFF: resolve() returns
+    # an enabled baseline with empty config for every tool, so this is a no-op
+    # and the tool array (the LLM prompt-cache key) is unchanged. When enabled it
+    # can (a) drop a tool via `tool.<name>` enabled=false, or (b) override that
+    # tool's LLM-facing description via config.description — bounded, applied here
+    # for EVERY tunable tool so no tool needs its own override boilerplate.
+    tuned: List[ToolSpec] = []
+    for t in lane_filtered:
+        r = skillforge_client.resolve(f"tool.{t.name}")
+        if not r.enabled:
+            continue
+        desc = skillforge_client.tuned_text(r.config, "description", t.description)
+        tuned.append(t if desc == t.description else replace(t, description=desc))
+    return tuned
 
 
 def build_session_tools(

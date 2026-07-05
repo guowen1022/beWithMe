@@ -22,39 +22,13 @@
 //                Use for data+fit pictures, e.g. scattered points with an
 //                underfit line and an overfit curve drawn over the same points.
 
-(function (element, config) {
+(function (element, config, helpers) {
   var PLOTLY_CDN = '/plotly-2.32.0.min.js';
 
   // ── helpers ──────────────────────────────────────────────────────────────
-
-  function cssVar(name, fallback) {
-    try {
-      var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-      return v || fallback;
-    } catch (_) { return fallback; }
-  }
-
-  function showStatus(msg) {
-    // Use a dedicated child div so render() can find and remove it precisely,
-    // rather than wiping all children via textContent which can race with Plotly.
-    var existing = element.querySelector('[data-skill-status]');
-    if (existing) { existing.textContent = msg; return; }
-    var div = document.createElement('div');
-    div.setAttribute('data-skill-status', '1');
-    div.style.cssText = [
-      'display:flex', 'align-items:center', 'justify-content:center',
-      'color:' + cssVar('--bw-ink-muted', '#888'),
-      'font-size:13px', 'font-family:' + cssVar('--bw-font-sans', 'sans-serif'),
-      'height:360px', 'width:100%',
-    ].join(';');
-    div.textContent = msg;
-    element.appendChild(div);
-  }
-
-  function clearStatus() {
-    var existing = element.querySelector('[data-skill-status]');
-    if (existing) element.removeChild(existing);
-  }
+  // cssVar / showStatus / clearStatus come from note.js dispatchSkills (bound
+  // to this container) — no longer copied into each skill.
+  var cssVar = helpers.cssVar, showStatus = helpers.showStatus, clearStatus = helpers.clearStatus;
 
   function buildFn(expr, params) {
     // Very conservative: only allow math chars + named params.
@@ -330,4 +304,4 @@
     .catch(function() {
       showStatus('[coordinate-plot] failed to load Plotly (offline?)');
     });
-})(element, config);
+})(element, config, helpers);

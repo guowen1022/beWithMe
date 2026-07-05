@@ -28,7 +28,7 @@ from uuid import UUID
 
 from infra import skillforge_client
 from infra.model.tools import ToolDomain, ToolSpec
-from infra.user_data import register_user_dir
+from infra.user_data import register_user_dir, user_dir
 from workshop.canvas.tools import _manim_scene
 from workshop.canvas.tools.mount_template import mount_template
 
@@ -71,7 +71,9 @@ async def present_coordinate_grid(
 
     scene_source, video_seconds = _manim_scene.generate_scene(spec)
     name = f"{_uuid.uuid4().hex}.mp4"
-    out_path = RENDERS_ROOT / str(user_id) / name
+    # user_dir() owns the per-user dir convention (create + path); the tool
+    # doesn't hand-roll `RENDERS_ROOT / str(user_id)`.
+    out_path = user_dir(RENDERS_ROOT, user_id) / name
     try:
         render_seconds = await _manim_scene.render_scene(scene_source, out_path)
     except RuntimeError as exc:
@@ -139,21 +141,14 @@ _DESCRIPTION = (
 )
 
 
-def _tuned_description() -> str:
-    """The description is skillforge's primary tuning surface for this
-    tool (which phrasings make the teacher reach for it at the right
-    moments). Bounded: any non-string / empty / oversized variant falls
-    back to the baseline."""
-    desc = skillforge_client.resolve(_TUNABLE_ID).config.get("description")
-    if isinstance(desc, str) and 0 < len(desc) <= 2000:
-        return desc
-    return _DESCRIPTION
-
-
 def build_spec(user_id: UUID) -> ToolSpec:
+    # description is skillforge's primary tuning surface for this tool (which
+    # phrasings make the teacher reach for it at the right moments); the
+    # bounded override is applied centrally by the manifest's tuning gate for
+    # every tunable tool, so build_spec just ships the baseline.
     return ToolSpec(
         name="present_coordinate_grid",
-        description=_tuned_description(),
+        description=_DESCRIPTION,
         params_schema={
             "type": "object",
             "properties": {

@@ -97,16 +97,35 @@ def test_collect_result_honors_explicit_variant_version(monkeypatch):
 _PCG_ID = "tool.present_coordinate_grid"
 
 
-def test_pcg_description_injected_and_bounded():
+def test_tuned_text_bounds_the_override():
+    # the adapter helper: non-empty string within max_len wins, else baseline
+    assert sf.tuned_text({}, "description", "base") == "base"
+    assert sf.tuned_text({"description": "hi"}, "description", "base") == "hi"
+    assert sf.tuned_text({"description": ""}, "description", "base") == "base"
+    assert sf.tuned_text({"description": "x" * 3000}, "description", "base") == "base"
+    assert sf.tuned_text({"description": 123}, "description", "base") == "base"
+
+
+def test_tool_description_injected_and_bounded_via_manifest():
+    # description injection now lives in the manifest gate (applies to every
+    # tunable tool), not in each tool's build_spec.
+    from persona.teacher.tools.manifest import build_tools
     from workshop.canvas.tools import present_coordinate_grid as pcg
-    # baseline when off
+
+    def pcg_desc():
+        return next(t.description for t in build_tools(uuid.uuid4())
+                    if t.name == "present_coordinate_grid")
+
+    # build_spec ships the baseline; no per-tool override boilerplate
     assert pcg.build_spec(uuid.uuid4()).description == pcg._DESCRIPTION
+    # off → baseline
+    assert pcg_desc() == pcg._DESCRIPTION
     # injected variant wins
     sf._set_for_test("http://edge", {_PCG_ID: {"config": {"description": "tuned!"}}})
-    assert pcg.build_spec(uuid.uuid4()).description == "tuned!"
-    # out-of-bounds variants fall back
+    assert pcg_desc() == "tuned!"
+    # out-of-bounds variant falls back
     sf._set_for_test("http://edge", {_PCG_ID: {"config": {"description": "x" * 3000}}})
-    assert pcg.build_spec(uuid.uuid4()).description == pcg._DESCRIPTION
+    assert pcg_desc() == pcg._DESCRIPTION
 
 
 def test_pcg_telemetry_and_max_duration(monkeypatch):
