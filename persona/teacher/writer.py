@@ -29,6 +29,7 @@ import traceback
 from typing import Dict, List, Optional
 from uuid import UUID
 
+from infra import skillforge_client
 from infra.event_log import log_event
 from persona.teacher.prompts import canvas_guides
 from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
@@ -132,17 +133,26 @@ async def run_canvas_writer(
     except Exception as e:
         print(f"[writer] search_notes error: {e}", flush=True)
 
+    # Resolve the visual-guide menu tunable ONCE for this turn: its config
+    # shapes the menu the writer sees, and its version stamps the telemetry
+    # below. Resolving twice could straddle a background snapshot refresh and
+    # mis-attribute the outcome (see collect_result's variant_version note).
+    menu_tuned = skillforge_client.resolve(canvas_guides.MENU_TUNABLE_ID)
+
     parts = build_canvas_writer_prompt(
         question=question,
         voice_transcript=transcript,
         canvas_state=canvas_state,
         existing_notes=existing_cards,
         related_notes=related_notes,
+        menu_config=menu_tuned.config,
     )
     writer_tools = build_tools(user_id, lane="writer")
 
     mount_fired = False
     edit_ops: List[str] = []
+    selected_guides: set = set()
+    authored_parts: List[str] = []
     error: Optional[str] = None
     try:
         async for evt in run_teacher_tool_loop(
@@ -172,13 +182,24 @@ async def run_canvas_writer(
             if evt.get("kind") != "tool_call":
                 continue
             name = evt.get("name")
-            if name == "mount_template":
+            args = evt.get("arguments") or {}
+            if name == "load_guide":
+                ids = args.get("ids") or []
+                if isinstance(ids, list):
+                    selected_guides.update(str(i).strip() for i in ids)
+            elif name == "mount_template":
                 mount_fired = True
+                md = (args.get("params") or {}).get("markdown")
+                if isinstance(md, str):
+                    authored_parts.append(md)
             elif name == "edit_note":
-                ops = (evt.get("arguments") or {}).get("ops") or []
-                for op in ops:
-                    if isinstance(op, dict) and op.get("op"):
+                for op in args.get("ops") or []:
+                    if not isinstance(op, dict):
+                        continue
+                    if op.get("op"):
                         edit_ops.append(op["op"])
+                    if isinstance(op.get("md"), str):
+                        authored_parts.append(op["md"])
     except Exception as e:
         error = str(e)
         print(f"[writer] tool loop error: {e}", flush=True)
@@ -201,6 +222,22 @@ async def run_canvas_writer(
         transcript_len=len(transcript),
         error=error,
     )
+
+    # skillforge: attribute this turn to the visual-guide menu variant that ran.
+    # Outcome = did the modality the writer OPENED from the menu match the fence
+    # it AUTHORED (1.0 match / 0.0 wrong-modality / neutral when it peeked then
+    # answered in prose). Fail-open + no-op when skillforge is disabled.
+    emit, ok, scalar = canvas_guides.menu_outcome(
+        selected_guides,
+        canvas_guides.authored_modalities("\n".join(authored_parts)),
+    )
+    if emit:
+        skillforge_client.collect_result(
+            canvas_guides.MENU_TUNABLE_ID,
+            ok=ok,
+            outcome_scalar=scalar,
+            variant_version=menu_tuned.version,
+        )
 
 
 __all__ = ["run_canvas_writer"]

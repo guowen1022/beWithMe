@@ -39,6 +39,7 @@ def build(
     canvas_state: object = None,
     existing_notes: Optional[Dict[str, str]] = None,
     related_notes: Optional[List[dict]] = None,
+    menu_config: Optional[dict] = None,
 ) -> PromptParts:
     system_parts: List[str] = []
 
@@ -57,7 +58,7 @@ def build(
     # the "VISUAL GUIDES — open before you draw" lead-in; this is the menu it
     # references. The writer opens a leaf via the `load_guide` tool, pulling
     # only the chosen modality's fence syntax into context.
-    system_parts.append(canvas_guides.render_root_menu())
+    system_parts.append(canvas_guides.render_root_menu(menu_config))
     system_parts.append("")
 
     static_system = "\n".join(system_parts).rstrip() + "\n"
