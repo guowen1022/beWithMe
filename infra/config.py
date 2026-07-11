@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # behaves exactly as today. Set to the edge service URL to enable tuning.
     skillforge_edge_url: str = ""
     skillforge_host: str = "beWithMe"
+    # Store + eval services of the same skillforge instance. Consumed only by
+    # the tuning sidecar's self-registration (services/tuning/registration.py);
+    # empty → registration is skipped (fail-open), the eval endpoint still serves.
+    skillforge_store_url: str = ""
+    skillforge_eval_svc_url: str = ""
 
     class Config:
         env_file = ".env"

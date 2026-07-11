@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch all 7 beWithMe sidecars from a single BASE_PORT.
+# Launch all 8 beWithMe sidecars from a single BASE_PORT.
 #   shell      → BASE_PORT       (default 8000)
 #   persona    → BASE_PORT + 1   (the teacher; agent-driven endpoints)
 #   knowledge  → BASE_PORT + 2
@@ -7,10 +7,11 @@
 #   speak      → BASE_PORT + 4
 #   browser    → BASE_PORT + 5
 #   maestro    → BASE_PORT + 6   (PR-4: long-instance reasoning)
+#   tuning     → BASE_PORT + 8   (skillforge host face; +7 reserved for frontend-sandbox)
 #
 # Usage:
 #   ./scripts/dev-services.sh                    # uses BASE_PORT=8000
-#   BASE_PORT=9000 ./scripts/dev-services.sh     # whole topology slides to 9000-9006
+#   BASE_PORT=9000 ./scripts/dev-services.sh     # whole topology slides to 9000-9008
 
 set -euo pipefail
 
@@ -74,6 +75,7 @@ start transcribe 3 services.transcribe.main:app
 start speak      4 services.speak.main:app
 start browser    5 services.browser.main:app
 start maestro    6 services.maestro.main:app
+start tuning     8 services.tuning.main:app
 start shell      0 services.shell.main:app
 
 wait

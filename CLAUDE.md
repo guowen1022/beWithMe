@@ -23,7 +23,7 @@ beWithMe is a multi-persona, LLM-driven assistant. **Personas** (today: teacher;
 # Initialize database (creates DB, enables pgvector/uuid-ossp, creates tables)
 python scripts/init_db.py
 
-# Run all 6 sidecars (shell on :8000 by default; sidecars on :8001..:8005)
+# Run all 8 sidecars (shell on :8000 by default; sidecars on :8001..:8006, tuning on :8008)
 ./scripts/dev-services.sh
 
 # Slide the whole topology to a different base port
@@ -141,7 +141,7 @@ and raises a clear `RuntimeError` at import otherwise.
 Config homes:
 - `config.yaml` (root) — `base_port`, `service_host`
 - `silicon_brain/config.py` — `DATABASE_URL`
-- `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`, `VISION_PROVIDER`, `DOUBAO_*`
+- `infra/config.py` — `OLLAMA_URL`, `EMBEDDING_*`, `LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_*`, `DEEPSEEK_*`, `VISION_PROVIDER`, `DOUBAO_*`, `SKILLFORGE_*`
 - `services/transcribe/main.py` — `WHISPER_MODEL_PATH`, `WHISPER_THREADS`, `EOU_*`
 - `services/speak/main.py` — `KOKORO_*`
 
@@ -172,6 +172,9 @@ with `include_screenshot=true` are the entry points.
 | `EOU_MAX_TOKENS` | Tail-truncate the EOU input to this many tokens. Default `256`. |
 | `BEWITHME_DEBUG` | Master switch for developer debug surfaces: the Mirror canvas block (mounted by app_operator's `show_mirror`), the top-right teacher-thinking panel, and the desktop's detached Chromium DevTools window. Default `1` (on); set `0` to hide all three. `scripts/dev-desktop.sh` fans it out to the frontend as `NEXT_PUBLIC_BEWITHME_DEBUG` (inlined by `next dev` at start) and to Electron as `BEWITHME_DEBUG`. To launch clean: `BEWITHME_DEBUG=0 ./scripts/dev-desktop.sh`. |
 | `FEED_SCHED_INTERVAL_SECONDS` | How often the Maestro's offline feed scheduler tick runs (seconds). Default `3600`. The landing feed is prepared *offline* — never on app open: the open path (`GET /api/feed`) is a pure cache read, and (re)generation is triggered by the session-end webhook (`user.engagement_ended`) plus this periodic tick (regenerates feeds older than `FEED_STALE_AFTER` ≈ 24h, debounced by `MIN_REGEN_INTERVAL` ≈ 2h; both are code constants in `services/maestro/feed.py`). Lower this to exercise the scheduler in dev. |
+| `SKILLFORGE_EDGE_URL` | Edge service of the local skillforge tuning instance (e.g. `http://localhost:8100`). Empty (default) → the adapter `infra/skillforge_client.py` fails open and beWithMe serves its baseline byte-for-byte. |
+| `SKILLFORGE_STORE_URL` | skillforge store service (e.g. `http://localhost:8101`). Used only by the tuning sidecar's self-registration (`services/tuning`). |
+| `SKILLFORGE_EVAL_SVC_URL` | skillforge eval service (e.g. `http://localhost:8103`). Used only by the tuning sidecar's self-registration. All three `SKILLFORGE_*` URLs set → the tuning sidecar (`:BASE_PORT+8`) registers itself as beWithMe's eval endpoint on boot; any unset → registration is skipped (fail-open). |
 | `no_proxy` | Comma-separated hosts that bypass `http_proxy`/`https_proxy`. Leading dot = subdomain match. e.g. `api.deepseek.com,.minimaxi.com,.volces.com`. |
 
 ## Prerequisites

@@ -43,6 +43,7 @@ config = _load_config()
 
 
 # Fixed offsets — order matters; do not reorder, only append.
+# +7 is RESERVED for the planned frontend-sandbox (ARCHITECTURE.md §2.3/§5).
 SERVICE_OFFSETS: Final[dict[str, int]] = {
     "shell": 0,
     "persona": 1,   # was "ask" in earlier topology
@@ -51,6 +52,7 @@ SERVICE_OFFSETS: Final[dict[str, int]] = {
     "speak": 4,
     "browser": 5,
     "maestro": 6,   # PR-4: long-instance reasoning over the event stream
+    "tuning": 8,    # skillforge host face — eval endpoint + registration (offline)
 }
 
 # /api/<prefix> → service. Anything not listed routes to "knowledge".

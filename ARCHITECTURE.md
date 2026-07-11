@@ -93,6 +93,7 @@ Services don't decide; they execute. Each service is a FastAPI process at a fixe
 | browser | +5 | Playwright (headless web fetch + handoff) |
 | maestro | +6 | long-instance reasoning over the event stream + multi-persona landing feed (`/api/maestro`, `/api/feed`) |
 | **frontend-sandbox** (planned) | +7 | runtime UI generation + validation, see § 5 |
+| tuning | +8 | skillforge host face — real eval endpoint (`POST /eval`, canvas-writer replay + judge) + idempotent self-registration. Offline-only: skillforge's refine loop is the sole caller; not proxied by the shell, no auth gate |
 
 Routers always live in `services/`. Never in persona, never in silicon_brain, never in infra.
 
