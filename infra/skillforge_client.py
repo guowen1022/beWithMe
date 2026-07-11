@@ -61,7 +61,10 @@ def _do_refresh() -> None:
     global _snapshot, _last_refresh, _refreshing
     try:
         url = f"{_edge_url.rstrip('/')}/api/snapshot/{_host}"
-        r = httpx.get(url, timeout=_TIMEOUT_S)
+        # trust_env=False: the edge is localhost and the dev proxy (not in
+        # no_proxy for localhost) caches localhost GETs — a proxied snapshot
+        # read could serve stale variants across promote/rollback boundaries.
+        r = httpx.get(url, timeout=_TIMEOUT_S, trust_env=False)
         r.raise_for_status()
         entries = (r.json() or {}).get("entries", {}) or {}
         with _lock:
@@ -126,7 +129,10 @@ def collect(event: Dict[str, Any]) -> None:
 
     def _post() -> None:
         try:
-            httpx.post(f"{_edge_url.rstrip('/')}/api/telemetry", json=event, timeout=_TIMEOUT_S)
+            httpx.post(
+                f"{_edge_url.rstrip('/')}/api/telemetry",
+                json=event, timeout=_TIMEOUT_S, trust_env=False,
+            )
         except Exception:
             pass
 

@@ -50,8 +50,8 @@ PINNED_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 #       _compute_golden; print(_compute_golden())"
 #
 # and update GOLDEN_ANSWER_LANE_SHA256 + ANSWER_LANE_JSON_BYTES.
-GOLDEN_ANSWER_LANE_SHA256 = "e6092904684b93769293ea9786533b6ce201bbe417bd940cb59919f47820a4eb"
-ANSWER_LANE_JSON_BYTES = 48578
+GOLDEN_ANSWER_LANE_SHA256 = "30e92f6a3ce91fe215db2f15f31f1e6d2321858f23b5d05e07e47811240aaa0d"
+ANSWER_LANE_JSON_BYTES = 50729
 
 
 # Per-lane counts pinned. These doubled as the verification spec in the
@@ -60,11 +60,13 @@ ANSWER_LANE_JSON_BYTES = 48578
 # proactive proposals). Then +1 everywhere except writer for
 # set_talk_channel, and +1 on writer for load_guide. (end_session is NOT a
 # teaching tool — it lives in build_session_tools, reached via the dispatcher.)
+# Then +1 on answer/background/research for present_coordinate_grid (Manim
+# animated-grid video; off user_facing — slow render, like look_at_video).
 EXPECTED_LANE_COUNTS = {
-    "answer": 27,
+    "answer": 28,
     "user_facing": 15,
-    "background": 25,
-    "research": 27,
+    "background": 26,
+    "research": 28,
     "writer": 3,
 }
 
@@ -103,6 +105,8 @@ EXPECTED_ANSWER_LANE_ORDER = [
     # PR-5 — kickoff realization ACT tool.
     "write_to_inbox",
     "start_research",
+    # feat/manim-coordinate-grid — appended at the end, prompt-cache rule.
+    "present_coordinate_grid",
 ]
 
 

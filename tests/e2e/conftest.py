@@ -185,6 +185,12 @@ def services() -> Iterator[dict]:
     # in os.environ wins over .env because load_dotenv() respects existing
     # env by default.
     env["BWM_LEAD"] = "0"
+    # Keep the sidecars on the skillforge DEFAULT-OFF baseline even though the
+    # developer's .env points SKILLFORGE_EDGE_URL at the live local tuning
+    # instance — a served snapshot could disable a tool or tune a description
+    # and silently shift the manifest goldens. (In-process tests get the same
+    # isolation from tests/conftest.py.)
+    env["SKILLFORGE_EDGE_URL"] = ""
 
     procs: list[tuple[str, int, subprocess.Popen]] = []
 
