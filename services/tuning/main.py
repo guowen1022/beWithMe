@@ -26,7 +26,7 @@ from infra.config import settings
 from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 from persona.teacher.prompts.canvas_guides import MENU_TUNABLE_ID
-from services.tuning import registration, scorer
+from services.tuning import capture, registration, scorer
 
 
 @asynccontextmanager
@@ -74,6 +74,17 @@ async def register_endpoint() -> dict:
         return await asyncio.to_thread(registration.register)
     except Exception as e:
         return {"skipped": False, "error": str(e)}
+
+
+@app.post("/capture")
+async def capture_endpoint(payload: dict) -> dict:
+    """beWithMe-internal: the writer fire-and-forgets a real failed menu turn
+    here; we forward it to skillforge as a replayable `from_failure` scenario
+    (M8). Fail-open — a down skillforge just drops the case, never the turn."""
+    try:
+        return await asyncio.to_thread(capture.forward_case, payload)
+    except Exception as e:
+        return {"captured": False, "error": str(e)}
 
 
 def main() -> None:

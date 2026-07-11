@@ -139,6 +139,35 @@ def collect(event: Dict[str, Any]) -> None:
     threading.Thread(target=_post, daemon=True).start()
 
 
+def _capture_post(payload: Dict[str, Any]) -> None:
+    """Spawn the fire-and-forget POST to the tuning sidecar (seam for tests)."""
+    def _post() -> None:
+        try:
+            from infra.topology import upstream_url
+            httpx.post(
+                f"{upstream_url('tuning')}/capture",
+                json=payload, timeout=_TIMEOUT_S, trust_env=False,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
+def capture_case(tunable_id: str, case: Dict[str, Any]) -> None:
+    """Fire-and-forget hand-off of a REPLAYABLE real-turn case to beWithMe's
+    own tuning sidecar (`POST /capture`), which applies the capture policy
+    (failures always; successes sampled + capped) and converts the survivors
+    into skillforge eval scenarios (M8: `from_failure` / `from_traffic`).
+    Telemetry (`collect`) is digest-only — it can flag THAT a variant
+    underperforms but is never replayable; this is the content path. Same
+    hot-path contract as collect(): no-op when tuning is disabled, never
+    raises, never blocks the turn."""
+    if not enabled():
+        return
+    _capture_post({"tunable_id": tunable_id, **case})
+
+
 def collect_result(
     tunable_id: str,
     *,

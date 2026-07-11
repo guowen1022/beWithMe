@@ -27,7 +27,7 @@ from __future__ import annotations
 import time
 import traceback
 from typing import Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from infra import skillforge_client
 from infra.event_log import log_event
@@ -227,17 +227,35 @@ async def run_canvas_writer(
     # Outcome = did the modality the writer OPENED from the menu match the fence
     # it AUTHORED (1.0 match / 0.0 wrong-modality / neutral when it peeked then
     # answered in prose). Fail-open + no-op when skillforge is disabled.
-    emit, ok, scalar = canvas_guides.menu_outcome(
-        selected_guides,
-        canvas_guides.authored_modalities("\n".join(authored_parts)),
-    )
+    authored = canvas_guides.authored_modalities("\n".join(authored_parts))
+    emit, ok, scalar = canvas_guides.menu_outcome(selected_guides, authored)
     if emit:
+        correlation_id = uuid4().hex
         skillforge_client.collect_result(
             canvas_guides.MENU_TUNABLE_ID,
             ok=ok,
             outcome_scalar=scalar,
+            correlation_id=correlation_id,
             variant_version=menu_tuned.version,
         )
+        # Hand attributable turns' CONTENT to the tuning sidecar — telemetry
+        # above is digest-only, never replayable. The sidecar applies the
+        # capture policy (failures = authored-a-fence-it-never-opened, always;
+        # successes sampled + capped as regression anchors) and forwards the
+        # survivors to skillforge as replayable scenarios (same correlation_id
+        # links scenario to telemetry row).
+        if ok and scalar is not None:
+            skillforge_client.capture_case(
+                canvas_guides.MENU_TUNABLE_ID,
+                {
+                    "question": question,
+                    "transcript": transcript,
+                    "selected": sorted(selected_guides),
+                    "authored": sorted(authored),
+                    "outcome": scalar,
+                    "correlation_id": correlation_id,
+                },
+            )
 
 
 __all__ = ["run_canvas_writer"]
