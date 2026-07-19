@@ -114,6 +114,9 @@ def test_failure_always_captured_as_from_failure():
     # expect_guide = the modality authored WITHOUT being opened
     assert spec["expect_guide"] == "plot"
     assert "without" in spec["rubric"][0]
+    # real failures are the proposer's diagnosis material → train side
+    assert spec["split"] == "train"
+    assert spec["region"] == "plot"
     assert client.gets == []  # failures skip the sampling/cap machinery
 
 
@@ -136,6 +139,10 @@ def test_success_sampled_in_captured_as_from_traffic(monkeypatch):
     # expect_guide = the modality it opened AND authored (revealed right pick)
     assert spec["expect_guide"] == "mermaid"
     assert "keep steering" in spec["rubric"][0]
+    # sampled successes are regression anchors → gate side, never shown to
+    # the proposer (that is what they exist to catch)
+    assert spec["split"] == "holdout"
+    assert spec["region"] == "mermaid"
 
 
 def test_success_sampled_out(monkeypatch):
@@ -166,6 +173,41 @@ def test_rejects_non_replayable_cases():
     # authored modality unknown to the registry
     out = capture.forward_case(_failure(authored=["sculpture"]), client=client)
     assert out["captured"] is False and client.posts == []
+
+
+# ---- region / split labeling ---------------------------------------------------
+
+@pytest.mark.parametrize("selected,authored,expect", [
+    (["mermaid"], ["plot"], "plot"),
+    (["plot"], ["mermaid"], "mermaid"),
+])
+def test_failure_region_tracks_expect_guide(selected, authored, expect):
+    client = _FakeClient()
+    capture.forward_case(
+        _failure(selected=selected, authored=authored), client=client)
+    spec = client.posts[0][1]["spec"]
+    assert spec["region"] == spec["expect_guide"] == expect
+    assert spec["split"] == "train"
+
+
+@pytest.mark.parametrize("guide", ["plot", "mermaid"])
+def test_success_region_tracks_expect_guide(monkeypatch, guide):
+    monkeypatch.setattr(capture.random, "random", lambda: 0.0)
+    client = _FakeClient()
+    capture.forward_case(
+        _success(selected=[guide], authored=[guide]), client=client)
+    spec = client.posts[0][1]["spec"]
+    assert spec["region"] == spec["expect_guide"] == guide
+    assert spec["split"] == "holdout"
+
+
+def test_captured_successes_never_guard(monkeypatch):
+    # Replay is stochastic — a noisy auto-guard could randomly veto every
+    # promotion. Unchanged by the split labeling.
+    monkeypatch.setattr(capture.random, "random", lambda: 0.0)
+    client = _FakeClient()
+    capture.forward_case(_success(), client=client)
+    assert client.posts[0][1]["guard"] is False
 
 
 def test_truncates_content():

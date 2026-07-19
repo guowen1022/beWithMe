@@ -24,6 +24,24 @@ choice — on failure, the modality it AUTHORED without opening (the guide the
 menu should have steered it to open); on success, the modality it opened and
 authored. Exactly what the online outcome metric scores, so the offline
 replay optimizes the same target. Curators can re-label rows in the store.
+
+Region/split note: every captured spec also carries `region` (= `expect_guide`,
+the partition the gate scores separately) and `split`, assigned by ORIGIN
+because origin already encodes the row's job:
+
+  * `from_failure` → **train**. A real production failure is the single most
+    valuable thing the proposer can see; it is the whole reason we capture.
+    Withholding failures from diagnosis would leave the proposer guessing at
+    exactly the behavior it is supposed to fix, and capture would buy nothing.
+  * `from_traffic` → **holdout**. Sampled successes exist to prove a candidate
+    did NOT regress behavior that already works — that is a gate role, not a
+    diagnosis role. Showing them to the proposer would also invite the
+    overfitting this split was introduced to stop: tuning against the very
+    rows meant to catch collateral damage.
+
+Net effect over time: the train side fills with real failures (headroom) and
+the holdout side with real successes (regression anchors), which is the
+balance the thin curated set in `scenarios.py` cannot reach on its own.
 """
 from __future__ import annotations
 
@@ -70,6 +88,7 @@ def forward_case(case: dict, client: Optional[httpx.Client] = None) -> dict:
         # The revealed RIGHT pick: it opened the guide and authored its fence.
         labeled = sorted(a for a in authored if a in selected)
         origin = "from_traffic"
+        split = "holdout"  # regression anchor — a gate role, not diagnosis
         rubric_shape = (
             "captured from a real successful turn: the menu steered this "
             "request to open '{g}' before drawing — a candidate menu must "
@@ -80,6 +99,7 @@ def forward_case(case: dict, client: Optional[httpx.Client] = None) -> dict:
         # menu should have steered it to open first.
         labeled = sorted(a for a in authored if a not in selected)
         origin = "from_failure"
+        split = "train"  # real failures are the proposer's headroom
         rubric_shape = (
             "captured from a real turn: the writer authored '{g}' without "
             "opening it — the menu must steer this request to open '{g}' "
@@ -103,6 +123,10 @@ def forward_case(case: dict, client: Optional[httpx.Client] = None) -> dict:
             "input": question[:_QUESTION_MAX],
             "transcript": transcript[:_TRANSCRIPT_MAX],
             "expect_guide": expect,
+            # region == expect_guide: for this tunable the partition the gate
+            # scores separately IS the modality the menu had to steer to.
+            "region": expect,
+            "split": split,
             "rubric": [rubric_shape.format(g=expect)],
         }
         r = client.post(
