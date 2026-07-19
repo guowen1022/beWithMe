@@ -119,8 +119,16 @@ def test_existing_tunable_and_scenarios_only_upserts_host():
     assert out["tunable_created"] is False
     assert out["scenarios_added"] == 0
     paths = _posted_paths(client)
-    # exactly: host upsert + snapshot publish — nothing duplicated
-    assert paths == ["http://edge/api/hosts/register", "http://edge/api/snapshot/publish"]
+    # host upsert + tunable declaration + snapshot publish. The tunable POST is
+    # deliberately unconditional (it is what carries oracle_regime to an
+    # already-onboarded tunable) and is an upsert server-side; the VARIANT and
+    # ENABLED posts are the ones that must never repeat.
+    assert paths == [
+        "http://edge/api/hosts/register",
+        "http://store/api/tunables",
+        "http://edge/api/snapshot/publish",
+    ]
+    assert not any(p.endswith("/variants") or p.endswith("/enabled") for p in paths)
 
 
 def test_partial_scenarios_added():
@@ -129,3 +137,34 @@ def test_partial_scenarios_added():
     )
     out = registration.register(client=client)
     assert out["scenarios_added"] == len(SCENARIOS) - 2
+
+
+# ---------------------------------------------------------------- oracle_regime
+
+
+def test_oracle_regime_declared_exactly_validate():
+    # skillforge treats an unrecognized regime string as non-gated, so a typo
+    # here silently restores auto-promotion. Pin the exact spelling.
+    assert registration._ORACLE_REGIME == "validate"
+
+
+def test_tunable_registration_carries_oracle_regime():
+    client = _FakeClient(champion=None, existing_inputs=())
+    out = registration.register(client=client)
+
+    body = next(j for u, j, _ in client.posts if u == "http://store/api/tunables")
+    assert body["oracle_regime"] == "validate"
+    assert out["oracle_regime"] == "validate"
+
+
+def test_oracle_regime_declared_even_when_tunable_already_has_champion():
+    # The regression this guards: nesting the tunable POST under `if not
+    # champion` makes the regime declaration dead code for every
+    # already-onboarded tunable — including the live one — which would keep
+    # auto-promoting under the `reference` default. It must go out every boot.
+    client = _FakeClient(champion="v7", existing_inputs=())
+    registration.register(client=client)
+
+    bodies = [j for u, j, _ in client.posts if u == "http://store/api/tunables"]
+    assert len(bodies) == 1
+    assert bodies[0]["oracle_regime"] == "validate"
