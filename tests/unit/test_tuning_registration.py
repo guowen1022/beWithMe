@@ -23,23 +23,38 @@ class _Resp:
 
 
 class _FakeClient:
-    def __init__(self, champion=None, existing_inputs=()):
+    def __init__(self, champion=None, existing_inputs=(), existing_rows=None):
         self.posts = []  # (url, json, params)
+        self.deletes = []
         self._champion = champion
         self._existing = list(existing_inputs)
+        self._rows = existing_rows  # full remote rows, when a test needs shape control
+
+    def _scenario_rows(self):
+        if self._rows is not None:
+            return self._rows
+        # default: fully tagged remote rows, mirroring what this code registers
+        return [
+            {"id": i, "spec": {"input": inp, "region": "plot", "split": "train"},
+             "guard": False, "origin": "curated"}
+            for i, inp in enumerate(self._existing)
+        ]
 
     def get(self, url):
         if url.endswith("/champion"):
             return _Resp(200, {"champion_version": self._champion})
         if url.endswith("/scenarios"):
-            return _Resp(200, {"scenarios": [
-                {"id": i, "spec": {"input": inp}, "guard": False, "origin": "curated"}
-                for i, inp in enumerate(self._existing)
-            ]})
+            return _Resp(200, {"scenarios": self._scenario_rows()})
         return _Resp(404)
 
     def post(self, url, json=None, params=None):
         self.posts.append((url, json, params))
+        return _Resp(200, {"ok": True})
+
+    def delete(self, url, **kwargs):
+        # Registration must never delete scenarios; recorded so a test can
+        # assert it, rather than relying on an AttributeError.
+        self.deletes.append(url)
         return _Resp(200, {"ok": True})
 
 
@@ -168,3 +183,74 @@ def test_oracle_regime_declared_even_when_tunable_already_has_champion():
     bodies = [j for u, j, _ in client.posts if u == "http://store/api/tunables"]
     assert len(bodies) == 1
     assert bodies[0]["oracle_regime"] == "validate"
+
+
+# ------------------------------------------------------- partial-tagging warning
+
+
+def _untagged_row(i, inp):
+    """A row as registered before region/split existed."""
+    return {"id": i, "spec": {"input": inp}, "guard": False, "origin": "curated"}
+
+
+def test_warns_when_remote_rows_lack_labels(capsys):
+    rows = [_untagged_row(101, SCENARIOS[0]["input"]),
+            _untagged_row(102, SCENARIOS[1]["input"])]
+    client = _FakeClient(champion="v1", existing_rows=rows)
+    out = registration.register(client=client)
+
+    err = capsys.readouterr().out
+    assert "WARNING" in err
+    assert "101" in err and "102" in err          # names the affected ids
+    assert "DELETE" in err                        # states the remedy
+    assert [u["id"] for u in out["scenarios_untagged"]] == [101, 102]
+
+
+def test_no_warning_when_remote_set_is_fully_tagged(capsys):
+    client = _FakeClient(
+        champion="v1", existing_inputs=[sc["input"] for sc in SCENARIOS],
+    )
+    out = registration.register(client=client)
+
+    assert out["scenarios_untagged"] == []
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_warns_when_only_one_label_field_is_missing(capsys):
+    rows = [{"id": 7, "spec": {"input": "x", "region": "plot"}}]  # no split
+    client = _FakeClient(champion="v1", existing_rows=rows)
+    out = registration.register(client=client)
+
+    assert out["scenarios_untagged"] == [
+        {"id": 7, "input": "x", "missing": ["split"]}
+    ]
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_no_warning_on_an_empty_remote_set(capsys):
+    client = _FakeClient(champion="v1", existing_rows=[])
+    out = registration.register(client=client)
+    assert out["scenarios_untagged"] == []
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_check_is_fail_open_on_unexpected_row_shape():
+    # Registration must still succeed if the store hands back rows the check
+    # cannot read — a diagnostic is never allowed to block boot.
+    client = _FakeClient(champion="v1", existing_rows=["not-a-dict", 42, None])
+    out = registration.register(client=client)
+
+    assert out["skipped"] is False
+    assert out["published"] is True
+    assert out["scenarios_untagged"] == []
+    assert out["scenarios_added"] == len(SCENARIOS)
+
+
+def test_check_never_deletes(capsys):
+    # Warn-only is the whole point: captured rows are real production failures.
+    rows = [_untagged_row(1, "a"), _untagged_row(2, "b")]
+    client = _FakeClient(champion="v1", existing_rows=rows)
+    registration.register(client=client)
+
+    assert client.deletes == []
+    assert "WARNING" in capsys.readouterr().out
