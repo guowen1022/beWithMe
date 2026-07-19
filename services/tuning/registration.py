@@ -12,6 +12,19 @@ Runs on every sidecar boot (and via POST /register). Safe to repeat:
                               already holds (the store never dedups server-side);
   4. snapshot publish       — makes 1–3 visible to resolve().
 
+Scenario `spec` is forwarded whole minus `guard`, so the `region`/`split`
+labels added in `scenarios.py` reach the store with no plumbing of their own.
+
+**Re-registration caveat (2026-07-19).** Dedup is by `spec["input"]` and the
+eval service exposes only add/delete — there is NO update endpoint. Rows
+registered before region/split existed (the live dev store holds 10 such) will
+therefore be skipped by the dedup on every boot and keep serving UNLABELED
+forever. Booting this code against that store adds nothing and fixes nothing.
+Re-labeling them is a deliberate operator action: delete the untagged rows,
+then re-register. Until that happens, expect a mix of labeled and unlabeled
+scenarios, and treat unlabeled rows as whatever default partition skillforge
+assigns them — not as a silent member of any region.
+
 All HTTP goes through a `trust_env=False` client: the dev proxy must never
 see (or cache) localhost skillforge traffic — same rule as
 infra/skillforge_client.py. Any failure raises; the caller decides whether

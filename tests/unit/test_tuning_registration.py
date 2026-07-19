@@ -89,6 +89,27 @@ def test_fresh_store_full_sequence():
     assert all("guard" not in j["spec"] for u, j, _ in client.posts if u.endswith("/scenarios"))
 
 
+def test_scenario_specs_carry_region_and_split():
+    # The spec is forwarded whole minus `guard`, so the anti-overfitting
+    # labels need no plumbing of their own — but they must actually land in
+    # the POST body, and guard rows must stay on the gate side.
+    client = _FakeClient(champion=None, existing_inputs=())
+    registration.register(client=client)
+
+    specs = [j["spec"] for u, j, _ in client.posts if u.endswith("/scenarios")]
+    assert len(specs) == len(SCENARIOS)
+    for spec in specs:
+        assert spec["region"] == spec["expect_guide"]
+        assert spec["split"] in ("train", "holdout")
+
+    by_split = lambda s: {sp["region"] for sp in specs if sp["split"] == s}
+    assert by_split("train") == by_split("holdout") == {"plot", "mermaid"}
+
+    guard_specs = [j["spec"] for u, j, _ in client.posts
+                   if u.endswith("/scenarios") and j["guard"]]
+    assert guard_specs and all(sp["split"] == "holdout" for sp in guard_specs)
+
+
 def test_existing_tunable_and_scenarios_only_upserts_host():
     client = _FakeClient(
         champion="v3", existing_inputs=[sc["input"] for sc in SCENARIOS],
