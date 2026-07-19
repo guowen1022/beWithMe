@@ -122,3 +122,100 @@ which produced 17 environment-only failures unrelated to this change
 (`marked` / `mermaid` npm modules missing). I symlinked both from the main
 checkout to get a genuine green run. The symlinks are gitignored and are not
 part of the commit. No source file was modified to make tests pass.
+
+---
+
+# Round 2 — `oracle_regime` + partial-tagging detection (2026-07-19)
+
+Follow-up to skillforge `4418160`, which published the host-author contract for
+`oracle_regime` and scenario `region`. Two changes, both in
+`services/tuning/registration.py`.
+
+## 7. `oracle_regime: "validate"` — and why the obvious one-line fix is a no-op
+
+Declared as a named module constant, `_ORACLE_REGIME = "validate"`, with the
+justification in a comment above it rather than in a commit message nobody will
+re-read. The short version: `quality` for this tunable comes from an LLM judge
+scoring how well a menu *steers* the writer — pedagogy, which a judge only
+approximates. Measured run-to-run variance on the live model, identical
+body/config/scenario: **p(deviate) 0.00 on clear-cut scenarios, up to 0.33 on
+the borderline ones**. The borderline scenarios are precisely the ones carrying
+the refinement headroom, so the noisiest part of the signal is the part that
+decides promotions. That is a proxy, not ground truth; auto-promotion on it is
+not defensible. `validate` leaves propose/evaluate/gate untouched and only puts
+a person on the final promotion.
+
+The value is pinned by an equality test (`== "validate"`) rather than a
+membership check, because skillforge treats an **unrecognized** regime string as
+non-gated — a typo doesn't fail loudly, it silently restores auto-promotion.
+
+**Where the task framing was incomplete.** The task said registration "currently
+sends no `oracle_regime`, so it silently defaults to `reference`" — correct — and
+asked me to add the field. Adding the field alone would have changed nothing.
+The `POST /api/tunables` call was nested under `if not champion:`, and our live
+tunable already has a champion (v1). That branch never runs again for an
+onboarded tunable, so the new field would have been **dead code** and the live
+tunable would have kept auto-promoting — the exact outcome the task exists to
+prevent. Landing the intent required hoisting the tunable POST out of the
+champion guard.
+
+That hoist is safe, and specifically because of the upsert semantics the task
+quoted. `store.register_tunable` (skillforge `store/store.py:35`) inserts when
+absent; otherwise it touches **only** `oracle_regime`, and only when tightening
+(`row.oracle_regime != oracle_regime and oracle_regime != "reference"`).
+Champion, enabled, and description are untouched. So re-declaring on every boot
+is idempotent. The `/variants` and `/enabled` POSTs stay behind the champion
+guard — those are the ones that must never repeat, and the updated
+`test_existing_tunable_and_scenarios_only_upserts_host` now asserts both halves:
+the tunable POST happens, the variant/enabled POSTs do not.
+
+I verified the guard has teeth by mutating the code back to the nested form:
+2 tests fail, including the named regression test.
+
+## 8. Partial tagging — warn, never delete
+
+`_warn_on_partial_tagging()` runs after the remote scenario list is fetched and
+prints a single `[tuning] WARNING: ...` line naming the offending ids and the
+remedy. It follows the module's existing idiom (`print(..., flush=True)`, the
+same thing `main.py` uses for the registration summary) — no logger introduced.
+The offending rows also come back in the summary dict as `scenarios_untagged`,
+so `POST /register` surfaces them to an operator, not just to stdout.
+
+**Warn-only was a constraint, and it is the right one.** The untagged rows in
+the live store include captured production failures — the only genuine headroom
+this loop has. Auto-deleting them to make a coverage metric look clean would
+destroy the most valuable data in the system to fix a reporting problem. The
+test `test_check_never_deletes` pins this against a fake client that *records*
+deletes rather than merely lacking the method, so the assertion is real.
+
+**Detection is `region` OR `split` missing**, not both — a row with one label and
+not the other is just as broken for gating, and `test_warns_when_only_one_label_
+field_is_missing` covers it. The check is gated on the local set actually being
+tagged (`local_tagged`), so it stays quiet in a hypothetical future where
+beWithMe stops tagging.
+
+**Fail-open**, per the task: the whole body is wrapped, and any exception prints
+a one-line skip notice and returns `[]`. A diagnostic must never be the thing
+that blocks boot.
+
+## 9. One adjacent fix the fail-open test forced
+
+Writing `test_check_is_fail_open_on_unexpected_row_shape` exposed a
+**pre-existing** fragility that is not mine: the dedup comprehension
+`{(row.get("spec") or {}).get("input") for row in ...}` raises `AttributeError`
+on any non-dict row, so a malformed store response took registration down before
+my check ever ran. Registration is documented as fail-open, so this was a real
+(if unlikely) gap. Fixed minimally by filtering to dicts once, feeding both the
+dedup and the label check from that clean list. Behavior for well-formed data is
+byte-identical. Flagging it because it is the one edit in this round that is not
+strictly one of the two requested tasks.
+
+## 10. Scope — what I did NOT do
+
+- **No live-state changes.** No POST/DELETE against any running skillforge
+  service; the 10 untagged rows in the live store are untouched. This branch
+  only makes them *visible* on the next boot. Pruning them stays the operator's
+  call, as does the `refine_auto` / stale `tool.speak` work tracked elsewhere.
+- **No update endpoint.** Still the right call, and now explicitly the reason
+  the warning has to name deletion as the remedy.
+- **Did not restart or touch running services** (8000-8008, 8100-8105).
