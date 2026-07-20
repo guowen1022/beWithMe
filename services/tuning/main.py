@@ -26,7 +26,8 @@ from infra.config import settings
 from infra.event_log_middleware import install_event_log
 from infra.topology import service_port
 from persona.teacher.prompts.canvas_guides import MENU_TUNABLE_ID
-from services.tuning import capture, registration, scorer
+from services.tuning import capture, registration, scorer, scorer_grid
+from services.tuning.scenarios_grid import GRID_TUNABLE_ID
 
 
 @asynccontextmanager
@@ -55,12 +56,47 @@ async def health() -> dict:
     }
 
 
+# tunable_id → the MODULE that scores it. This sidecar serves ONE eval_url for
+# the whole host (skillforge's registry is per-host), so every tunable we expose
+# is dispatched from here.
+#
+# Modules, not bound functions: `{id: scorer.score}` would capture the function
+# object at import, so any later rebinding of `scorer.score` — a monkeypatch, a
+# hot-reload — would be silently ignored while the dispatch table kept calling
+# the original. Resolving `.score` at call time keeps the indirection honest.
+_SCORERS = {
+    MENU_TUNABLE_ID: scorer,           # canvas-writer replay + LLM judge
+    GRID_TUNABLE_ID: scorer_grid,      # normalize_spec well-formedness floor
+}
+
+
 @app.post("/eval")
 async def eval_endpoint(payload: dict) -> dict:
     """The host-eval contract skillforge's RemoteEvalBackend RPCs — one call
-    per (candidate, scenario). Never raises: the scorer maps every internal
-    failure to {ok: false, quality: 0, outcome: 0} (fail-closed gating)."""
-    return await scorer.score(
+    per (candidate, scenario). Never raises: the scorers map every internal
+    failure to {ok: false, quality: 0, outcome: 0} (fail-closed gating).
+
+    DISPATCH on `tunable_id`. A host registers exactly one eval_url, so with
+    several tunables live this endpoint has to be told which decision it is
+    scoring. skillforge carries `tunable_id` in the payload for exactly this
+    (skillforge PR `feat/eval-payload-tunable-id`).
+
+    An UNKNOWN tunable_id fails CLOSED rather than falling back to a scorer —
+    scoring one tunable with another's scorer would produce a number that reads
+    as legitimate, and a wrong-scorer result is indistinguishable from a real
+    regression.
+
+    Back-compat: a skillforge that predates that PR sends no `tunable_id`. We
+    fall back to the canvas-guides scorer, which is what such a build can only
+    have been asking for — it could not have gated a second tunable anyway.
+    Keeps the two repos independently deployable in either order.
+    """
+    tunable_id = str(payload.get("tunable_id") or "").strip() or MENU_TUNABLE_ID
+    module = _SCORERS.get(tunable_id)
+    if module is None:
+        return {"ok": False, "quality": 0.0, "outcome": 0.0,
+                "reason": f"no scorer registered for tunable {tunable_id!r}"}
+    return await module.score(
         body=payload.get("body") or "",
         config=payload.get("config") or {},
         scenario=payload.get("scenario") or {},

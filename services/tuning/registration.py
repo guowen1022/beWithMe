@@ -37,6 +37,7 @@ fail-open, only GATING is fail-closed).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 import httpx
@@ -45,6 +46,9 @@ from infra.config import settings
 from infra.topology import upstream_url
 from persona.teacher.prompts.canvas_guides import MENU_TUNABLE_ID, _MENU_PREAMBLE
 from services.tuning.scenarios import SCENARIOS
+from services.tuning.scenarios_grid import GRID_TUNABLE_ID
+from services.tuning.scenarios_grid import SCENARIOS as GRID_SCENARIOS
+from workshop.canvas.tools.present_coordinate_grid import _DESCRIPTION as _GRID_BASELINE_BODY
 
 _TIMEOUT_S = 10.0
 
@@ -75,6 +79,12 @@ _TUNABLE_DESCRIPTION = (
 # Spell this EXACTLY: skillforge treats an unrecognized regime string as
 # non-gated, so a typo silently buys back the auto-promotion we are declining.
 _ORACLE_REGIME = "validate"
+
+_GRID_DESCRIPTION = (
+    "present_coordinate_grid's tool description: the contract the teacher "
+    "reads when deciding whether to reach for an animated grid and how to "
+    "fill its spec."
+)
 
 # Fields every scenario spec must carry for region-aware gating.
 _LABEL_FIELDS = ("region", "split")
@@ -130,6 +140,122 @@ def _warn_on_partial_tagging(remote_rows: list, local_tagged: bool) -> list:
         return []
 
 
+@dataclass(frozen=True)
+class TunableSpec:
+    """Everything registration needs to declare one tunable and seed its evals.
+
+    Adding a tunable is adding a row to TUNABLES below — the registration steps
+    themselves are identical for all of them.
+    """
+    tunable_id: str
+    kind: str                 # skillforge Tunable kind (selection | prompt | ...)
+    description: str
+    oracle_regime: str
+    baseline_body: str        # the v1 variant body, seeded on first onboarding
+    baseline_config: dict
+    scenarios: list
+
+
+# Both tunables are `validate`: each one's `quality` is ultimately a judgement
+# call an LLM only approximates, so a gate-passing candidate goes to human
+# review rather than auto-promoting. See the _ORACLE_REGIME note above.
+TUNABLES: tuple = (
+    TunableSpec(
+        tunable_id=MENU_TUNABLE_ID,
+        kind="selection",
+        description=_TUNABLE_DESCRIPTION,
+        oracle_regime=_ORACLE_REGIME,
+        baseline_body=_MENU_PREAMBLE,
+        baseline_config={"select_prompt": _MENU_PREAMBLE},
+        scenarios=SCENARIOS,
+    ),
+    TunableSpec(
+        tunable_id=GRID_TUNABLE_ID,
+        # `prompt`, not `selection`: what's tuned is the tool DESCRIPTION the
+        # teacher reads when deciding how to fill the spec — free text, not a
+        # menu of options. The manifest tuning gate injects it for every
+        # tunable tool (persona/teacher/tools/manifest.py).
+        kind="prompt",
+        description=_GRID_DESCRIPTION,
+        oracle_regime=_ORACLE_REGIME,
+        baseline_body=_GRID_BASELINE_BODY,
+        baseline_config={"description": _GRID_BASELINE_BODY},
+        scenarios=GRID_SCENARIOS,
+    ),
+)
+
+
+def _register_one(client: httpx.Client, t: TunableSpec, *,
+                  host: str, store: str, eval_svc: str) -> dict:
+    """Declare one tunable, seed its baseline if new, and add missing scenarios."""
+    # 2. tunable declaration — UNCONDITIONAL, unlike 2b below. skillforge's
+    #    register_tunable is an upsert that only tightens `oracle_regime` on
+    #    an existing row (champion, enabled and description are left alone),
+    #    so re-declaring every boot is safe and idempotent. It has to be
+    #    unconditional: a tunable that already has a champion in the live
+    #    store would never re-run anything nested under `if not champion` —
+    #    the regime declaration would be dead code and the tunable would keep
+    #    auto-promoting under the `reference` default.
+    client.post(
+        f"{store}/api/tunables",
+        json={"host": host, "tunable_id": t.tunable_id, "kind": t.kind,
+              "description": t.description, "oracle_regime": t.oracle_regime},
+    ).raise_for_status()
+
+    # 2b. v1 baseline + default-OFF — first-time onboarding only. The baseline
+    #     is byte-identical to what the code serves, so enabling a fresh
+    #     tunable changes nothing until a challenger is promoted.
+    r = client.get(f"{store}/api/tunables/{host}/{t.tunable_id}/champion")
+    champion = r.json().get("champion_version") if r.status_code == 200 else None
+    created = False
+    if not champion:
+        client.post(
+            f"{store}/api/tunables/{host}/{t.tunable_id}/variants",
+            json={"body": t.baseline_body, "config": t.baseline_config,
+                  "origin": "human"},
+        ).raise_for_status()
+        client.post(
+            f"{store}/api/tunables/{host}/{t.tunable_id}/enabled",
+            json={"enabled": False},
+        ).raise_for_status()
+        created = True
+
+    # 3. scenarios, deduped by input.
+    r = client.get(f"{eval_svc}/api/eval/{host}/{t.tunable_id}/scenarios")
+    r.raise_for_status()
+    # Non-dict rows should be impossible, but a malformed store response
+    # must not take registration down (fail-open) — drop them once here so
+    # both the dedup and the label check below read a clean list.
+    remote_rows = [row for row in (r.json().get("scenarios", []) or [])
+                   if isinstance(row, dict)]
+    existing = {(row.get("spec") or {}).get("input") for row in remote_rows}
+    # Dedup means rows already in the store are skipped forever, so a
+    # pre-label row can never be fixed by booting again — say so loudly.
+    untagged = _warn_on_partial_tagging(
+        remote_rows,
+        local_tagged=any(any(sc.get(f) for f in _LABEL_FIELDS)
+                         for sc in t.scenarios),
+    )
+    added = 0
+    for sc in t.scenarios:
+        if sc["input"] in existing:
+            continue
+        spec = {k: v for k, v in sc.items() if k != "guard"}
+        client.post(
+            f"{eval_svc}/api/eval/{host}/{t.tunable_id}/scenarios",
+            json={"spec": spec, "guard": bool(sc.get("guard")),
+                  "origin": "curated"},
+        ).raise_for_status()
+        added += 1
+
+    return {
+        "tunable_created": created,
+        "oracle_regime": t.oracle_regime,
+        "scenarios_added": added,
+        "scenarios_untagged": untagged,
+    }
+
+
 def register(client: Optional[httpx.Client] = None) -> dict:
     """Register this sidecar as beWithMe's eval endpoint. Returns a summary
     dict; raises httpx errors upward. No-op when the SKILLFORGE_* URLs are
@@ -147,79 +273,21 @@ def register(client: Optional[httpx.Client] = None) -> dict:
     if own_client:
         client = httpx.Client(trust_env=False, timeout=_TIMEOUT_S)
     try:
-        # 1. host upsert — re-points the live eval_url at this process.
+        # 1. host upsert — re-points the live eval_url at this process. ONE
+        #    eval_url serves every tunable below; `main.py` dispatches on the
+        #    `tunable_id` skillforge carries in the eval payload.
         client.post(
             f"{edge}/api/hosts/register",
             json={"host": host, "eval_url": eval_url,
-                  "meta": {"tunable": MENU_TUNABLE_ID}},
+                  "meta": {"tunables": [t.tunable_id for t in TUNABLES]}},
         ).raise_for_status()
 
-        # 2. tunable declaration — UNCONDITIONAL, unlike 2b below. skillforge's
-        #    register_tunable is an upsert that only tightens `oracle_regime` on
-        #    an existing row (champion, enabled and description are left alone),
-        #    so re-declaring every boot is safe and idempotent. It has to be
-        #    unconditional: our tunable already has a champion in the live
-        #    store, so anything nested under `if not champion` would never run
-        #    again — the regime declaration would be dead code and the tunable
-        #    would keep auto-promoting under the `reference` default.
-        client.post(
-            f"{store}/api/tunables",
-            json={"host": host, "tunable_id": MENU_TUNABLE_ID,
-                  "kind": "selection", "description": _TUNABLE_DESCRIPTION,
-                  "oracle_regime": _ORACLE_REGIME},
-        ).raise_for_status()
-
-        # 2b. v1 baseline + default-OFF — first-time onboarding only.
-        r = client.get(f"{store}/api/tunables/{host}/{MENU_TUNABLE_ID}/champion")
-        champion = r.json().get("champion_version") if r.status_code == 200 else None
-        tunable_created = False
-        if not champion:
-            client.post(
-                f"{store}/api/tunables/{host}/{MENU_TUNABLE_ID}/variants",
-                json={"body": _MENU_PREAMBLE,
-                      "config": {"select_prompt": _MENU_PREAMBLE},
-                      "origin": "human"},
-            ).raise_for_status()
-            client.post(
-                f"{store}/api/tunables/{host}/{MENU_TUNABLE_ID}/enabled",
-                json={"enabled": False},
-            ).raise_for_status()
-            tunable_created = True
-
-        # 3. scenarios, deduped by input.
-        r = client.get(f"{eval_svc}/api/eval/{host}/{MENU_TUNABLE_ID}/scenarios")
-        r.raise_for_status()
-        # Non-dict rows should be impossible, but a malformed store response
-        # must not take registration down (fail-open) — drop them once here so
-        # both the dedup and the label check below read a clean list.
-        remote_rows = [
-            row for row in (r.json().get("scenarios", []) or [])
-            if isinstance(row, dict)
-        ]
-        existing = {
-            (row.get("spec") or {}).get("input") for row in remote_rows
-        }
-        # Dedup means rows already in the store are skipped forever, so a
-        # pre-label row can never be fixed by booting again — say so loudly.
-        untagged = _warn_on_partial_tagging(
-            remote_rows,
-            local_tagged=any(
-                any(sc.get(f) for f in _LABEL_FIELDS) for sc in SCENARIOS
-            ),
-        )
-        added = 0
-        for sc in SCENARIOS:
-            if sc["input"] in existing:
-                continue
-            spec = {k: v for k, v in sc.items() if k != "guard"}
-            client.post(
-                f"{eval_svc}/api/eval/{host}/{MENU_TUNABLE_ID}/scenarios",
-                json={"spec": spec, "guard": bool(sc.get("guard")),
-                      "origin": "curated"},
-            ).raise_for_status()
-            added += 1
+        results = {t.tunable_id: _register_one(client, t, host=host,
+                                               store=store, eval_svc=eval_svc)
+                   for t in TUNABLES}
 
         # 4. publish — nothing above is served until it lands in the snapshot.
+        #    Once, after every tunable: the snapshot is recomposed whole.
         client.post(
             f"{edge}/api/snapshot/publish", params={"host": host}
         ).raise_for_status()
@@ -228,10 +296,7 @@ def register(client: Optional[httpx.Client] = None) -> dict:
             "skipped": False,
             "host": host,
             "eval_url": eval_url,
-            "tunable_created": tunable_created,
-            "oracle_regime": _ORACLE_REGIME,
-            "scenarios_added": added,
-            "scenarios_untagged": untagged,
+            "tunables": results,
             "published": True,
         }
     finally:
