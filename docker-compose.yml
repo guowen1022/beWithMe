@@ -1,0 +1,147 @@
+# beWithMe -- full topology in containers.
+#
+# Mirrors scripts/dev-services.sh, but each sidecar is its own container and
+# they find each other by DNS name instead of localhost. The seam that makes
+# this work without a single source change is infra/topology.py:upstream_url(),
+# which checks `<NAME>_SERVICE_URL` before computing host:port.
+#
+#   docker compose up -d postgres ollama     # dependencies first
+#   docker compose run --rm init-db          # one-time schema + pgvector
+#   docker compose up -d                     # the 8 sidecars
+#
+# Only `shell` publishes a port. Everything else stays on the private network,
+# which is exactly the trust model ARCHITECTURE.md section 6 assumes.
+
+x-service-urls: &service-urls
+  SHELL_SERVICE_URL:      http://shell:8000
+  PERSONA_SERVICE_URL:    http://persona:8001
+  KNOWLEDGE_SERVICE_URL:  http://knowledge:8002
+  TRANSCRIBE_SERVICE_URL: http://transcribe:8003
+  SPEAK_SERVICE_URL:      http://speak:8004
+  BROWSER_SERVICE_URL:    http://browser:8005
+  MAESTRO_SERVICE_URL:    http://maestro:8006
+  TUNING_SERVICE_URL:     http://tuning:8008
+
+x-common-env: &common-env
+  <<: *service-urls
+  DATABASE_URL: postgresql+asyncpg://bewithme:${POSTGRES_PASSWORD:-bewithme}@postgres:5432/bewithme
+  OLLAMA_URL: http://ollama:11434
+  # Provider credentials come from .env (never committed, never in the image).
+  LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+  VISION_PROVIDER: ${VISION_PROVIDER:-doubao}
+  DOUBAO_API_KEY: ${DOUBAO_API_KEY:-}
+  DOUBAO_BASE_URL: ${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+  DOUBAO_VISION_MODEL: ${DOUBAO_VISION_MODEL:-}
+  BEWITHME_DEBUG: ${BEWITHME_DEBUG:-0}
+
+x-core: &core
+  image: ${IMAGE_CORE:-bewithme-core:dev}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: core
+  restart: unless-stopped
+  environment: *common-env
+  volumes:
+    - app-data:/app/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+x-media: &media
+  image: ${IMAGE_MEDIA:-bewithme-media:dev}
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: media
+  restart: unless-stopped
+  environment: *common-env
+  volumes:
+    - app-data:/app/data
+    - ./models:/models:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # ---- dependencies --------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bewithme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bewithme}
+      POSTGRES_DB: bewithme
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bewithme -d bewithme"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # After first start:  docker compose exec ollama ollama pull nomic-embed-text
+
+  # One-shot: creates the DB, enables pgvector/uuid-ossp, creates tables.
+  init-db:
+    <<: *core
+    restart: "no"
+    entrypoint: ["python"]
+    command: ["scripts/init_db.py"]
+    profiles: ["setup"]
+
+  # ---- the 8 sidecars (offsets per infra/topology.py) ----------------------
+  shell:                              # +0 -- the ONLY public face
+    <<: *core
+    command: ["services.shell.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${SHELL_PORT:-8000}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      knowledge: {condition: service_started}
+
+  persona:                            # +1
+    <<: *core
+    command: ["services.persona.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+  knowledge:                          # +2 -- owns the DB
+    <<: *core
+    command: ["services.knowledge.main:app", "--host", "0.0.0.0", "--port", "8002"]
+
+  transcribe:                         # +3 -- Whisper + EOU onnx
+    <<: *media
+    command: ["services.transcribe.main:app", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      <<: *common-env
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/models/ggml-base.en.bin}
+      EOU_MODEL_PATH: ${EOU_MODEL_PATH:-}
+      EOU_TOKENIZER_PATH: ${EOU_TOKENIZER_PATH:-}
+
+  speak:                              # +4 -- Kokoro
+    <<: *media
+    command: ["services.speak.main:app", "--host", "0.0.0.0", "--port", "8004"]
+
+  browser:                            # +5 -- Playwright/Chromium
+    <<: *media
+    command: ["services.browser.main:app", "--host", "0.0.0.0", "--port", "8005"]
+
+  maestro:                            # +6
+    <<: *core
+    command: ["services.maestro.main:app", "--host", "0.0.0.0", "--port", "8006"]
+
+  tuning:                             # +8 (+7 reserved for frontend-sandbox)
+    <<: *core
+    command: ["services.tuning.main:app", "--host", "0.0.0.0", "--port", "8008"]
+
+volumes:
+  pgdata:
+  ollama:
+  app-data:

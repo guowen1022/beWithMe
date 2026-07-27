@@ -1,0 +1,51 @@
+# Keep the build context small and secrets out of the image.
+# Mirrors .gitignore, plus the things git tracks but a container never needs.
+
+.git
+.github
+.venv
+.venv.bak/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets -- never in an image layer.
+.env
+.env.*
+!.env.example
+
+# Frontend/desktop are built and shipped separately (Next.js / Electron),
+# not served by the Python sidecars.
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+desktop/node_modules/
+desktop/dist/
+node_modules/
+
+# Per-user runtime state -- lives on a mounted volume, not in the image.
+data/
+
+# Model artifacts -- mounted at /models.
+models/
+*.onnx
+*.bin
+*.gguf
+
+# Logs and local scratch.
+.e2e-logs/
+.sim-logs/
+.dev-logs/
+.gstack/
+.claude/
+
+# Docs and review material add nothing to the runtime.
+architecture-review/
+benchmark/*/runs/
+design/
+*.md
+!README.md
