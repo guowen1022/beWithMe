@@ -268,7 +268,10 @@ export default function DebugPanel({
                       {label}
                     </p>
                     <p className="text-sm mt-0.5">
-                      {(prefs as Record<string, unknown>)[key] as string}
+                      {/* Preferences has no index signature, so TS rejects the
+                          direct cast. Route through unknown, as the compiler
+                          suggests, to index it by a PREF_LABELS key. */}
+                      {(prefs as unknown as Record<string, unknown>)[key] as string}
                     </p>
                   </div>
                 ))}
