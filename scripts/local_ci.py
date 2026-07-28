@@ -341,54 +341,166 @@ def doctor(fix: bool = False) -> int:
 # ------------------------------------------------------------------- deploy
 
 
-def deploy(state: dict, down: bool = False) -> int:
+EMBED_MODEL = "nomic-embed-text"
+
+
+def _dc(*args: str, capture: bool = False, check: bool = False):
+    """docker compose, always rooted at the repo."""
+    return subprocess.run(
+        ["docker", "compose", *args], cwd=REPO_ROOT, check=check,
+        capture_output=capture, text=True, encoding="utf-8", errors="replace",
+    )
+
+
+def _wait_http(url: str, attempts: int = 60, interval: float = 2.0) -> bool:
+    import urllib.request
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=3):
+                return True
+        except Exception:
+            time.sleep(interval)
+    return False
+
+
+def container_status() -> dict[str, str]:
+    """Per-service container state, for the table and the dashboard."""
+    proc = _dc("ps", "--format", "json", capture=True)
+    out: dict[str, str] = {}
+    if proc.returncode != 0:
+        return out
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        # Compose emits either one object per line or a single JSON array.
+        rows = row if isinstance(row, list) else [row]
+        for r in rows:
+            name = r.get("Service") or r.get("Name")
+            if name:
+                out[name] = r.get("State") or r.get("Status") or "?"
+    return out
+
+
+def deploy(state: dict, down: bool = False, rebuild: bool = False, init_db: bool = False) -> int:
+    """Local CD: build the current tree, bring the topology up, prove it healthy.
+
+    Mirrors what scripts/deploy-ecs.sh does on the server, minus the ACR pull --
+    here the images are built from the working tree, which is the whole point of
+    a *local* deploy: you are testing the code in front of you.
+    """
     reason = _needs_docker()
     if reason:
         print(f"cannot deploy: {reason}")
         return 1
+    if _dc("version", capture=True).returncode != 0:
+        print("docker is installed but the daemon is not reachable -- start Docker Desktop")
+        return 1
 
     if down:
-        subprocess.run(["docker", "compose", "down"], cwd=REPO_ROOT)
+        print("[deploy] stopping...")
+        _dc("down")
         state["deploy"] = {"status": "down", "at": datetime.now(timezone.utc).isoformat()}
         save_state(state)
+        print("[deploy] stopped (volumes kept; `docker compose down -v` also drops data)")
         return 0
 
     if not (REPO_ROOT / ".env").is_file():
-        print("no .env found -- copy .env.example to .env and fill in provider keys first")
+        print("no .env found -- run: cp .env.example .env   then fill in provider keys")
         return 1
 
     started = time.monotonic()
-    print("[deploy] starting dependencies (postgres, ollama)...")
-    subprocess.run(["docker", "compose", "up", "-d", "postgres", "ollama"], cwd=REPO_ROOT, check=False)
 
-    print("[deploy] starting sidecars...")
-    proc = subprocess.run(["docker", "compose", "up", "-d"], cwd=REPO_ROOT)
-    ok = proc.returncode == 0
+    if rebuild:
+        # Only two distinct images exist: five services share bewithme-core and
+        # three share bewithme-media. A bare `docker compose build` fans out per
+        # SERVICE, so several jobs build the same tag concurrently and collide
+        # with `image "bewithme-core:dev": already exists`. Build one
+        # representative of each image instead; the rest then just use it.
+        print("[deploy] building core + media from the working tree "
+              "(first run pulls Chromium; slow)...")
+        if _dc("build", "shell", "browser").returncode != 0:
+            print("[deploy] build FAILED")
+            return 1
+
+    print(f"[deploy] starting postgres + ollama...")
+    if _dc("up", "-d", "postgres", "ollama").returncode != 0:
+        print("[deploy] dependencies failed to start")
+        return 1
+
+    # The embedding model is a one-time ~275MB pull, but every retrieval path
+    # needs it (infra/rag/embedding.py). Pull only when absent.
+    listed = _dc("exec", "-T", "ollama", "ollama", "list", capture=True)
+    if EMBED_MODEL not in (listed.stdout or ""):
+        print(f"[deploy] pulling {EMBED_MODEL} (one-time, ~275MB)...")
+        _dc("exec", "-T", "ollama", "ollama", "pull", EMBED_MODEL)
+
+    if init_db:
+        print("[deploy] initialising schema (pgvector, uuid-ossp, tables)...")
+        if _dc("run", "--rm", "init-db").returncode != 0:
+            print("[deploy] init-db FAILED")
+            return 1
+
+    print("[deploy] starting the 8 sidecars...")
+    ok = _dc("up", "-d").returncode == 0
 
     health = "unknown"
     if ok:
-        print("[deploy] waiting for the shell to answer /api/health ...")
-        import urllib.request
-        for _ in range(45):
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3):
-                    health = "healthy"
-                    break
-            except Exception:
-                time.sleep(2)
-        else:
-            health = "unhealthy"
+        print("[deploy] waiting for the shell on :8000 ...")
+        health = "healthy" if _wait_http("http://127.0.0.1:8000/api/health") else "unhealthy"
+
+    containers = container_status()
+    running = sum(1 for v in containers.values() if str(v).lower().startswith("run"))
 
     state["deploy"] = {
         "status": "up" if ok and health == "healthy" else "degraded",
         "health": health,
+        "containers": containers,
+        "running": running,
+        "total": len(containers),
         "duration": round(time.monotonic() - started, 1),
         "at": datetime.now(timezone.utc).isoformat(),
     }
     save_state(state)
-    print(f"[deploy] {state['deploy']['status']} (health={health}) in {state['deploy']['duration']}s")
-    print("[deploy] shell: http://127.0.0.1:8000   stop with: python scripts/local_ci.py --deploy-down")
+
+    print()
+    print(f"  [deploy] {state['deploy']['status']}  health={health}  "
+          f"{running}/{len(containers)} containers up  ({state['deploy']['duration']}s)")
+    for name, st in sorted(containers.items()):
+        flag = "  " if str(st).lower().startswith("run") else "!!"
+        print(f"    {flag} {name:<12} {st}")
+    print()
+    if health == "healthy":
+        print("  shell:  http://127.0.0.1:8000/api/health")
+        print("  logs:   docker compose logs -f shell")
+        print("  stop:   python scripts/local_ci.py --deploy-down")
+    else:
+        print("  shell did not become healthy. Inspect with:")
+        print("    docker compose logs --tail 50 shell knowledge")
+    print()
     return 0 if health == "healthy" else 1
+
+
+def cd_flow(checks: list[Check], state: dict, rebuild: bool, init_db: bool) -> int:
+    """Gated local CD -- the actual point of a CD pipeline: only ship what passes.
+
+    Skips the client checks: they gate the web/desktop/mobile builds, which are
+    not what `docker compose up` deploys (the compose topology is the 8 Python
+    sidecars). Running them here would fail the deploy for an unrelated reason.
+    """
+    gating = [c for c in checks if c.group != "client"]
+    print(f"[cd] running {len(gating)} gating check(s) before deploy...")
+    failed = run_all(gating, state)
+    print_table(state, gating)
+    if failed:
+        print(f"[cd] {failed} check(s) failed -- NOT deploying")
+        return 1
+    print("[cd] checks green -- deploying")
+    return deploy(state, rebuild=rebuild, init_db=init_db)
 
 
 # -------------------------------------------------------------------- watch
@@ -494,11 +606,26 @@ async function tick(){
   }
   document.getElementById("t").innerHTML = html;
   const dep = d.deploy;
-  document.getElementById("d").innerHTML = dep
-    ? `<b>local deploy:</b> <span class="pill ${dep.status==="up"?"pass":dep.status==="down"?"none":"fail"}">${dep.status}</span>`
-      + ` ${dep.health?("health="+dep.health):""} · ${ago(dep.at)}`
-      + (dep.status==="up" ? ` · <a href="http://127.0.0.1:8000/api/health">:8000</a>` : "")
-    : `<b>local deploy:</b> <span class="pill none">never</span> -- run: python scripts/local_ci.py --deploy`;
+  if(!dep){
+    document.getElementById("d").innerHTML =
+      `<b>local deploy:</b> <span class="pill none">never</span> -- run: python scripts/local_ci.py --cd`;
+  } else {
+    const cls = dep.status==="up" ? "pass" : dep.status==="down" ? "none" : "fail";
+    let h = `<b>local deploy:</b> <span class="pill ${cls}">${dep.status}</span>`
+          + (dep.health? ` health=${dep.health}` : "")
+          + (dep.total? ` &middot; ${dep.running}/${dep.total} containers` : "")
+          + ` &middot; ${ago(dep.at)}`
+          + (dep.status==="up" ? ` &middot; <a href="http://127.0.0.1:8000/api/health">:8000</a>` : "");
+    if(dep.containers && Object.keys(dep.containers).length){
+      h += "<table>";
+      for(const [n,st] of Object.entries(dep.containers).sort()){
+        const up = String(st).toLowerCase().startsWith("run");
+        h += `<tr><td>${n}</td><td><span class="pill ${up?"pass":"fail"}">${st}</span></td></tr>`;
+      }
+      h += "</table>";
+    }
+    document.getElementById("d").innerHTML = h;
+  }
 }
 tick(); setInterval(tick, 3000);
 </script>
@@ -548,6 +675,14 @@ def run_all(checks: list[Check], state: dict, verbose: bool = False) -> int:
 
 
 def main() -> int:
+    # Line-buffer our own output. Subprocesses inherit the fd and write straight
+    # through, so with the default block buffering on a redirect (`> cd.log`) the
+    # docker build appears BEFORE the check results that gated it.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--only", nargs="+", metavar="CHECK", help="run specific checks by name")
     p.add_argument("--group", choices=["arch", "service", "unit", "client"], help="run one group")
@@ -555,8 +690,14 @@ def main() -> int:
     p.add_argument("--watch", action="store_true", help="re-run affected checks on file change")
     p.add_argument("--serve", action="store_true", help="serve the status dashboard")
     p.add_argument("--port", type=int, default=8900)
-    p.add_argument("--deploy", action="store_true", help="docker compose up + health check")
+    p.add_argument("--deploy", action="store_true", help="build + up + health check")
     p.add_argument("--deploy-down", action="store_true", help="docker compose down")
+    p.add_argument("--cd", action="store_true",
+                   help="gated deploy: run the checks, deploy only if they pass")
+    p.add_argument("--rebuild", action="store_true",
+                   help="rebuild images from the working tree before deploying")
+    p.add_argument("--init-db", action="store_true",
+                   help="run scripts/init_db.py in the stack (first deploy / schema change)")
     p.add_argument("--full", action="store_true", help="real client builds instead of typechecks")
     p.add_argument("--verbose", action="store_true", help="stream check output instead of capturing")
     p.add_argument("--list", action="store_true", help="list check names")
@@ -595,8 +736,12 @@ def main() -> int:
                 return 0
         return 0
 
+    if args.cd:
+        return cd_flow(checks, state, rebuild=args.rebuild, init_db=args.init_db)
+
     if args.deploy or args.deploy_down:
-        return deploy(state, down=args.deploy_down)
+        return deploy(state, down=args.deploy_down,
+                      rebuild=args.rebuild, init_db=args.init_db)
 
     if args.status:
         print_table(state, checks)

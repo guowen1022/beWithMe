@@ -21,12 +21,32 @@
 # =============================================================================
 FROM python:3.12-slim AS base
 
+# Package mirrors. Empty = upstream (deb.debian.org / pypi.org), which is right
+# for GitHub Actions. Building from mainland China, upstream measures ~19 KB/s
+# for apt and ~31 KB/s for pip -- slow enough to look like a hang -- so set
+# these to a local mirror there. The same applies on an Alibaba ECS box.
+#
+#   APT_MIRROR=mirrors.aliyun.com
+#   PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG APT_MIRROR=""
+ARG PIP_INDEX_URL=""
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 
 WORKDIR /app
+
+# Point apt at the mirror when one is given. Trixie ships the deb822 format at
+# sources.list.d/debian.sources; older images use the one-line sources.list.
+# Handle whichever is present so this does not silently no-op on a base bump.
+RUN if [ -n "$APT_MIRROR" ]; then \
+        for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+            [ -f "$f" ] && sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f" || true; \
+        done; \
+    fi
 
 # Build-only toolchain for wheels that compile (pywhispercpp, webrtcvad, nh3).
 # Installed here and NOT carried into the runtime layers below.
