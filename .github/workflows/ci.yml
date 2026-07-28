@@ -1,11 +1,16 @@
 name: CI
 
-# Fast, hermetic checks on every PR and push to main.
-# Nothing here touches a cloud account or needs a secret.
+# Every PR and push to main. No cloud account, no secrets.
 #
-# The `arch` job is the interesting one: it enforces the dependency invariants
-# ARCHITECTURE.md section 9 declares as law, so a PR that breaks the layer model
-# fails before review.
+# Shape:
+#   arch      -- ARCHITECTURE.md section 9 invariants (fastest signal, no deps)
+#   service   -- 8 jobs, one per sidecar: install ITS dependencies, boot it
+#   unit      -- the whole unit suite once
+#   client    -- 3 jobs: web (Next.js), desktop (Electron), mobile (Expo/RN)
+#
+# The per-service matrix is the point: unit-test coverage is uneven (shell,
+# speak and browser have no tests), so `scripts/smoke_service.py` proves each
+# sidecar's dependency chain actually imports and mounts an app.
 
 on:
   pull_request:
@@ -17,10 +22,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # infra/model/llm.py and infra/model/vision/__init__.py validate their
-  # provider vars at IMPORT time and raise RuntimeError when unset. Tests are
-  # hermetic and never make a real call, so CI seeds throwaway values purely to
-  # let `import infra...` succeed. These are not secrets and must stay fake.
+  # infra/model/llm.py:45 and infra/model/vision/__init__.py:30 validate their
+  # provider vars at IMPORT time and raise RuntimeError when unset. Every job
+  # below imports application code, so CI seeds throwaway values purely to let
+  # the import succeed. Tests never make a real call -- these must stay fake.
   LLM_PROVIDER: deepseek
   DEEPSEEK_API_KEY: ci-not-a-real-key
   DEEPSEEK_BASE_URL: https://api.deepseek.com
@@ -31,7 +36,7 @@ env:
   DOUBAO_VISION_MODEL: doubao-seed-2-0-lite-260428
 
 jobs:
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
   arch:
     name: Architecture invariants
     runs-on: ubuntu-latest
@@ -40,15 +45,76 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      # Pure stdlib (ast) — no dependency install needed, so this is the
-      # fastest signal in the pipeline and gates nothing behind pip.
-      - name: Dependency graph (ARCHITECTURE.md section 9, invariants 1-4)
+      # Pure stdlib (ast) -- no pip install, so this fails fast and cheap.
+      - name: Dependency graph (invariants 1-4)
         run: python scripts/check_arch.py --list
 
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # One job per sidecar. `fail-fast: false` so a break in `speak` still tells
+  # you whether `browser` is healthy in the same run.
+  service:
+    name: ${{ matrix.service }} (+${{ matrix.offset }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Offsets mirror infra/topology.py:SERVICE_OFFSETS.
+          - { service: shell,      offset: 0, media: false }
+          - { service: persona,    offset: 1, media: false }
+          - { service: knowledge,  offset: 2, media: false }
+          - { service: transcribe, offset: 3, media: true  }
+          - { service: speak,      offset: 4, media: true  }
+          - { service: browser,    offset: 5, media: true  }
+          - { service: maestro,    offset: 6, media: false }
+          - { service: tuning,     offset: 8, media: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ffmpeg/ffprobe is a hard prerequisite for transcribe + infra/media
+      # (CLAUDE.md > Prerequisites). Only the media sidecars pay this cost.
+      - name: System dependencies (media sidecars)
+        if: matrix.media
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # services/browser drives Playwright; install the actual browser so a
+      # missing system library shows up here rather than at runtime.
+      - name: Chromium (browser sidecar)
+        if: matrix.service == 'browser'
+        run: playwright install --with-deps chromium
+
+      # The real per-service check: import the sidecar and confirm it mounts.
+      - name: Boot smoke test
+        run: python scripts/smoke_service.py ${{ matrix.service }}
+
+      # Run whichever unit tests mention this service. Not every sidecar has
+      # them -- `--ignore-missing` semantics via the `|| true` on the collect
+      # step would hide real failures, so instead we skip cleanly when the
+      # match set is empty and fail loudly when it is not.
+      - name: Service-scoped tests
+        shell: bash
+        run: |
+          mapfile -t files < <(grep -rl "services\.${{ matrix.service }}\|services/${{ matrix.service }}" tests/unit || true)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no unit tests reference services/${{ matrix.service }} -- boot smoke test is the only gate"
+            exit 0
+          fi
+          echo "running ${#files[@]} test file(s):"
+          printf '  %s\n' "${files[@]}"
+          pytest "${files[@]}" -q
+
+  # ===========================================================================
   unit:
-    name: Unit tests
+    name: Unit suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,51 +123,67 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # ffmpeg is a hard prerequisite for services/transcribe + infra/media
-      # (CLAUDE.md > Prerequisites). Some unit tests import those modules.
-      - name: Install ffmpeg
+      - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
-      - name: Install dependencies
+      - name: Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # tests/unit is hermetic: the root conftest pins the skillforge adapter to
-      # its default-off baseline, and no unit test needs Postgres or Ollama.
-      # tests/e2e DOES need the full topology and runs in the e2e workflow.
-      - name: Run unit tests
+      # tests/unit is hermetic: the root conftest pins the skillforge adapter
+      # to its default-off baseline and nothing needs Postgres or Ollama.
+      # tests/e2e needs the full running topology and lives in its own workflow.
+      - name: Unit tests
         run: pytest tests/unit -q
 
-      # The user-data map guard (ARCHITECTURE.md section 2.6) is the invariant that
-      # catches a new user-data store that forgot to register itself. Called out
-      # separately so a failure here is unmistakable in the log.
-      - name: User-data map guard (section 2.6)
+      # Called out separately so a failure is unmistakable in the log: this is
+      # the guard that catches a new user-data store that forgot to register
+      # itself (ARCHITECTURE.md section 2.6).
+      - name: User-data map guard
         run: pytest tests/unit/test_user_data_map.py -q
 
-  # ---------------------------------------------------------------------------
-  frontend:
-    name: Frontend
+  # ===========================================================================
+  # Three client surfaces, three jobs. All Node, but different toolchains:
+  # Next.js build, Electron tsc, Expo/React Native typecheck.
+  client:
+    name: "client: ${{ matrix.name }}"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: web,     dir: frontend }
+          - { name: desktop, dir: desktop  }
+          - { name: mobile,  dir: mobile   }
     defaults:
       run:
-        working-directory: frontend
+        working-directory: ${{ matrix.dir }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
 
-      # `npm ci` needs a lockfile; fall back to `install` so this job is useful
-      # even before one is committed.
       - name: Install
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+      # Only the web client defines `lint`; skip quietly elsewhere rather than
+      # failing on a script that was never meant to exist.
       - name: Lint
-        run: npm run lint
+        run: npm run --if-present lint
 
-      - name: Build
-        run: npm run build
+      # web     -> next build
+      # desktop -> tsc -p tsconfig.json (compiles the Electron main process)
+      # mobile  -> no build script; typecheck instead. `expo prebuild` needs the
+      #            Android SDK, which is out of scope for a PR gate.
+      - name: Build / typecheck
+        run: |
+          if npm run | grep -qE '^  build'; then
+            npm run build
+          else
+            npx --yes tsc --noEmit -p tsconfig.json
+          fi
