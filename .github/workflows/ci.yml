@@ -147,6 +147,11 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+      # The same render path rasterises through headless Chromium, so the
+      # browser binary is required too, not just the mermaid package.
+      - name: Chromium (needed by the render tests)
+        run: playwright install --with-deps chromium
+
       # tests/unit is otherwise hermetic: the root conftest pins the skillforge
       # adapter to its default-off baseline and nothing needs Postgres or Ollama.
       # tests/e2e needs the full running topology and lives in its own workflow.
@@ -176,9 +181,11 @@ jobs:
       run:
         working-directory: ${{ matrix.dir }}
     env:
-      # eslint over the web app exhausts Node's default ~2GB heap on a
-      # standard runner and dies with exit 134 (OOM). Raise the old-space cap.
-      NODE_OPTIONS: --max-old-space-size=4096
+      # frontend/eslint.config.mjs pulls in eslint-config-next/typescript, which
+      # is type-aware: typescript-eslint builds a full program for the project.
+      # That legitimately needs several GB and OOMs (exit 134) at both Node's
+      # ~2GB default and 4GB. Runners have 16GB, so give it 8.
+      NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
