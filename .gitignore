@@ -35,3 +35,4 @@ benchmark/*/*/runs/
 .*.swp
 scripts/mobile-build-env.sh
 brainstorm/
+.local-ci/

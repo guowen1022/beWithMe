@@ -17,11 +17,13 @@
 // Mermaid lives in frontend/node_modules — ESM doesn't fall back through
 // parent dirs the way CJS does, so import via a path relative to this
 // file rather than the bare specifier.
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const mermaidEntry = resolve(__dirname, "../frontend/node_modules/mermaid/dist/mermaid.core.mjs");
-const mermaid = (await import(mermaidEntry)).default;
+// pathToFileURL: Node's ESM loader rejects a bare Windows absolute path,
+// reading the drive letter as an unsupported URL scheme. POSIX tolerates it.
+const mermaid = (await import(pathToFileURL(mermaidEntry).href)).default;
 
 let src = "";
 process.stdin.setEncoding("utf-8");

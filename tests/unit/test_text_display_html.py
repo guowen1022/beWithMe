@@ -45,6 +45,11 @@ def _render_html(content: str) -> str:
         input=js,
         capture_output=True,
         text=True,
+        # text=True alone decodes with the locale encoding, which on a zh-CN
+        # Windows box is GBK; the em-dash in these fixtures then fails to
+        # encode on the way in and the reader thread dies, so stdout comes back
+        # as None. Node speaks UTF-8 on every platform -- say so explicitly.
+        encoding="utf-8",
         timeout=15,
     )
     if proc.returncode != 0:
