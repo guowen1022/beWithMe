@@ -24,6 +24,13 @@ import argparse
 import importlib
 import sys
 import traceback
+from pathlib import Path
+
+# Running this as `python scripts/smoke_service.py` puts scripts/ on sys.path,
+# not the repo root, so `services.*` would not resolve. Prepend the root.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # Keep in sync with infra/topology.py:SERVICE_OFFSETS.
 SERVICES = ["shell", "persona", "knowledge", "transcribe", "speak", "browser", "maestro", "tuning"]
