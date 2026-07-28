@@ -61,6 +61,30 @@ class Settings(BaseSettings):
     skillforge_store_url: str = ""
     skillforge_eval_svc_url: str = ""
 
+    # --- Authentication -------------------------------------------------
+    # ARCHITECTURE.md section 6: the default trust model verifies only that a
+    # user id EXISTS, so `X-User-Id` is an unverified assertion. That is fine
+    # on one machine and unsafe the moment the shell has a public address.
+    #
+    # "legacy" reproduces that behaviour exactly (no UX change, nothing breaks).
+    # "strict" requires a signed session token and stops trusting the header.
+    # See docs/SECURITY.md.
+    bewithme_auth_mode: str = "legacy"  # "legacy" | "strict"
+
+    # HMAC key for infra/session_token.py. Required in strict mode; the shell
+    # refuses to start without it. Generate with:
+    #   python -c "from infra.session_token import generate_secret_key as g; print(g())"
+    bewithme_secret_key: str = ""
+
+    # Shared access key a client presents once to obtain a session token in
+    # strict mode. Empty in strict mode => no token can ever be issued.
+    bewithme_access_key: str = ""
+
+    # Comma-separated CORS origins for the shell. Empty keeps the historical
+    # localhost:3000/3002 pair, so local dev is unaffected; any real deployment
+    # must set this to the frontend's actual origin.
+    bewithme_cors_origins: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"
