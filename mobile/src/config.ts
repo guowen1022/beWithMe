@@ -7,12 +7,16 @@ const KEY_BASE_URL = "bewithme.baseUrl";
 const KEY_USER_ID = "bewithme.userId";
 const KEY_DEVICE_ID = "bewithme.deviceId";
 const KEY_OUTPUT_DEVICE_ID = "bewithme.outputDeviceId";
+// Signed session token (docs/SECURITY.md). Null in legacy mode, where the
+// backend has no token to issue and X-User-Id alone is accepted.
+const KEY_SESSION_TOKEN = "bewithme.sessionToken";
 
 interface ConfigState {
   baseUrl: string;
   userId: string | null;
   deviceId: string;
   outputDeviceId: string | null;
+  sessionToken: string | null;
 }
 
 const state: ConfigState = {
@@ -20,6 +24,7 @@ const state: ConfigState = {
   userId: null,
   deviceId: "",
   outputDeviceId: null,
+  sessionToken: null,
 };
 
 let loaded = false;
@@ -38,15 +43,17 @@ export function uuidv4(): string {
 
 export async function loadConfig(): Promise<ConfigState> {
   if (loaded) return { ...state };
-  const [baseUrl, userId, deviceId, outputDeviceId] = await Promise.all([
+  const [baseUrl, userId, deviceId, outputDeviceId, sessionToken] = await Promise.all([
     AsyncStorage.getItem(KEY_BASE_URL),
     AsyncStorage.getItem(KEY_USER_ID),
     AsyncStorage.getItem(KEY_DEVICE_ID),
     AsyncStorage.getItem(KEY_OUTPUT_DEVICE_ID),
+    AsyncStorage.getItem(KEY_SESSION_TOKEN),
   ]);
   state.baseUrl = baseUrl ?? "";
   state.userId = userId;
   state.outputDeviceId = outputDeviceId;
+  state.sessionToken = sessionToken;
   if (deviceId) {
     state.deviceId = deviceId;
   } else {
@@ -61,6 +68,7 @@ export function getBaseUrl(): string { return state.baseUrl; }
 export function getUserId(): string | null { return state.userId; }
 export function getDeviceId(): string { return state.deviceId; }
 export function getOutputDeviceId(): string | null { return state.outputDeviceId; }
+export function getSessionToken(): string | null { return state.sessionToken; }
 
 export async function setBaseUrl(url: string): Promise<void> {
   state.baseUrl = url.replace(/\/+$/, "");
@@ -72,9 +80,20 @@ export async function setUserId(id: string): Promise<void> {
   await AsyncStorage.setItem(KEY_USER_ID, id);
 }
 
+export async function setSessionToken(token: string): Promise<void> {
+  state.sessionToken = token;
+  await AsyncStorage.setItem(KEY_SESSION_TOKEN, token);
+}
+
 export async function clearUserId(): Promise<void> {
   state.userId = null;
-  await AsyncStorage.removeItem(KEY_USER_ID);
+  state.sessionToken = null;
+  await Promise.all([
+    AsyncStorage.removeItem(KEY_USER_ID),
+    // Drop the token with the user -- a stale token for a signed-out identity
+    // is exactly the thing that should not linger on a device.
+    AsyncStorage.removeItem(KEY_SESSION_TOKEN),
+  ]);
 }
 
 export async function setOutputDeviceId(id: string | null): Promise<void> {
