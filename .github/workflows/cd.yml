@@ -1,0 +1,226 @@
+name: CD
+
+# Build both images, push to Alibaba Container Registry, deploy to the ECS box.
+#
+# Gated on CI: `workflow_run` fires only after the CI workflow finishes, and the
+# guard below refuses to proceed unless it succeeded on main. A red build never
+# reaches the server.
+#
+# Two deliberate choices:
+#   * GitHub OIDC -> Alibaba RAM role. No AccessKey is stored in repo secrets;
+#     every run gets a short-lived STS credential scoped by a RAM condition to
+#     this repo on this branch.
+#   * Cloud Assistant RunCommand, not SSH. No private key in GitHub, and port 22
+#     never has to be open to the internet.
+#
+# Manual rollback:
+#   Actions -> CD -> Run workflow -> rollback: true
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback:
+        description: "Roll back to the previously deployed tag"
+        type: boolean
+        default: false
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false # never interrupt a deploy mid-flight
+
+permissions:
+  id-token: write # required to mint the GitHub OIDC token
+  contents: read
+
+env:
+  # ---- CHANGE ME: your Alibaba Cloud coordinates ---------------------------
+  ALIYUN_REGION: cn-hangzhou
+  ACR_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ACR_NAMESPACE: bewithme
+  ALIYUN_ACCOUNT_ID: "123456789012"
+  OIDC_PROVIDER_NAME: github-actions
+  RAM_ROLE_NAME: gha-bewithme-deployer
+  ECS_INSTANCE_ID: i-xxxxxxxxxxxxxxxxxxxx
+  DEPLOY_DIR: /opt/bewithme
+
+jobs:
+  # ===========================================================================
+  # workflow_run fires on failure too, so the whole pipeline hangs off this.
+  guard:
+    name: Gate on CI
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - id: pick
+        run: |
+          # For workflow_run, deploy the commit CI actually validated — not
+          # whatever happens to be at the head of main right now.
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          echo "sha=$SHA"            >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "Deploying $SHA (tag sha-${SHA:0:12})"
+
+  # ===========================================================================
+  build:
+    name: Build and push images
+    needs: guard
+    if: ${{ !inputs.rollback }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.sha }}
+
+      - name: Install aliyun CLI
+        run: |
+          curl -sSL -o aliyun.tgz https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz
+          tar xzf aliyun.tgz && sudo mv aliyun /usr/local/bin/
+
+      - name: Assume RAM role via OIDC
+        id: sts
+        run: |
+          OIDC_TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.aliyuncs.com" | jq -r '.value')
+          CREDS=$(aliyun sts AssumeRoleWithOIDC \
+            --OIDCProviderArn "acs:ram::${ALIYUN_ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER_NAME}" \
+            --RoleArn "acs:ram::${ALIYUN_ACCOUNT_ID}:role/${RAM_ROLE_NAME}" \
+            --OIDCToken "$OIDC_TOKEN" \
+            --RoleSessionName "gha-${GITHUB_RUN_ID}" \
+            --region "${ALIYUN_REGION}")
+          for pair in "ak=AccessKeyId" "sk=AccessKeySecret" "st=SecurityToken"; do
+            name="${pair%%=*}"; field="${pair##*=}"
+            value=$(echo "$CREDS" | jq -r ".Credentials.${field}")
+            echo "::add-mask::$value"
+            echo "${name}=${value}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: ACR login
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.sts.outputs.ak }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.sts.outputs.sk }}
+          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.sts.outputs.st }}
+        run: |
+          AUTH=$(aliyun cr GetAuthorizationToken --region "${ALIYUN_REGION}")
+          echo "$AUTH" | jq -r '.authorizationToken' \
+            | docker login "$ACR_REGISTRY" -u "$(echo "$AUTH" | jq -r '.tempUserName')" --password-stdin
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Both targets come from one Dockerfile and share the `base` stage, so the
+      # dependency layer is built once and reused by the second build.
+      - name: Build and push core
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: core
+          push: true
+          tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/bewithme-core:${{ needs.guard.outputs.tag }}
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,scope=core,mode=max
+
+      - name: Build and push media
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: media
+          push: true
+          tags: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/bewithme-media:${{ needs.guard.outputs.tag }}
+          cache-from: type=gha,scope=media
+          cache-to: type=gha,scope=media,mode=max
+
+  # ===========================================================================
+  deploy:
+    name: Deploy to ECS
+    needs: [guard, build]
+    # `always()` so a rollback dispatch (which skips `build`) still runs.
+    if: ${{ always() && needs.guard.result == 'success' && (needs.build.result == 'success' || inputs.rollback) }}
+    runs-on: ubuntu-latest
+    environment: production # attach a required reviewer here for manual approval
+    steps:
+      - name: Install aliyun CLI
+        run: |
+          curl -sSL -o aliyun.tgz https://aliyuncli.alicdn.com/aliyun-cli-linux-latest-amd64.tgz
+          tar xzf aliyun.tgz && sudo mv aliyun /usr/local/bin/
+
+      - name: Assume RAM role via OIDC
+        id: sts
+        run: |
+          OIDC_TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.aliyuncs.com" | jq -r '.value')
+          CREDS=$(aliyun sts AssumeRoleWithOIDC \
+            --OIDCProviderArn "acs:ram::${ALIYUN_ACCOUNT_ID}:oidc-provider/${OIDC_PROVIDER_NAME}" \
+            --RoleArn "acs:ram::${ALIYUN_ACCOUNT_ID}:role/${RAM_ROLE_NAME}" \
+            --OIDCToken "$OIDC_TOKEN" \
+            --RoleSessionName "gha-deploy-${GITHUB_RUN_ID}" \
+            --region "${ALIYUN_REGION}")
+          for pair in "ak=AccessKeyId" "sk=AccessKeySecret" "st=SecurityToken"; do
+            name="${pair%%=*}"; field="${pair##*=}"
+            value=$(echo "$CREDS" | jq -r ".Credentials.${field}")
+            echo "::add-mask::$value"
+            echo "${name}=${value}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Run deploy on the instance
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ steps.sts.outputs.ak }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ steps.sts.outputs.sk }}
+          ALIBABA_CLOUD_SECURITY_TOKEN: ${{ steps.sts.outputs.st }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.rollback }}" = "true" ]; then
+            ARG="--rollback"
+          else
+            ARG="${{ needs.guard.outputs.tag }}"
+          fi
+
+          # git fetch/checkout so the box runs the compose + deploy script from
+          # the exact commit being deployed, not whatever it last had on disk.
+          SCRIPT=$(cat <<EOF
+          set -euo pipefail
+          cd ${DEPLOY_DIR}
+          git fetch --depth 1 origin ${{ needs.guard.outputs.sha }}
+          git checkout -q --detach ${{ needs.guard.outputs.sha }}
+          chmod +x scripts/deploy-ecs.sh
+          ./scripts/deploy-ecs.sh ${ARG}
+          EOF
+          )
+
+          INVOKE=$(aliyun ecs RunCommand \
+            --RegionId "${ALIYUN_REGION}" \
+            --InstanceId.1 "${ECS_INSTANCE_ID}" \
+            --Type RunShellScript \
+            --Timeout 900 \
+            --ContentEncoding PlainText \
+            --CommandContent "$SCRIPT")
+          INVOKE_ID=$(echo "$INVOKE" | jq -r '.InvokeId')
+          echo "invocation: $INVOKE_ID"
+
+          # Poll to completion — RunCommand returns immediately.
+          for i in $(seq 1 90); do
+            RES=$(aliyun ecs DescribeInvocationResults \
+              --RegionId "${ALIYUN_REGION}" --InvokeId "$INVOKE_ID")
+            STATUS=$(echo "$RES" | jq -r '.Invocation.InvocationResults.InvocationResult[0].InvocationStatus')
+            if [ "$STATUS" != "Running" ] && [ "$STATUS" != "Pending" ]; then
+              echo "$RES" | jq -r '.Invocation.InvocationResults.InvocationResult[0].Output' | base64 -d || true
+              EXIT=$(echo "$RES" | jq -r '.Invocation.InvocationResults.InvocationResult[0].ExitCode')
+              echo "status=$STATUS exit=$EXIT"
+              [ "$EXIT" = "0" ] || exit 1
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "timed out waiting for the deploy to finish" >&2
+          exit 1

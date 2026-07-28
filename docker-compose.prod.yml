@@ -1,0 +1,72 @@
+# Production overlay for a single ECS instance.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What it changes versus the base file:
+#   * pulls images from ACR by digest-pinned tag instead of building locally
+#   * removes the `build:` blocks so a stray `--build` cannot rebuild on the box
+#   * bounds log growth (the default json-file driver grows without limit and
+#     will eventually fill the ECS system disk)
+#   * binds the published port to the loopback, so the shell is reachable only
+#     through the host's nginx/TLS terminator rather than directly on :8000
+#
+# IMAGE_CORE / IMAGE_MEDIA are set by scripts/deploy-ecs.sh from the tag the CD
+# pipeline just pushed.
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    <<: *logging
+
+  ollama:
+    <<: *logging
+
+  shell:
+    image: ${IMAGE_CORE:?IMAGE_CORE must be set}
+    build: !reset null
+    <<: *logging
+    # Loopback only. Terminate TLS in front (see docs/DEPLOY.md section 3.4);
+    # exposing 0.0.0.0:8000 would put the API on the internet in cleartext.
+    ports: !override
+      - "127.0.0.1:${SHELL_PORT:-8000}:8000"
+
+  persona:
+    image: ${IMAGE_CORE:?IMAGE_CORE must be set}
+    build: !reset null
+    <<: *logging
+
+  knowledge:
+    image: ${IMAGE_CORE:?IMAGE_CORE must be set}
+    build: !reset null
+    <<: *logging
+
+  maestro:
+    image: ${IMAGE_CORE:?IMAGE_CORE must be set}
+    build: !reset null
+    <<: *logging
+
+  tuning:
+    image: ${IMAGE_CORE:?IMAGE_CORE must be set}
+    build: !reset null
+    <<: *logging
+
+  transcribe:
+    image: ${IMAGE_MEDIA:?IMAGE_MEDIA must be set}
+    build: !reset null
+    <<: *logging
+
+  speak:
+    image: ${IMAGE_MEDIA:?IMAGE_MEDIA must be set}
+    build: !reset null
+    <<: *logging
+
+  browser:
+    image: ${IMAGE_MEDIA:?IMAGE_MEDIA must be set}
+    build: !reset null
+    <<: *logging
