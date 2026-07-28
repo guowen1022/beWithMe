@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect } from "react";
-import type katex from "katex";
+
+// katex's .d.ts declares `export = katex`. Under esModuleInterop a default
+// import's `typeof` widens to the object intersected with the module
+// namespace, which nothing actually assignable satisfies. Naming the module
+// type directly avoids that intersection entirely.
+type Katex = typeof import("katex");
 
 declare global {
   interface Window {
-    katex?: typeof katex;
-    __katexReady?: Promise<typeof katex>;
+    katex?: Katex;
+    __katexReady?: Promise<Katex>;
   }
 }
 
@@ -17,8 +22,11 @@ export default function KaTeXGlobal() {
 
     window.__katexReady = (async () => {
       const mod = await import("katex");
-      window.katex = mod.default;
-      return mod.default;
+      // With `export =`, the interop shape is `{ default: katex }`; `mod.default`
+      // is the katex object itself. Unchanged from before — type-only fix.
+      const katexRuntime = mod.default as Katex;
+      window.katex = katexRuntime;
+      return katexRuntime;
     })();
   }, []);
 

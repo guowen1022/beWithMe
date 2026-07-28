@@ -257,7 +257,10 @@ export default function Reader({ onGoalPlan: _onGoalPlan }: { onGoalPlan?: () =>
     setNavigatedNodeId(null);
 
     setExplorationTree((prev) => {
-      const tree = prev ?? createTree(content);
+      // No passage lives in Reader since 98916c9 stripped the legacy paths;
+      // createTree takes the passage text, so an empty string is the honest
+      // post-refactor value until the tree moves to a dynamic block.
+      const tree = prev ?? createTree("");
       return addTreeNode(tree, newNode, parentLocalId);
     });
     if (!treePanelOpen) setTreePanelOpen(true);
@@ -265,7 +268,9 @@ export default function Reader({ onGoalPlan: _onGoalPlan }: { onGoalPlan?: () =>
     try {
       await askStream(
         {
-          passage_text: content,
+          // Optional in AskRequest. Reader no longer owns a passage (98916c9),
+          // so it is omitted rather than sent as a bogus value.
+          passage_text: undefined,
           selected_text: sel || undefined,
           question: question.trim(),
           session_id: sessionId,
@@ -429,7 +434,7 @@ export default function Reader({ onGoalPlan: _onGoalPlan }: { onGoalPlan?: () =>
           onClose={() => setTreePanelOpen(false)}
           onNavigate={navigateToNode}
           onToggleCollapse={handleToggleCollapse}
-          passageText={content}
+          passageText=""
           outlineSections={outlineSections}
           onSectionClick={handleSectionClick}
         />
