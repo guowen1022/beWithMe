@@ -88,7 +88,10 @@ export default function KnowledgeGraph({ refreshKey }: { refreshKey: number }) {
 
     // Nodes
     const node = g.append("g")
-      .selectAll("g")
+      // Type the selection's element as SVGGElement: bare selectAll("g") infers
+      // BaseType, which does not satisfy d3.drag<SVGGElement, SimNode>'s
+      // expected selection in .call() below.
+      .selectAll<SVGGElement, SimNode>("g")
       .data(nodes)
       .join("g")
       .call(d3.drag<SVGGElement, SimNode>()
