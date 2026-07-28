@@ -131,8 +131,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # tests/unit is hermetic: the root conftest pins the skillforge adapter
-      # to its default-off baseline and nothing needs Postgres or Ollama.
+      # Node + the frontend's packages are NOT optional for this job. The
+      # note/mermaid/text-display render paths shell out to Node and load
+      # mermaid straight from the frontend tree
+      # (infra/render/mermaid.py: frontend/node_modules/mermaid/dist/mermaid.min.js),
+      # so ~49 unit tests fail with "mermaid module not found" without them.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend packages (needed by the render tests)
+        working-directory: frontend
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      # tests/unit is otherwise hermetic: the root conftest pins the skillforge
+      # adapter to its default-off baseline and nothing needs Postgres or Ollama.
       # tests/e2e needs the full running topology and lives in its own workflow.
       - name: Unit tests
         run: pytest tests/unit -q
@@ -159,6 +175,10 @@ jobs:
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
+    env:
+      # eslint over the web app exhausts Node's default ~2GB heap on a
+      # standard runner and dies with exit 134 (OOM). Raise the old-space cap.
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
