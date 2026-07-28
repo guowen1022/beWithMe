@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listUsers, createUser, setCurrentUserId, type User } from "@/lib/api";
+import {
+  listUsers,
+  createUser,
+  setCurrentUserId,
+  startSession,
+  type User,
+} from "@/lib/api";
+
+// Access key for a deployment running BEWITHME_AUTH_MODE=strict. Unset for
+// local/private deployments, where legacy mode needs no credential at all —
+// which is why selecting a user looks identical either way.
+const ACCESS_KEY = process.env.NEXT_PUBLIC_BEWITHME_ACCESS_KEY;
 
 interface UserSelectorProps {
   onUserSelected: (userId: string) => void;
@@ -23,8 +34,12 @@ export default function UserSelector({ onUserSelected }: UserSelectorProps) {
       .catch(() => setLoading(false));
   }, []);
 
-  function selectUser(userId: string) {
+  async function selectUser(userId: string) {
     setCurrentUserId(userId);
+    // Exchange for a signed session token before entering the app. Awaited so
+    // the first authenticated request already carries it; best-effort inside,
+    // so a legacy deployment (no signing key) proceeds exactly as before.
+    await startSession(userId, ACCESS_KEY);
     onUserSelected(userId);
   }
 
@@ -35,7 +50,7 @@ export default function UserSelector({ onUserSelected }: UserSelectorProps) {
     try {
       const user = await createUser(newUsername.trim());
       setUsers((prev) => [...prev, user]);
-      selectUser(user.id);
+      await selectUser(user.id);
     } catch (err: any) {
       setError(err.message || "Failed to create user");
     } finally {
@@ -65,7 +80,7 @@ export default function UserSelector({ onUserSelected }: UserSelectorProps) {
               {users.map((u) => (
                 <button
                   key={u.id}
-                  onClick={() => selectUser(u.id)}
+                  onClick={() => void selectUser(u.id)}
                   className="w-full text-left px-4 py-2 rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
                 >
                   <span className="font-medium text-gray-700">{u.username}</span>

@@ -36,6 +36,12 @@ x-common-env: &common-env
   DOUBAO_BASE_URL: ${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
   DOUBAO_VISION_MODEL: ${DOUBAO_VISION_MODEL:-}
   BEWITHME_DEBUG: ${BEWITHME_DEBUG:-0}
+  # Auth (docs/SECURITY.md). Defaults reproduce the historical behaviour;
+  # set BEWITHME_AUTH_MODE=strict + both keys before exposing the shell.
+  BEWITHME_AUTH_MODE: ${BEWITHME_AUTH_MODE:-legacy}
+  BEWITHME_SECRET_KEY: ${BEWITHME_SECRET_KEY:-}
+  BEWITHME_ACCESS_KEY: ${BEWITHME_ACCESS_KEY:-}
+  BEWITHME_CORS_ORIGINS: ${BEWITHME_CORS_ORIGINS:-}
 
 x-core: &core
   image: ${IMAGE_CORE:-bewithme-core:dev}

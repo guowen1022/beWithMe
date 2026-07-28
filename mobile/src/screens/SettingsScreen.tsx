@@ -7,8 +7,14 @@ import {
   getOutputDeviceId, setOutputDeviceId, getDeviceId,
 } from "../config";
 import { ensureUser } from "../lib/api/users";
+import { startSession } from "../lib/api/client";
 import { updateTalkPreference, PHONE_VOICE_PREFERENCE } from "../lib/api/profile";
 import { listDevices, type DeviceSummary } from "../lib/api/devices";
+
+// Access key for a backend running BEWITHME_AUTH_MODE=strict. Undefined for
+// private/legacy deployments, which need no credential — which is why signing
+// in looks identical either way.
+const BEWITHME_ACCESS_KEY = process.env.EXPO_PUBLIC_BEWITHME_ACCESS_KEY;
 
 export function SettingsScreen(): React.ReactElement {
   const nav = useNavigation();
@@ -64,6 +70,9 @@ export function SettingsScreen(): React.ReactElement {
     try {
       const user = await ensureUser(name);
       await setUserId(user.id);
+      // Exchange for a signed session token before any authenticated call.
+      // No-op against a legacy backend, which issues none. docs/SECURITY.md.
+      await startSession(user.id, BEWITHME_ACCESS_KEY);
       await updateTalkPreference(PHONE_VOICE_PREFERENCE).catch(() => {
         // Non-fatal: persona will still answer, just without Lane A voice prompt.
         console.warn("[settings] talk-preference update failed");

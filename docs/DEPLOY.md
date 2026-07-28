@@ -6,50 +6,44 @@ change before the backend faces the public internet.
 
 ---
 
-## 0. STOP -- read this before exposing anything publicly
+## 0. STOP -- set the auth mode before exposing anything publicly
 
-**The current auth model is a full authentication bypass the moment the shell has a
-public IP.** This is not a hardening nit; it is total.
+The original model was a full authentication bypass on a public IP: `GET /api/users`
+published every user UUID anonymously, and auth only checked that a UUID *existed*, so
+`X-User-Id` was an unverified assertion with the values handed out on request.
 
-`ARCHITECTURE.md` section 6 already says so:
+**That is fixed** -- see [`docs/SECURITY.md`](./SECURITY.md) for the full writeup. But
+the fix ships **off by default**, because turning it on requires keys only you can
+generate. The default (`BEWITHME_AUTH_MODE=legacy`) reproduces the old behaviour exactly
+so nothing breaks locally.
 
-> This trust model is appropriate for single-machine dev and small private deploys.
-> For internet-facing deployments, swap shell-side cookie verification for a signed-token
-> scheme (out of scope until needed).
+**Before the shell gets a public address, set:**
 
-Concretely, the bypass is a two-request chain:
+```bash
+BEWITHME_AUTH_MODE=strict
+BEWITHME_SECRET_KEY=<python -c "from infra.session_token import generate_secret_key as g; print(g())">
+BEWITHME_ACCESS_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">
+BEWITHME_CORS_ORIGINS=https://your-frontend-domain
+BEWITHME_DEBUG=0
+```
 
-| step | request | why it works |
-|---|---|---|
-| 1 | `GET /api/users` | Public, no auth -- `services/shell/auth.py:PUBLIC`. Returns **every user's UUID** (`services/knowledge/routers/users.py:38`). |
-| 2 | any request with `X-User-Id: <that uuid>` | Auth = "does this UUID exist" (`services/knowledge/routers/auth.py:31`). It does. Request is forwarded. |
+and give the clients the same access key (`NEXT_PUBLIC_BEWITHME_ACCESS_KEY` for
+web/desktop, `EXPO_PUBLIC_BEWITHME_ACCESS_KEY` for mobile). In strict mode the shell
+**refuses to boot** without the keys rather than serving something nobody can log into.
 
-There is no secret anywhere in the chain. The `X-User-Id` header is an *assertion of
-identity*, not proof of it, and step 1 hands out the values to assert. Any sidecar
-reached directly (not through the shell) skips even that check.
+Two constraints no auth mode removes:
 
-**This is fine today** -- everything binds to localhost on one machine, and that is the
-deployment the design targets. It stops being fine the instant a public SLB points at
-the shell.
+- **Only the shell may be public.** Sidecars `+1`..`+8` trust the forwarded `X-User-Id`
+  unconditionally (invariant 9). Keep them on the private network.
+- **Terminate TLS in front of the shell.** Tokens are bearer credentials.
 
-### What has to happen first
+One honest limitation: `BEWITHME_ACCESS_KEY` is a single shared secret for the whole
+deployment, not a per-user password. It is what lets the pick-your-name screen keep
+working with no login form. Right for a personal assistant or one household; **not**
+multi-tenant auth. `docs/SECURITY.md` section 4 sketches the per-user upgrade.
 
-Pick one, in rough order of effort:
-
-1. **Don't expose it publicly.** Deploy into a VPC and reach it over VPN / Alibaba Cloud
-   private access. Zero code change, and honestly the right answer for a single-user
-   personal assistant. **Recommended.**
-2. **Put a real identity gateway in front.** Alibaba API Gateway or an nginx ingress with
-   OIDC/OAuth2-proxy terminating a real login, injecting `X-User-Id` only after
-   authenticating, and stripping any client-supplied `X-User-Id`. No app change, but the
-   gateway must be airtight -- a single path that forwards the raw header reopens the hole.
-3. **Implement the signed-token scheme** section 6 anticipates. Shell verifies a signature
-   (JWT/PASETO) instead of existence. This is the durable fix and touches
-   `services/shell/auth.py` plus the frontend's login flow. Also remove `GET /api/users`
-   from `PUBLIC`, or scope it down -- enumerating users should not be anonymous.
-
-Nothing in this repo's CI/CD changes that decision; the pipeline will happily deploy an
-open backend. **Decide this before step 3 below.**
+If you would rather not think about any of this: **deploy into a VPC and reach it over
+VPN**. Zero exposure, and for a single-user assistant it is the sane default.
 
 ---
 
@@ -179,11 +173,17 @@ to *this repo on main*, instead of a long-lived AccessKey pasted into repo secre
 
 Runs on every PR and push to main. No cloud account, no secrets.
 
-| job | what it does |
-|---|---|
-| `arch` | `scripts/check_arch.py` -- enforces `ARCHITECTURE.md` section 9 invariants 1-4 |
-| `unit` | `pytest tests/unit` + the section 2.6 user-data-map guard |
-| `frontend` | `npm run lint` + `npm run build` |
+| job | count | what it does |
+|---|---|---|
+| `arch` | 1 | `scripts/check_arch.py` -- enforces `ARCHITECTURE.md` section 9 invariants 1-4 |
+| `service` | 8 | one per sidecar: installs its dependencies, then `scripts/smoke_service.py` imports it and asserts it mounts an app |
+| `unit` | 1 | `pytest tests/unit` + the section 2.6 user-data-map guard |
+| `client` | 3 | web (`next build`), desktop (`tsc`), mobile (Expo/RN typecheck) |
+
+The per-service matrix earns its keep immediately: it caught `networkx` missing from
+`requirements.txt` entirely, which meant the `knowledge` sidecar could not boot from a
+clean install. Coverage is uneven (`shell`, `speak` and `browser` have no unit tests at
+all), so for those the boot check is the only gate.
 
 `scripts/check_arch.py` is an AST walker, not the `grep` from section 10, specifically so it
 honors invariant 3: a `if TYPE_CHECKING:` import of `silicon_brain` from `persona/` is

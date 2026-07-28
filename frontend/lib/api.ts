@@ -6,6 +6,9 @@ const API_STREAM = "/api"; // use Next.js route handler for SSE
 // --- User management ---
 
 let currentUserId: string | null = null;
+let sessionToken: string | null = null;
+
+const TOKEN_KEY = "bewithme_session_token";
 
 export function setCurrentUserId(id: string) {
   currentUserId = id;
@@ -26,6 +29,62 @@ export function clearCurrentUserId() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("bewithme_user_id");
   }
+  clearSessionToken();
+}
+
+// --- Session token (see docs/SECURITY.md) ---
+//
+// The backend runs in one of two auth modes. In `legacy` there is no token and
+// everything below is inert, so this is a no-op for local development. In
+// `strict` the server ignores X-User-Id entirely and trusts only this token,
+// which it alone can sign.
+
+export function getSessionToken(): string | null {
+  if (!sessionToken && typeof window !== "undefined") {
+    sessionToken = localStorage.getItem(TOKEN_KEY);
+  }
+  return sessionToken;
+}
+
+export function setSessionToken(token: string) {
+  sessionToken = token;
+  if (typeof window !== "undefined") localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearSessionToken() {
+  sessionToken = null;
+  if (typeof window !== "undefined") localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Exchange a user id (plus the deployment's access key in strict mode) for a
+ * signed session token, and remember it.
+ *
+ * Best-effort by design: in legacy mode a deployment may not have a signing
+ * key configured, and failing here must not stop the user getting in — the
+ * X-User-Id path still works. In strict mode the subsequent API call is the
+ * thing that will 401, which is the correct place to surface it.
+ */
+export async function startSession(
+  userId: string,
+  accessKey?: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, access_key: accessKey ?? null }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (typeof data?.token === "string") {
+      setSessionToken(data.token);
+      return true;
+    }
+  } catch {
+    // Network/legacy-mode failure — fall through to the header path.
+  }
+  return false;
 }
 
 export class UnknownUserError extends Error {
@@ -44,11 +103,31 @@ async function throwIfUnknownUser(res: Response) {
 
 function authHeaders(): Record<string, string> {
   const userId = getCurrentUserId();
+  const token = getSessionToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // Sent in both modes. strict ignores X-User-Id; legacy ignores the bearer.
+  // Keeping both means one client build works against either deployment.
   if (userId) {
     headers["X-User-Id"] = userId;
   }
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   return headers;
+}
+
+/**
+ * Attach identity to a header bag that was built by hand.
+ *
+ * Several callers below cannot use authHeaders() because it sets
+ * Content-Type: application/json, which would clobber the multipart boundary
+ * fetch generates for FormData. They still need the bearer token, so this
+ * carries the identity part alone.
+ */
+function applyIdentity(headers: Record<string, string>, userId: string | null) {
+  applyIdentity(headers, userId);
+  const token = getSessionToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 }
 
 export interface User {
@@ -475,7 +554,7 @@ export async function uploadPdf(file: File): Promise<PdfUploadResult> {
   formData.append("file", file);
   const userId = getCurrentUserId();
   const headers: Record<string, string> = {};
-  if (userId) headers["X-User-Id"] = userId;
+  applyIdentity(headers, userId);
   const res = await fetch(`${API_BASE}/documents/upload`, {
     method: "POST",
     headers,
@@ -492,7 +571,7 @@ export async function uploadPdf(file: File): Promise<PdfUploadResult> {
 export async function uploadUrl(url: string): Promise<PdfUploadResult> {
   const userId = getCurrentUserId();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (userId) headers["X-User-Id"] = userId;
+  applyIdentity(headers, userId);
   const res = await fetch(`${API_BASE}/documents/url`, {
     method: "POST",
     headers,
@@ -541,7 +620,7 @@ export async function browserHandoff(url: string): Promise<{ status: string; mes
 export async function browserResume(): Promise<PdfUploadResult> {
   const userId = getCurrentUserId();
   const headers: Record<string, string> = {};
-  if (userId) headers["X-User-Id"] = userId;
+  applyIdentity(headers, userId);
   const res = await fetch(`${API_BASE}/browser/resume`, {
     method: "POST",
     headers,
@@ -817,7 +896,7 @@ export async function transcribeAudio(
   // would override fetch's auto-generated multipart boundary on FormData.
   const userId = getCurrentUserId();
   const headers: Record<string, string> = {};
-  if (userId) headers["X-User-Id"] = userId;
+  applyIdentity(headers, userId);
   const res = await fetch(`${API_BASE}/transcribe`, {
     method: "POST",
     headers,
