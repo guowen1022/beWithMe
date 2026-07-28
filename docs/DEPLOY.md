@@ -108,10 +108,16 @@ KNOWLEDGE_SERVICE_URL=http://knowledge:8002
 
 ---
 
-## 3. Path A -- ECS + Docker Compose (recommended to start)
+## 3. ECS + Docker Compose -- the chosen path
 
-`docker-compose.yml` brings up the whole topology: 8 sidecars, Postgres/pgvector, Ollama.
-Only the shell publishes a port, which matches the section 6 trust model exactly.
+One VM running the whole topology. It matches the app's own trust model, costs roughly
+an order of magnitude less than a managed cluster, and the images are identical to the
+ones ACK would run -- so moving to ACK later re-uses everything except the manifests.
+
+Size it for the media sidecars, which dominate: Whisper + Kokoro + Chromium want
+**~8 vCPU / 16 GB**. `ecs.g7.2xlarge` or similar, with a data disk for `/opt/bewithme`.
+
+### 3.1 Local / first run
 
 ```bash
 cp .env.example .env          # fill in DEEPSEEK_API_KEY, DOUBAO_API_KEY, ...
@@ -121,14 +127,88 @@ docker compose run --rm init-db
 docker compose up -d
 ```
 
-On an ECS instance this is the entire deployment. Deploy = pull new images, `up -d`.
+### 3.2 One-time ECS setup
 
-**Why start here:** it is one VM, it matches the app's own trust model, it costs roughly
-an order of magnitude less than a managed cluster, and the images are identical to the
-ones ACK would run. Moving to ACK later re-uses everything except the manifests.
+```bash
+# On the instance
+sudo mkdir -p /opt/bewithme && sudo chown "$USER" /opt/bewithme
+git clone https://github.com/guowen1022/beWithMe.git /opt/bewithme
+cd /opt/bewithme
 
-Size it for the media sidecars, which dominate: Whisper + Kokoro + Chromium want
-**~8 vCPU / 16 GB** to be comfortable. `ecs.g7.2xlarge` or similar.
+cp .env.example .env          # real provider keys + strict-mode auth (section 0)
+
+cat > .deploy-env <<'EOF'
+ACR_REGISTRY=registry.cn-hangzhou.aliyuncs.com
+ACR_NAMESPACE=bewithme
+EOF
+
+# Model artifacts -- not in git, not in the image. Pull from your OSS bucket.
+mkdir -p models && ossutil cp -r oss://<your-bucket>/models/ models/
+
+docker compose up -d postgres ollama
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose run --rm init-db
+```
+
+Give the instance a RAM role with `AliyunContainerRegistryReadOnlyAccess` so it can pull
+from ACR without any credential on disk.
+
+### 3.3 The pipeline
+
+`.github/workflows/cd.yml` runs on `workflow_run` after CI:
+
+```
+CI passes on main
+  -> guard      pin the exact commit CI validated (not head-of-main)
+  -> build      OIDC -> RAM role -> ACR login -> push core + media as sha-<12>
+  -> deploy     OIDC -> Cloud Assistant RunCommand -> scripts/deploy-ecs.sh
+```
+
+Two things worth calling out:
+
+- **No stored AccessKey.** GitHub OIDC exchanges for a short-lived STS credential,
+  scoped by a RAM condition to this repo on this branch.
+- **No inbound SSH.** Cloud Assistant `RunCommand` executes the deploy script through the
+  instance agent, so port 22 never needs to face the internet and no private key lives in
+  GitHub.
+
+`scripts/deploy-ecs.sh` is health-gated: it pulls, restarts, then polls `/api/health`. If
+the new tag does not come up it **automatically restores the previous one** and exits
+non-zero, so a bad release does not leave the box down.
+
+```bash
+./scripts/deploy-ecs.sh sha-a1b2c3d4e5f6   # deploy a specific tag
+./scripts/deploy-ecs.sh --rollback         # previous known-good tag
+./scripts/deploy-ecs.sh --current          # what is running
+```
+
+Rollback is also a button: **Actions -> CD -> Run workflow -> rollback**.
+
+The `deploy` job targets a `production` GitHub Environment -- add a required reviewer
+there if you want deploys to pause for approval.
+
+### 3.4 What `docker-compose.prod.yml` changes
+
+The overlay applied on the server:
+
+- images come from ACR instead of a local `build:` (and the `build:` blocks are removed,
+  so a stray `--build` cannot rebuild on the box)
+- the shell binds **`127.0.0.1:8000`**, not `0.0.0.0` -- put nginx/Caddy in front for TLS.
+  Tokens are bearer credentials and must not cross the wire in cleartext.
+- log rotation (`max-size: 10m`, 3 files). The default json-file driver is unbounded and
+  will eventually fill the system disk.
+
+### 3.5 One-time Alibaba Cloud setup
+
+1. **ACR** -- create namespace `bewithme` and two repos: `bewithme-core`, `bewithme-media`.
+2. **RAM OIDC provider** -- issuer `https://token.actions.githubusercontent.com`,
+   audience `sts.aliyuncs.com`.
+3. **RAM role** `gha-bewithme-deployer` trusting that provider, with the condition
+   `oidc:sub StringEquals repo:guowen1022/beWithMe:ref:refs/heads/main` -- this is what
+   stops any other repo assuming it. Permissions: ACR push +
+   `ecs:RunCommand` / `ecs:DescribeInvocationResults` on the one instance.
+4. Fill the `env:` block at the top of `.github/workflows/cd.yml` with your region,
+   account id, and `ECS_INSTANCE_ID`.
 
 ## 4. Path B -- ACK (Kubernetes)
 
@@ -150,26 +230,13 @@ Shape:
 > (`data/sessions/`, note caches, browser profile). Several sidecars touch them, so a
 > `ReadWriteOnce` block disk will pin those pods to one node or fail to mount. Use NAS.
 
-I have **not** written these manifests yet -- see "Next step" below.
-
-## 5. The CD pipeline
-
-Once a target is chosen, the delivery half:
-
-```
-push to main
-  -> GitHub Actions: OIDC -> Alibaba RAM role (no static AccessKey stored)
-  -> docker build core + media, push to ACR tagged with the git SHA
-  -> Path A: SSH/Ops-orchestrated pull + `up -d` on the ECS box
-     Path B: bump the tag in a manifests dir; Argo CD in-cluster syncs it
-```
-
-The OIDC part matters: GitHub gets a short-lived STS credential scoped by a RAM condition
-to *this repo on main*, instead of a long-lived AccessKey pasted into repo secrets.
+These manifests are **not written** -- ECS is the chosen path (section 3). If you later
+outgrow one box, the images and the CI half carry over unchanged; only the runtime
+description is new work.
 
 ---
 
-## 6. CI (already wired -- `.github/workflows/ci.yml`)
+## 5. CI (`.github/workflows/ci.yml`)
 
 Runs on every PR and push to main. No cloud account, no secrets.
 
@@ -202,11 +269,17 @@ Postgres and Ollama. It belongs in a separate workflow built on `docker-compose.
 
 ## Next step
 
-Decide two things and the rest follows:
+The pipeline is written. What remains is account-specific configuration that only you
+can do:
 
-1. **Public or private?** (section 0) -- private VPC is the low-effort correct answer; anything
-   public needs the auth work first.
-2. **ECS or ACK?** (sections 3/4) -- ECS unless you specifically need per-sidecar scaling.
+1. **Create the Alibaba resources** -- section 3.5 (ACR repos, RAM OIDC provider, RAM role,
+   ECS instance).
+2. **Fill the `env:` block** at the top of `.github/workflows/cd.yml` -- region, account
+   id, ACR namespace, `ECS_INSTANCE_ID`. Every value there is currently a placeholder.
+3. **Bootstrap the box** -- section 3.2.
+4. **Set strict auth before it faces the internet** -- section 0. The pipeline will happily
+   deploy an open backend; nothing here decides that for you.
 
-Then the remaining artifacts are: the ACR build-and-push workflow, and either the ECS
-deploy step or the ACK manifests + Argo CD application.
+Nothing about `LLM_PROVIDER`/`VISION_PROVIDER` changes: the app calls DeepSeek and Doubao
+as external APIs from the ECS box, so keep the deployment in a mainland-China region
+(section 1).
