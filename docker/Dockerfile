@@ -1,4 +1,12 @@
-# syntax=docker/dockerfile:1.7
+# NOTE: deliberately no `# syntax=docker/dockerfile:1.7` directive.
+#
+# That directive makes BuildKit fetch the frontend image from Docker Hub before
+# it will even parse this file, which turns every build into a network call and
+# hard-fails on networks that can't reach registry-1.docker.io. The only 1.7-era
+# feature used here is `RUN --mount=type=cache` (below), which BuildKit's
+# built-in frontend has supported since Docker 23 -- so the pin bought us
+# nothing and cost us offline builds. Re-add it only if this file starts using
+# a feature the built-in frontend lacks.
 #
 # beWithMe service image.
 #
@@ -70,7 +78,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM base AS core
 
 # Drop the build toolchain; keep only what the app needs at runtime.
-RUN apt-get purge -y build-essential cmake git && \
+#
+# git is NOT purged: it looks like build tooling, but each user's canvas
+# workspace is a real git repo (agents/frontend_engineer/workspace.py
+# `ensure_workspace` / `_run_git`), so persona shells out to it at runtime.
+# Purging it made GET /api/dynamic/canvas 500 with FileNotFoundError: 'git'.
+RUN apt-get purge -y build-essential cmake && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 

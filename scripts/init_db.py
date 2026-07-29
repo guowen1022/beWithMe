@@ -9,20 +9,47 @@ The legacy `MIGRATE` block at the bottom handles ALTERs for dev DBs that
 predate today's schema (e.g., adding `user_id` columns to old tables).
 """
 import asyncio
+import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 # Make the project root importable when invoked as `python scripts/init_db.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncpg
 
+# `infra.config` calls load_dotenv() at import, so a local `.env` populates
+# os.environ before we read DATABASE_URL below. In containers the value is
+# already in the environment and this just no-ops. Guarded because init_db
+# must stay runnable on a box that has no LLM provider vars configured yet.
+try:
+    import infra.config  # noqa: F401
+except Exception:
+    pass
+
 
 # Connection target — `postgres` (admin DB) for CREATE DATABASE,
 # then `bewithme` for the schema.
-ADMIN_URL = "postgresql://weng@localhost/postgres"
+#
+# Derived from DATABASE_URL when set (containers, CI) so this script targets the
+# same server as the app rather than a developer's local socket. `_create_all_models`
+# below already goes through `infra.db.engine`, which reads DATABASE_URL — without
+# this, the two halves of the script would talk to different databases.
 DB_NAME = "bewithme"
-APP_URL = f"postgresql://weng@localhost/{DB_NAME}"
+
+_raw_url = os.environ.get("DATABASE_URL", "")
+if _raw_url:
+    # asyncpg wants a plain libpq URL; SQLAlchemy's `+asyncpg` scheme is not one.
+    APP_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    _parsed = urlparse(APP_URL)
+    DB_NAME = _parsed.path.lstrip("/") or DB_NAME
+    # CREATE DATABASE can't run from inside the database being created, so the
+    # admin connection targets the always-present `postgres` maintenance DB.
+    ADMIN_URL = urlunparse(_parsed._replace(path="/postgres"))
+else:
+    ADMIN_URL = "postgresql://weng@localhost/postgres"
+    APP_URL = f"postgresql://weng@localhost/{DB_NAME}"
 
 
 # Extensions must exist before SQLAlchemy create_all can create vector columns.
@@ -71,8 +98,12 @@ ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS outline JSONB;
 ALTER TABLE IF EXISTS documents ADD COLUMN IF NOT EXISTS page_count INTEGER;
 ALTER TABLE IF EXISTS document_chunks ADD COLUMN IF NOT EXISTS page_number INTEGER;
 
--- Default user (used by some legacy data and tests)
-INSERT INTO users (id, username) VALUES ('00000000-0000-0000-0000-000000000000', 'default')
+-- Default user (used by some legacy data and tests).
+-- created_at is set explicitly: the User model declares `default=datetime.utcnow`,
+-- which SQLAlchemy applies Python-side on ORM inserts only. The generated DDL is
+-- NOT NULL with no server default, so a raw INSERT like this one must supply it
+-- or it trips a NotNullViolationError on every fresh database.
+INSERT INTO users (id, username, created_at) VALUES ('00000000-0000-0000-0000-000000000000', 'default', NOW())
     ON CONFLICT (username) DO NOTHING;
 
 -- Backfill user_id columns on legacy tables that pre-date multi-tenancy.
