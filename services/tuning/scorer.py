@@ -50,7 +50,8 @@ from uuid import UUID
 
 from infra.model import llm
 from persona.teacher.canvas_writer_pass import (
-    WriterContractError, WriterInputs, WriterPass, run_writer_pass, writer_tools,
+    WriterContractError, WriterInputs, WriterPass, recovered_args, run_writer_pass,
+    writer_tools,
 )
 from persona.teacher.prompts import canvas_guides
 from persona.teacher.prompts.canvas_guides import _offered_ids
@@ -92,12 +93,30 @@ def _cache_put(key: str, value: Dict[str, object]) -> None:
         _cache.popitem(last=False)
 
 
-async def _stub_mount(args: dict) -> str:
-    return "mounted (eval replay stub — nothing written)"
+_TRUNCATED = json.dumps(
+    {"error": "tool arguments were truncated mid-stream — retry with shorter content"})
 
 
-async def _stub_edit(args: dict) -> str:
-    return "edited (eval replay stub — nothing written)"
+def _stub(verb: str):
+    """A no-op child that still answers the way the real one does.
+
+    A stub must drop the SIDE EFFECT, not the contract. The real authoring executors reject a
+    call whose arguments arrived truncated, and the loop grants the model a free retry when a
+    round was entirely such bails — so a stub that reports success on a truncated call
+    silently removes production's retry from the replay, and the run records an authoring call
+    that never authored anything. Same shape as the bug this whole file exists to prevent: a
+    difference that is not a side effect.
+    """
+    async def _run(args: dict) -> str:
+        _, truncated = recovered_args(args or {})
+        if truncated:
+            return _TRUNCATED
+        return f"{verb} (eval replay stub — nothing written)"
+    return _run
+
+
+_stub_mount = _stub("mounted")
+_stub_edit = _stub("edited")
 
 
 # The ONLY thing evaluation is allowed to change about the writer: the authoring children

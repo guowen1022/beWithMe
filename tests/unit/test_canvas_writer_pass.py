@@ -10,6 +10,7 @@ the loop is invoked from one place), and a degenerate input is a loud refusal ra
 defensible number.
 """
 import asyncio
+import json
 import pathlib
 from uuid import UUID
 
@@ -198,3 +199,48 @@ def test_the_knobs_are_the_ones_production_needs(monkeypatch):
     assert loop.kwargs["terminal_tools"] == {"mount_template", "edit_note"}
     assert loop.kwargs["profile"] == "voice"
     assert loop.kwargs["purpose"] == "test"
+
+
+# ---- the recorder must see what the executor sees -----------------------------------------
+
+def test_arguments_the_provider_wrapped_are_recovered_before_recording(monkeypatch):
+    """DeepSeek's tool channel delivers a COMPLETE JSON object inside `_raw_arguments` even on
+    successful calls, and `mount_template`'s executor recovers it. The recorder read the raw
+    event instead, so the note mounted fine while the record said nothing was authored — on
+    6 of 8 scenarios in the first real run. A recorder that sees less than the executor does
+    is not recording the call."""
+    payload = json.dumps({"template": "note", "slug": "parabola",
+                          "params": {"markdown": "```plot\n{}\n```"}})
+    loop = _FakeLoop([
+        {"kind": "tool_call", "name": "mount_template",
+         "arguments": {"_raw_arguments": payload}},
+        {"kind": "done", "text": "", "stop_reason": "end_turn"},
+    ])
+    monkeypatch.setattr(canvas_writer_pass, "run_teacher_tool_loop", loop)
+    out = _run()
+    assert out.calls["mount_template"] == {"params.markdown": ["```plot\n{}\n```"]}
+    assert out.authored_parts == ["```plot\n{}\n```"]
+
+
+def test_a_genuinely_truncated_call_is_marked_rather_than_read_as_empty(monkeypatch):
+    loop = _FakeLoop([
+        {"kind": "tool_call", "name": "mount_template",
+         "arguments": {"_raw_arguments": '{"template": "note", "params": {"mark'}},
+        {"kind": "done", "text": "", "stop_reason": "end_turn"},
+    ])
+    monkeypatch.setattr(canvas_writer_pass, "run_teacher_tool_loop", loop)
+    trace = _run().trace
+    assert any(e.get("kind") == "call" and e.get("truncated") for e in trace)
+
+
+def test_the_stub_rejects_a_truncated_call_exactly_as_the_real_executor_does():
+    """A stub drops the SIDE EFFECT, not the contract. The loop grants the model a free retry
+    when a round was entirely truncation bails; a stub that reports success removes that retry
+    from the replay only — production keeps it — which is another difference that is not a
+    side effect."""
+    truncated = {"_raw_arguments": '{"template": "note", "params": {"mark'}
+    assert "error" in asyncio.run(scorer._stub_mount(truncated))
+    assert "error" in asyncio.run(scorer._stub_edit(truncated))
+    # ...and a recoverable call still succeeds without writing anything.
+    ok = {"_raw_arguments": json.dumps({"template": "note", "params": {"markdown": "x"}})}
+    assert "stub" in asyncio.run(scorer._stub_mount(ok))

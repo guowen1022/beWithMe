@@ -8,6 +8,14 @@ callers. Evaluation may differ in exactly one way: it stubs the child executors 
 nothing is mounted, spoken, or persisted. Everything else — prompt construction,
 model, token limits, iteration caps, tool surface — is the same object, not a copy.
 
+**A stub drops the side effect, not the contract.** It still validates its
+arguments and still reports failure the way the real child does. The first real run
+after this refactor caught the counter-example: the authoring stubs returned success
+on a call whose arguments had arrived truncated, where the real executor returns an
+error and the loop grants the model a free retry. The retry existed in production and
+not in the replay — a difference that is not a side effect, which is the same shape
+as the bug this whole document is about.
+
 ## Why this is a rule and not a preference
 
 `services/tuning/scorer.py::_replay` was a hand-copy of the canvas-writer loop in
@@ -115,6 +123,13 @@ Three channels beside `{ok, quality, outcome}`:
 - **Letting the eval assemble its own toolset.** Pass stubs to the shared builder
   instead. An eval that calls `build_tools` itself can quietly score a different
   lane than production runs.
+- **Recording the raw event when the executor sees something else.** DeepSeek's tool
+  channel delivers complete arguments inside `_raw_arguments` even on successful
+  calls, and `mount_template`'s executor recovers them. The recorder read the raw
+  event, so on 6 of 8 scenarios in the first real run the note was authored fine
+  while the record said nothing was authored — and production's outcome telemetry
+  had the same blind spot. `recovered_args()` normalizes once, for both callers. A
+  recorder that sees less than the executor does is not recording the call.
 
 ## Why this generalises
 

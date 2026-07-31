@@ -23,9 +23,10 @@ usually the fastest explanation of a surprising score.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID
 
 from infra.model.tools import ToolExecutor, ToolSpec
@@ -159,6 +160,32 @@ class _Trace:
                                  "note": f"trace capped at {_TRACE_MAX_ENTRIES} entries"})
 
 
+def recovered_args(args: dict) -> Tuple[dict, bool]:
+    """Args as the executor will see them, plus whether they were truly truncated.
+
+    `_raw_arguments` is the provider's fallback shape when the tool-arg stream was not parsed
+    into structured fields, and DeepSeek's tool channel emits a COMPLETE valid JSON object in
+    it even on SUCCESSFUL calls. `mount_template`'s executor therefore recovers it and only
+    bails when it does not parse.
+
+    Recording the un-recovered event is how the authored markdown went missing from the record
+    on most real turns: the note mounted fine because the executor recovered, while the outcome
+    signal and every replay's `calls` read an empty `params` and concluded nothing was authored.
+    A recorder that sees less than the executor does is not recording the call.
+    """
+    raw = args.get("_raw_arguments")
+    if raw is None:
+        return args, False
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return args, True
+        if isinstance(parsed, dict):
+            return parsed, False
+    return args, True
+
+
 def _record_call(out: WriterPass, name: str, args: dict) -> None:
     """Fold one tool call into `calls` and the views over it.
 
@@ -238,9 +265,13 @@ async def run_writer_pass(
             kind = evt.get("kind")
             if kind == "tool_call":
                 name = evt.get("name")
-                args = evt.get("arguments") or {}
+                args, truncated = recovered_args(evt.get("arguments") or {})
                 _record_call(out, name, args)
-                trace.add({"kind": "call", "name": name})
+                # A truncated authoring call is the one failure the writer can recover from
+                # by retrying, so it belongs in the record rather than looking like a call
+                # that simply carried no content.
+                trace.add({"kind": "call", "name": name, "truncated": True}
+                          if truncated else {"kind": "call", "name": name})
             elif kind == "delta":
                 trace.text_chunk(evt.get("text") or "")
             elif kind == "done":
@@ -265,5 +296,5 @@ async def run_writer_pass(
 __all__ = [
     "MAX_TOKENS", "PROFILE", "TERMINAL_TOOLS", "WRITER_LANE",
     "WriterContractError", "WriterInputs", "WriterPass",
-    "run_writer_pass", "writer_tools",
+    "recovered_args", "run_writer_pass", "writer_tools",
 ]
