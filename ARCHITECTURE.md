@@ -93,7 +93,7 @@ Services don't decide; they execute. Each service is a FastAPI process at a fixe
 | browser | +5 | Playwright (headless web fetch + handoff) |
 | maestro | +6 | long-instance reasoning over the event stream + multi-persona landing feed (`/api/maestro`, `/api/feed`) |
 | **frontend-sandbox** (planned) | +7 | runtime UI generation + validation, see § 5 |
-| tuning | +8 | skillforge host face — real eval endpoint (`POST /eval`, canvas-writer replay + judge), idempotent self-registration, and real-traffic capture (`POST /capture`: the writer fire-and-forgets attributable turns here; policy = failures always → `from_failure`, successes sampled + capped → `from_traffic` regression anchors; survivors become replayable skillforge scenarios). Offline/internal-only: skillforge's refine loop and the writer are the sole callers; not proxied by the shell, no auth gate |
+| tuning | +8 | skillforge host face — real eval endpoint (`POST /eval`, canvas-writer replay + judge; the replay calls `persona/teacher/canvas_writer_pass.py::run_writer_pass`, the *same* function production calls, differing only in stubbed child executors — see [`docs/tunable-development.md`](./docs/tunable-development.md)), idempotent self-registration, and real-traffic capture (`POST /capture`: the writer fire-and-forgets attributable turns here; policy = failures always → `from_failure`, successes sampled + capped → `from_traffic` regression anchors; survivors become replayable skillforge scenarios). Offline/internal-only: skillforge's refine loop and the writer are the sole callers; not proxied by the shell, no auth gate |
 
 Routers always live in `services/`. Never in persona, never in silicon_brain, never in infra.
 
