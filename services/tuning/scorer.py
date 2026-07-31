@@ -6,10 +6,11 @@ from REPLAYING the production canvas-writer over the candidate menu:
   1. render the menu via the exact serving path (`render_root_menu`) with the
      candidate body folded in as `select_prompt` (body wins over config,
      mirroring the proxy this replaces);
-  2. run the real writer tool loop — same prompt builder, same writer-lane
-     tools, same profile. `load_guide` executes for real (pure); the authoring
-     verbs `mount_template`/`edit_note` are swapped for no-op recorders so a
-     replay never touches a canvas, a note cache, or the DB;
+  2. run the writer through `persona.teacher.canvas_writer_pass.run_writer_pass`
+     — literally the function production calls, not a copy of it. The one
+     difference is `stub_executors`: `mount_template`/`edit_note` become no-op
+     recorders so a replay never touches a canvas, a note cache, or the DB.
+     `load_guide` executes for real (it is pure);
   3. ``ok`` = the writer opened the scenario's expected guide AND that guide
      renders a real body. Deterministic-first — the hack-proof necessary
      condition; the judge below never gates alone (anti-Goodhart);
@@ -17,9 +18,19 @@ from REPLAYING the production canvas-writer over the candidate menu:
      THIS request. Forced to 0.0 whenever ``ok`` is false. ``outcome`` mirrors
      ``quality`` (the offline analog of telemetry's outcome_scalar).
 
+This file used to hand-copy the loop out of `persona/teacher/writer.py`. Every
+mechanical parameter matched; what differed was an INPUT — production passes a
+real spoken answer, this passed `""` — and since the writer's job is mirroring a
+spoken answer it correctly did nothing, scored 0.0, and was recorded as a wrong
+guide for a month. Two copies of one call drift, and the drift is invisible
+because nothing declares what must match.
+
 Fail-safe: any internal error (LLM down, bad scenario, timeout) returns
-``{ok: False, quality: 0.0, outcome: 0.0}`` — skillforge treats that as
-fail-CLOSED, so a broken signal can never promote a candidate.
+``ok: False`` with zeros — skillforge treats that as fail-CLOSED, so a broken
+signal can never promote a candidate. Every such return now carries
+``failed_because``, plus the ``calls`` the writer made and a ``trace`` of
+everything else, because a wrong answer, a decline and a crash are three
+different events that used to arrive as one set of zeros.
 
 Results are cached for the process lifetime keyed on (body, config, scenario):
 `harness.gate` re-scores the champion for every candidate in a refine, so the
@@ -34,16 +45,16 @@ import json
 import re
 import traceback
 from collections import OrderedDict
-from dataclasses import replace
-from typing import Dict, List, Set, Tuple
+from typing import Dict, Optional, Set
 from uuid import UUID
 
 from infra.model import llm
+from persona.teacher.canvas_writer_pass import (
+    WriterContractError, WriterInputs, WriterPass, recovered_args, run_writer_pass,
+    writer_tools,
+)
 from persona.teacher.prompts import canvas_guides
 from persona.teacher.prompts.canvas_guides import _offered_ids
-from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
-from persona.teacher.tools.loop import run as run_teacher_tool_loop
-from persona.teacher.tools.manifest import build_tools
 
 
 # Synthetic principal for replays — never a real user; tool executors that
@@ -55,8 +66,6 @@ _EVAL_USER_ID = UUID("00000000-0000-4000-8000-0000e5a10001")
 # this server-side guard just guarantees a hung LLM call resolves to the
 # fail-safe zeros instead of an open socket.
 _REPLAY_TIMEOUT_S = 150.0
-
-_FAIL: Dict[str, object] = {"ok": False, "quality": 0.0, "outcome": 0.0}
 
 _CACHE_MAX = 256
 _cache: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
@@ -84,75 +93,71 @@ def _cache_put(key: str, value: Dict[str, object]) -> None:
         _cache.popitem(last=False)
 
 
-async def _stub_mount(args: dict) -> str:
-    return "mounted (eval replay stub — nothing written)"
+_TRUNCATED = json.dumps(
+    {"error": "tool arguments were truncated mid-stream — retry with shorter content"})
 
 
-async def _stub_edit(args: dict) -> str:
-    return "edited (eval replay stub — nothing written)"
+def _stub(verb: str):
+    """A no-op child that still answers the way the real one does.
+
+    A stub must drop the SIDE EFFECT, not the contract. The real authoring executors reject a
+    call whose arguments arrived truncated, and the loop grants the model a free retry when a
+    round was entirely such bails — so a stub that reports success on a truncated call
+    silently removes production's retry from the replay, and the run records an authoring call
+    that never authored anything. Same shape as the bug this whole file exists to prevent: a
+    difference that is not a side effect.
+    """
+    async def _run(args: dict) -> str:
+        _, truncated = recovered_args(args or {})
+        if truncated:
+            return _TRUNCATED
+        return f"{verb} (eval replay stub — nothing written)"
+    return _run
 
 
+_stub_mount = _stub("mounted")
+_stub_edit = _stub("edited")
+
+
+# The ONLY thing evaluation is allowed to change about the writer: the authoring children
+# become no-op recorders, so a replay never touches a canvas, a note cache, or the DB.
+# Everything else — prompt, model, token limit, iteration cap, tool surface — comes from
+# the same function production calls.
 _AUTHORING_STUBS = {"mount_template": _stub_mount, "edit_note": _stub_edit}
 
 
 def _stubbed_writer_tools():
-    """The production writer-lane toolset (load_guide + mount_template +
-    edit_note) with the authoring executors replaced by no-op recorders.
-    The LLM-facing surface (names, descriptions, schemas — including any
-    served tool.* description tuning) is byte-identical to production;
-    only the side effects are gone. Authored markdown is captured from the
-    loop's tool_call events, not executor returns, so nothing is lost."""
-    out = []
-    for t in build_tools(_EVAL_USER_ID, lane="writer"):
-        stub = _AUTHORING_STUBS.get(t.name)
-        out.append(replace(t, executor=stub) if stub else t)
-    return out
+    """The production writer-lane toolset with the authoring executors stubbed.
+
+    The LLM-facing surface (names, descriptions, schemas — including any served `tool.*`
+    description tuning) is byte-identical to production; only the side effects are gone.
+    Authored markdown is captured from the loop's tool_call events, not executor returns,
+    so nothing is lost."""
+    return writer_tools(_EVAL_USER_ID, _AUTHORING_STUBS)
 
 
-async def _replay(menu_config: dict, scenario: dict) -> Tuple[Set[str], List[str]]:
-    """Run the real canvas-writer loop over the candidate menu. Returns
-    (guides the writer opened, markdown it authored) — the same capture the
-    production telemetry path does in persona/teacher/writer.py."""
-    parts = build_canvas_writer_prompt(
-        question=str(scenario.get("input") or ""),
-        voice_transcript=str(scenario.get("transcript") or ""),
-        canvas_state=None,
-        existing_notes=None,
-        related_notes=None,
-        menu_config=menu_config,
-    )
-    selected: Set[str] = set()
-    authored_parts: List[str] = []
-    async for evt in run_teacher_tool_loop(
-        static_system=parts.static_system,
-        static_user_passage=parts.static_user_passage,
-        dynamic_user=parts.dynamic_user,
-        prior_messages=None,
-        tools=_stubbed_writer_tools(),
-        purpose="skillforge-eval",
+async def _replay(menu_config: dict, scenario: dict) -> WriterPass:
+    """Run the canvas writer over the candidate menu — the SAME entry point production
+    calls, with the child executors stubbed and the candidate menu injected.
+
+    A scenario may also supply `canvas_state` / `existing_notes` / `related_notes`. They
+    were hardcoded to `None` here, which made the prompt's "mount, EDIT, or do nothing"
+    branch structurally unreachable in evaluation: only the no-existing-note branch was
+    ever scored.
+    """
+    return await run_writer_pass(
+        inputs=WriterInputs(
+            question=str(scenario.get("input") or ""),
+            voice_transcript=str(scenario.get("transcript") or ""),
+            canvas_state=scenario.get("canvas_state"),
+            existing_notes=scenario.get("existing_notes"),
+            related_notes=scenario.get("related_notes"),
+            menu_config=menu_config,
+        ),
         user_id=_EVAL_USER_ID,
-        max_tokens=8192,
-        max_iterations=canvas_guides.MAX_GUIDE_DEPTH + 1,
-        terminal_tools={"mount_template", "edit_note"},
-        profile="voice",
-    ):
-        if evt.get("kind") != "tool_call":
-            continue
-        name = evt.get("name")
-        args = evt.get("arguments") or {}
-        if name == "load_guide":
-            ids = args.get("ids") or []
-            if isinstance(ids, list):
-                selected.update(str(i).strip() for i in ids)
-        elif name == "mount_template":
-            md = (args.get("params") or {}).get("markdown")
-            if isinstance(md, str):
-                authored_parts.append(md)
-        elif name == "edit_note":
-            for op in args.get("ops") or []:
-                if isinstance(op, dict) and isinstance(op.get("md"), str):
-                    authored_parts.append(op["md"])
-    return selected, authored_parts
+        purpose="skillforge-eval",
+        stub_executors=_AUTHORING_STUBS,
+    )
 
 
 def _judge_prompt(menu_text: str, scenario: dict, selected: Set[str],
@@ -201,33 +206,66 @@ async def _judge(menu_text: str, scenario: dict, selected: Set[str],
     return _parse_score(raw)
 
 
+def _fail(why: str, run: Optional[WriterPass] = None) -> Dict[str, object]:
+    """A zero that says which zero it is.
+
+    A wrong answer, a deliberate decline, an off-menu scenario and a crash are four
+    different events. They all used to arrive as the same `{ok: False, quality: 0.0}`,
+    which is why `except Exception: return _FAIL` was indistinguishable from a genuine
+    regression — the single most expensive ambiguity in this loop's history.
+    """
+    out: Dict[str, object] = {"ok": False, "quality": 0.0, "outcome": 0.0,
+                              "failed_because": why}
+    if run is not None:
+        out["calls"] = run.calls
+        out["trace"] = run.trace
+    return out
+
+
 async def _score_uncached(body: str, config: dict, scenario: dict) -> Dict[str, object]:
     expect = str(scenario.get("expect_guide") or "").strip()
     menu_config = dict(config or {})
     if isinstance(body, str) and body.strip():
         menu_config["select_prompt"] = body
 
+    if not expect:
+        return _fail("no_ground_truth: scenario declares no expect_guide")
     # Necessary condition, no LLM spend: the right guide must be on the menu.
-    if not expect or expect not in _offered_ids(menu_config):
-        return dict(_FAIL)
+    if expect not in _offered_ids(menu_config):
+        return _fail(f"not_offered:{expect} — the candidate menu cannot win this case")
 
-    selected, authored_parts = await _replay(menu_config, scenario)
+    try:
+        run = await _replay(menu_config, scenario)
+    except WriterContractError as e:
+        # Loud, not a quiet zero. skillforge refuses this case before spending anything
+        # once the tunable declares the input; this is the same refusal from the host's
+        # side, for a scenario that reached us anyway.
+        return _fail(f"missing_required_input:{e.name}")
+    if run.failed_because:
+        return _fail(run.failed_because, run)
 
     # "Render the picked guide": the expected pick must resolve to a real
     # guide body, not the graceful-degradation note.
-    render_ok = "=== GUIDE:" in canvas_guides.get_guide([expect])
-    if expect not in selected or not render_ok:
-        return dict(_FAIL)
+    if "=== GUIDE:" not in canvas_guides.get_guide([expect]):
+        return _fail(f"guide_render_failed:{expect}", run)
+    if expect not in run.selected_guides:
+        # Opening nothing is a real outcome — the writer judged the spoken answer
+        # complete on its own — and is not the same event as opening the wrong thing.
+        if not run.selected_guides:
+            return _fail(f"declined:nothing_opened (expected {expect})", run)
+        return _fail(
+            f"wrong_guide:opened={sorted(run.selected_guides)} expected={expect}", run)
 
-    authored = canvas_guides.authored_modalities("\n".join(authored_parts))
+    authored = canvas_guides.authored_modalities("\n".join(run.authored_parts))
     quality = await _judge(
-        canvas_guides.render_root_menu(menu_config), scenario, selected, authored
+        canvas_guides.render_root_menu(menu_config), scenario, run.selected_guides, authored
     )
-    return {"ok": True, "quality": quality, "outcome": quality}
+    return {"ok": True, "quality": quality, "outcome": quality,
+            "calls": run.calls, "trace": run.trace}
 
 
 async def score(*, body: str, config: dict, scenario: dict) -> Dict[str, object]:
-    """One scenario → {ok, quality, outcome}. Never raises."""
+    """One scenario → {ok, quality, outcome, calls, trace, failed_because}. Never raises."""
     try:
         key = _cache_key(body, config or {}, scenario or {})
         hit = _cache_get(key)
@@ -239,9 +277,12 @@ async def score(*, body: str, config: dict, scenario: dict) -> Dict[str, object]
         )
         _cache_put(key, result)
         return dict(result)
-    except Exception:
+    except asyncio.TimeoutError:
+        # Not cached: a timeout is a fact about this run, not about this candidate.
+        return _fail(f"timeout:{_REPLAY_TIMEOUT_S}s")
+    except Exception as e:
         traceback.print_exc()
-        return dict(_FAIL)
+        return _fail(f"crashed:{type(e).__name__}: {e}"[:500])
 
 
 __all__ = ["score"]

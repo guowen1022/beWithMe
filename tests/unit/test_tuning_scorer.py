@@ -8,6 +8,7 @@ import asyncio
 
 import pytest
 
+from persona.teacher.canvas_writer_pass import WriterContractError, WriterPass
 from services.tuning import scorer
 
 
@@ -29,16 +30,23 @@ def _scenario(**over):
 
 
 class _Replay:
-    """Stands in for scorer._replay; records calls, returns canned capture."""
+    """Stands in for scorer._replay; records calls, returns a canned WriterPass."""
 
-    def __init__(self, selected=(), authored=()):
+    def __init__(self, selected=(), authored=(), failed_because=None):
         self.calls = []
         self._selected = set(selected)
         self._authored = list(authored)
+        self._failed_because = failed_because
 
     async def __call__(self, menu_config, scenario):
         self.calls.append((menu_config, scenario))
-        return set(self._selected), list(self._authored)
+        return WriterPass(
+            calls={"load_guide": {"ids": sorted(self._selected)}} if self._selected else {},
+            trace=[{"kind": "done", "stop_reason": "end_turn"}],
+            failed_because=self._failed_because,
+            selected_guides=set(self._selected),
+            authored_parts=list(self._authored),
+        )
 
 
 class _Judge:
@@ -58,7 +66,11 @@ def test_right_pick_scores_judge(monkeypatch):
     monkeypatch.setattr(scorer, "_judge", judge)
 
     out = asyncio.run(scorer.score(body="Pick a guide:", config={}, scenario=_scenario()))
-    assert out == {"ok": True, "quality": 0.8, "outcome": 0.8}
+    assert (out["ok"], out["quality"], out["outcome"]) == (True, 0.8, 0.8)
+    # The calls ARE the result — `load_guide(ids)` is what the menu exists to cause —
+    # and the trace rides along even on a success.
+    assert out["calls"] == {"load_guide": {"ids": ["plot"]}}
+    assert out["trace"] and "failed_because" not in out
     assert len(replay.calls) == 1 and len(judge.calls) == 1
     # the judge saw the rendered menu with the candidate lead-in folded in
     assert judge.calls[0][0].startswith("Pick a guide:")
@@ -71,14 +83,19 @@ def test_wrong_pick_fails_without_judge(monkeypatch):
     monkeypatch.setattr(scorer, "_judge", judge)
 
     out = asyncio.run(scorer.score(body="", config={}, scenario=_scenario()))
-    assert out == {"ok": False, "quality": 0.0, "outcome": 0.0}
+    assert (out["ok"], out["quality"]) == (False, 0.0)
+    assert out["failed_because"].startswith("wrong_guide:opened=['mermaid']")
     assert judge.calls == []  # quality never gates alone; no ok → no judge
 
 
-def test_no_pick_fails(monkeypatch):
+def test_no_pick_is_a_decline_not_a_wrong_answer(monkeypatch):
+    """Opening nothing is a real outcome — the writer judged the spoken answer complete on
+    its own. Recording it as the same zero as a wrong pick is what made a degenerate eval
+    look like a menu regression for a month."""
     monkeypatch.setattr(scorer, "_replay", _Replay(selected=set()))
     out = asyncio.run(scorer.score(body="", config={}, scenario=_scenario()))
-    assert out == {"ok": False, "quality": 0.0, "outcome": 0.0}
+    assert out["ok"] is False
+    assert out["failed_because"].startswith("declined:nothing_opened")
 
 
 def test_expect_guide_off_menu_skips_replay(monkeypatch):
@@ -88,17 +105,41 @@ def test_expect_guide_off_menu_skips_replay(monkeypatch):
     out = asyncio.run(scorer.score(
         body="", config={"offer": ["mermaid"]}, scenario=_scenario(expect_guide="plot"),
     ))
-    assert out == {"ok": False, "quality": 0.0, "outcome": 0.0}
+    assert out["ok"] is False
+    assert out["failed_because"].startswith("not_offered:plot")
     assert replay.calls == []  # necessary condition failed — no LLM spend
 
 
-def test_replay_exception_is_fail_safe(monkeypatch):
+def test_missing_ground_truth_is_named_not_scored(monkeypatch):
+    replay = _Replay(selected={"plot"})
+    monkeypatch.setattr(scorer, "_replay", replay)
+    out = asyncio.run(scorer.score(body="", config={}, scenario=_scenario(expect_guide="")))
+    assert out["failed_because"].startswith("no_ground_truth")
+    assert replay.calls == []
+
+
+def test_a_missing_required_input_is_named_rather_than_scored(monkeypatch):
+    """THE BUG. The eval used to pass an empty transcript to a writer whose entire job is
+    mirroring a spoken answer; it correctly did nothing and the 0.0 was filed as a wrong
+    guide. A degenerate run must be a named refusal, not a defensible number."""
+    async def _refuse(menu_config, scenario):
+        raise WriterContractError("voice_transcript")
+
+    monkeypatch.setattr(scorer, "_replay", _refuse)
+    out = asyncio.run(scorer.score(body="", config={}, scenario=_scenario(transcript="")))
+    assert out["ok"] is False
+    assert out["failed_because"] == "missing_required_input:voice_transcript"
+
+
+def test_replay_exception_is_fail_safe_and_says_it_crashed(monkeypatch):
     async def _boom(menu_config, scenario):
         raise RuntimeError("LLM down")
 
     monkeypatch.setattr(scorer, "_replay", _boom)
     out = asyncio.run(scorer.score(body="", config={}, scenario=_scenario()))
-    assert out == {"ok": False, "quality": 0.0, "outcome": 0.0}
+    assert (out["ok"], out["quality"], out["outcome"]) == (False, 0.0, 0.0)
+    # A crash and a wrong answer are different events. They used to be the same zeros.
+    assert out["failed_because"] == "crashed:RuntimeError: LLM down"
 
 
 def test_result_cache_scores_once(monkeypatch):
