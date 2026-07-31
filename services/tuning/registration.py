@@ -154,6 +154,12 @@ class TunableSpec:
     baseline_body: str        # the v1 variant body, seeded on first onboarding
     baseline_config: dict
     scenarios: list
+    # The declared contract. Names are SCENARIO SPEC KEYS, not Python parameter names —
+    # skillforge checks them against `spec`, so declaring `voice_transcript` here would
+    # reject every scenario that correctly carries `transcript`.
+    inputs: tuple = ()
+    calls: tuple = ()
+    expected: tuple = ()
 
 
 # Both tunables are `validate`: each one's `quality` is ultimately a judgement
@@ -168,6 +174,39 @@ TUNABLES: tuple = (
         baseline_body=_MENU_PREAMBLE,
         baseline_config={"select_prompt": _MENU_PREAMBLE},
         scenarios=SCENARIOS,
+        # `transcript` is required because the writer's whole job is mirroring a spoken
+        # answer onto the canvas — its prompt ends "(or do nothing if the spoken answer
+        # is complete on its own)". An eval that passed "" therefore measured a writer
+        # correctly declining, scored it 0.0, and recorded it as a wrong guide, for a
+        # month. Declaring it makes skillforge refuse such a case before spending
+        # anything, instead of returning a defensible zero.
+        inputs=(
+            {"name": "input", "required": True,
+             "describes": "the user's request the menu must steer"},
+            {"name": "transcript", "required": True,
+             "describes": "the spoken answer this note mirrors"},
+            {"name": "canvas_state", "required": False,
+             "describes": "what is already mounted on the target device"},
+            {"name": "existing_notes", "required": False,
+             "describes": "cached markdown of mounted notes — enables the EDIT branch"},
+            {"name": "related_notes", "required": False,
+             "describes": "semantically near notes from prior teaching"},
+        ),
+        # A tool call is not a diagnostic: it is the boundary between two tunables, this
+        # menu's output and the guide's input on one edge. `load_guide(ids)` IS what the
+        # menu exists to cause, which is why ground truth is compared against it.
+        calls=(
+            {"name": "load_guide", "args": ["ids"],
+             "describes": "which guide(s) the menu caused the writer to open"},
+            {"name": "mount_template", "args": ["params.markdown"],
+             "describes": "the note authored to the canvas"},
+            {"name": "edit_note", "args": ["ops"],
+             "describes": "edits applied to a note already on the canvas"},
+        ),
+        expected=(
+            {"name": "expect_guide", "matches": "load_guide.ids",
+             "describes": "the guide this request should have opened"},
+        ),
     ),
     TunableSpec(
         tunable_id=GRID_TUNABLE_ID,
@@ -196,10 +235,15 @@ def _register_one(client: httpx.Client, t: TunableSpec, *,
     #    store would never re-run anything nested under `if not champion` —
     #    the regime declaration would be dead code and the tunable would keep
     #    auto-promoting under the `reference` default.
+    #    The contract rides along on the same upsert: re-declaring in place is the point,
+    #    so a decision that learns it needs another input can say so and have every stale
+    #    scenario complain on the next run rather than scoring a degenerate one.
     client.post(
         f"{store}/api/tunables",
         json={"host": host, "tunable_id": t.tunable_id, "kind": t.kind,
-              "description": t.description, "oracle_regime": t.oracle_regime},
+              "description": t.description, "oracle_regime": t.oracle_regime,
+              "inputs": list(t.inputs), "calls": list(t.calls),
+              "expected": list(t.expected)},
     ).raise_for_status()
 
     # 2b. v1 baseline + default-OFF — first-time onboarding only. The baseline

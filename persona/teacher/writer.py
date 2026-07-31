@@ -25,17 +25,16 @@ the perception/Lane A path (`persona/teacher/triggers.py`).
 from __future__ import annotations
 
 import time
-import traceback
 from typing import Dict, List, Optional
 from uuid import UUID, uuid4
 
 from infra import skillforge_client
 from infra.event_log import log_event
+from persona.teacher.canvas_writer_pass import (
+    WriterContractError, WriterInputs, run_writer_pass,
+)
 from persona.teacher.prompts import canvas_guides
-from persona.teacher.prompts.canvas_writer import build as build_canvas_writer_prompt
 from infra.silicon_brain_client import SiliconBrainClient
-from persona.teacher.tools.loop import run as run_teacher_tool_loop
-from persona.teacher.tools.manifest import build_tools
 from workshop.canvas.tools import _note_cache
 from workshop.canvas.tools.read_media import read_media
 
@@ -139,71 +138,40 @@ async def run_canvas_writer(
     # mis-attribute the outcome (see collect_result's variant_version note).
     menu_tuned = skillforge_client.resolve(canvas_guides.MENU_TUNABLE_ID)
 
-    parts = build_canvas_writer_prompt(
-        question=question,
-        voice_transcript=transcript,
-        canvas_state=canvas_state,
-        existing_notes=existing_cards,
-        related_notes=related_notes,
-        menu_config=menu_tuned.config,
-    )
-    writer_tools = build_tools(user_id, lane="writer")
-
-    mount_fired = False
-    edit_ops: List[str] = []
-    selected_guides: set = set()
-    authored_parts: List[str] = []
-    error: Optional[str] = None
+    # The decision point itself. The SAME call the tuning sidecar's scorer makes — one
+    # function, two callers — so a change to the prompt, the tool surface or any loop knob
+    # cannot land in production without the thing that measures it seeing the change too.
     try:
-        async for evt in run_teacher_tool_loop(
-            static_system=parts.static_system,
-            static_user_passage=parts.static_user_passage,
-            dynamic_user=parts.dynamic_user,
-            prior_messages=None,
-            tools=writer_tools,
-            purpose="canvas-writer",
+        result = await run_writer_pass(
+            inputs=WriterInputs(
+                question=question,
+                voice_transcript=transcript,
+                canvas_state=canvas_state,
+                existing_notes=existing_cards,
+                related_notes=related_notes,
+                menu_config=menu_tuned.config,
+            ),
             user_id=user_id,
-            # Notes carry a big markdown payload (sections + a mermaid/plot
-            # fence with escaped unicode), which balloons the tool-call JSON.
-            # The 4096 default truncated it mid-args → `_raw_arguments` bail →
-            # nothing mounted. 8192 gives the authoring call room to complete.
-            max_tokens=8192,
-            # Terminal-on-author: mount_template/edit_note STOP the loop the
-            # instant they execute (see terminal_tools below), so the writer
-            # still makes exactly ONE decisive authoring call — re-firing a
-            # second edit_note produced duplicate appends and highlight spam
-            # (observed as edit_ops=['append','append'] in prod). `load_guide`
-            # is non-terminal: it lets the writer pull one modality's fence
-            # syntax first, counting toward MAX_GUIDE_DEPTH, then author.
-            max_iterations=canvas_guides.MAX_GUIDE_DEPTH + 1,
-            terminal_tools={"mount_template", "edit_note"},
-            profile="voice",
-        ):
-            if evt.get("kind") != "tool_call":
-                continue
-            name = evt.get("name")
-            args = evt.get("arguments") or {}
-            if name == "load_guide":
-                ids = args.get("ids") or []
-                if isinstance(ids, list):
-                    selected_guides.update(str(i).strip() for i in ids)
-            elif name == "mount_template":
-                mount_fired = True
-                md = (args.get("params") or {}).get("markdown")
-                if isinstance(md, str):
-                    authored_parts.append(md)
-            elif name == "edit_note":
-                for op in args.get("ops") or []:
-                    if not isinstance(op, dict):
-                        continue
-                    if op.get("op"):
-                        edit_ops.append(op["op"])
-                    if isinstance(op.get("md"), str):
-                        authored_parts.append(op["md"])
-    except Exception as e:
-        error = str(e)
-        print(f"[writer] tool loop error: {e}", flush=True)
-        traceback.print_exc()
+            purpose="canvas-writer",
+        )
+    except WriterContractError as e:
+        # Both spawn sites already gate on a non-empty question and spoken answer, so this
+        # is a broken caller rather than a quiet turn. Say so and stop — a pass with nothing
+        # to mirror would author nothing and bank a misleading 0.0 against the menu.
+        print(f"[writer] refusing to run: {e}", flush=True)
+        log_event("ask.writer_done", req_id=req_id, user_id=str(user_id), source=source,
+                  wall_ms=round((time.perf_counter() - writer_t0) * 1000, 2),
+                  mount_fired=False, transcript_len=len(transcript),
+                  error=f"missing_required_input:{e.name}")
+        return
+
+    mount_fired = result.mount_fired
+    edit_ops = result.edit_ops
+    selected_guides = result.selected_guides
+    authored_parts = result.authored_parts
+    error = result.failed_because
+    if error:
+        print(f"[writer] tool loop error: {error}", flush=True)
 
     log_event(
         "ask.writer_done",
