@@ -172,6 +172,158 @@ def test_the_trace_keeps_what_both_loops_used_to_throw_away(monkeypatch):
     assert any(e["kind"] == "timing" for e in trace)
 
 
+# ---- the trace answers all five, from the trace alone -------------------------------------
+#
+# skillforge's spec: a reader holding ONLY the trace — no code, no logs, no database — must be
+# able to answer what the model was asked, what it said and why, what it called with what
+# arguments, what came back, and why it stopped. Each test below is one of those questions, and
+# each was unanswerable before: the record was tool-call NAMES, a `done` and a `timing`.
+
+def _spec_trace(monkeypatch, events):
+    monkeypatch.setattr(canvas_writer_pass, "run_teacher_tool_loop", _FakeLoop(events))
+    return _run().trace
+
+
+_FULL_RUN = [
+    {"kind": "thinking", "text": "A parabola is numeric structure, "},
+    {"kind": "thinking", "text": "so the plot guide, not mermaid."},
+    {"kind": "tool_call", "name": "load_guide", "arguments": {"ids": ["plot"]}},
+    {"kind": "tool_result", "name": "load_guide", "ok": True,
+     "text": "=== GUIDE: plot ===\nUse a ```plot fence with series[]."},
+    {"kind": "delta", "text": "Opening the plot guide."},
+    {"kind": "tool_call", "name": "mount_template",
+     "arguments": {"params": {"markdown": "```plot\n{}\n```"}}},
+    {"kind": "tool_result", "name": "mount_template", "ok": True,
+     "text": "mounted (eval replay stub — nothing written)"},
+    {"kind": "done", "text": "Opening the plot guide.", "stop_reason": "end_turn",
+     "tool_rounds": 2, "deadline_hit": False},
+]
+
+
+def test_q1_what_was_the_model_asked(monkeypatch):
+    """Every message as ACTUALLY SENT, after templating, one event per role. Without it you
+    cannot tell a bad decision from a prompt that never carried the fact needed to decide —
+    and for this tunable the prompt IS the artifact under optimization."""
+    prompts = [e for e in _spec_trace(monkeypatch, _FULL_RUN) if e["kind"] == "prompt"]
+
+    assert [e["role"] for e in prompts] == ["system", "user"]
+    # The tuned menu lives at the TAIL of a ~15 KB system prompt: bounding must keep it.
+    assert "Available visual guides" in prompts[0]["text"]
+    # ...and the user message carries the question and the answer being mirrored.
+    assert "plot y = x^2" in prompts[1]["text"]
+    assert "A parabola bottoms out at the origin." in prompts[1]["text"]
+
+
+def test_q2_what_it_said_and_why(monkeypatch):
+    trace = _spec_trace(monkeypatch, _FULL_RUN)
+
+    thinking = [e for e in trace if e["kind"] == "thinking"]
+    assert thinking and thinking[0]["text"] == (
+        "A parabola is numeric structure, so the plot guide, not mermaid.")
+    assert [e["text"] for e in trace if e["kind"] == "text"] == ["Opening the plot guide."]
+
+
+def test_q3_what_it_called_with_what_arguments(monkeypatch):
+    calls = [e for e in _spec_trace(monkeypatch, _FULL_RUN) if e["kind"] == "call"]
+
+    assert calls[0] == {"kind": "call", "name": "load_guide", "args": {"ids": ["plot"]}}
+    assert calls[1]["args"] == {"params": {"markdown": "```plot\n{}\n```"}}
+
+
+def test_q4_what_came_back_from_each_call(monkeypatch):
+    """THE gap this exists to close. The guide body `load_guide` returned is an input to the
+    rest of the same turn — the note two events later was authored from it."""
+    results = [e for e in _spec_trace(monkeypatch, _FULL_RUN) if e["kind"] == "result"]
+
+    assert [e["name"] for e in results] == ["load_guide", "mount_template"]
+    assert results[0]["ok"] is True
+    assert "Use a ```plot fence with series[]." in results[0]["text"]
+
+
+def test_q5_why_it_stopped(monkeypatch):
+    done = [e for e in _spec_trace(monkeypatch, _FULL_RUN) if e["kind"] == "done"]
+    assert done[0]["stop_reason"] == "end_turn" and done[0]["tool_rounds"] == 2
+
+
+def test_the_trace_is_chronological(monkeypatch):
+    """Order is the evidence: the guide arrived BEFORE the note was authored, which is what
+    makes the guide a cause of the note rather than a coincidence beside it."""
+    kinds = [e["kind"] for e in _spec_trace(monkeypatch, _FULL_RUN)]
+    assert kinds == ["prompt", "prompt", "thinking", "call", "result",
+                     "text", "call", "result", "done", "timing"]
+
+
+def test_reasoning_is_omitted_when_the_provider_returned_none(monkeypatch):
+    """Never synthesise what you did not observe. A rationale reconstructed after the fact
+    reads as evidence and is not one, so a provider with thinking off yields NO event."""
+    trace = _spec_trace(monkeypatch, [
+        {"kind": "tool_call", "name": "load_guide", "arguments": {"ids": ["plot"]}},
+        {"kind": "done", "text": "", "stop_reason": "end_turn"},
+    ])
+    assert not [e for e in trace if e["kind"] == "thinking"]
+
+
+def test_reasoning_and_speech_are_not_spliced_together(monkeypatch):
+    """`thinking` and `text` are different evidence — one is why, one is what the user would
+    have heard — so a run that interleaves them keeps them as separate events in order."""
+    trace = _spec_trace(monkeypatch, [
+        {"kind": "thinking", "text": "mermaid or plot?"},
+        {"kind": "delta", "text": "Let me look. "},
+        {"kind": "thinking", "text": "plot."},
+        {"kind": "delta", "text": "Plot it is."},
+        {"kind": "done", "text": "Let me look. Plot it is.", "stop_reason": "end_turn"},
+    ])
+    assert [(e["kind"], e["text"]) for e in trace if e["kind"] in ("thinking", "text")] == [
+        ("thinking", "mermaid or plot?"), ("text", "Let me look."),
+        ("thinking", "plot."), ("text", "Plot it is."),
+    ]
+
+
+def test_a_streamed_turn_is_not_recorded_twice(monkeypatch):
+    """The loop's final `done` repeats every delta it accumulated. Recording both would double
+    the model's words and make a one-sentence answer look like a two-sentence one."""
+    trace = _spec_trace(monkeypatch, [
+        {"kind": "delta", "text": "the spoken answer is complete on its own"},
+        {"kind": "done", "text": "the spoken answer is complete on its own",
+         "stop_reason": "end_turn"},
+    ])
+    assert [e["text"] for e in trace if e["kind"] == "text"] == [
+        "the spoken answer is complete on its own"]
+
+
+def test_an_unstreamed_turn_is_still_recorded(monkeypatch):
+    """...but a provider that returns the turn whole rather than as deltas must not lose it."""
+    trace = _spec_trace(monkeypatch, [
+        {"kind": "done", "text": "there is no content to mirror", "stop_reason": "end_turn"},
+    ])
+    assert [e["text"] for e in trace if e["kind"] == "text"] == [
+        "there is no content to mirror"]
+
+
+def test_long_fields_are_truncated_and_events_are_not_dropped(monkeypatch):
+    """Bound it — it is evidence, not a log. Truncate the field, keep the event."""
+    huge = "x" * 40_000
+    trace = _spec_trace(monkeypatch, [
+        {"kind": "tool_call", "name": "mount_template",
+         "arguments": {"params": {"markdown": huge}}},
+        {"kind": "tool_result", "name": "mount_template", "ok": True, "text": huge},
+        {"kind": "done", "text": "", "stop_reason": "end_turn"},
+    ])
+    md = [e for e in trace if e["kind"] == "call"][0]["args"]["params"]["markdown"]
+    assert md.endswith("…[truncated 32000 chars]") and len(md) < 9_000
+    assert [e for e in trace if e["kind"] == "result"], "the event survives the truncation"
+
+
+def test_the_system_prompt_keeps_both_ends(monkeypatch):
+    """Head-first truncation would preserve four unchangeable canvas skills and discard the
+    tuned menu appended after them — the one thing a reflective optimizer needs to read."""
+    system = [e for e in _spec_trace(monkeypatch, _FULL_RUN)
+              if e.get("role") == "system"][0]["text"]
+    assert system.startswith("# ")                      # the first skill, intact
+    assert "…[truncated " in system                     # ...and it says what it cut
+    assert system.rstrip().endswith("then author the fence it documents.")
+
+
 def test_a_crash_is_reported_not_raised(monkeypatch):
     """The production caller is a detached task whose originating stream is already closed,
     so the loop's own failures come back as a named result rather than an exception."""

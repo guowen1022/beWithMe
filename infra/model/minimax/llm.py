@@ -212,7 +212,12 @@ async def stream_with_tools(
     We accumulate per-block-index, then emit one `tool_call` event when
     the whole block closes.
 
-    Yield shape matches the contract in `infra.model.tools`.
+    Yield shape matches the contract in `infra.model.tools`, plus
+    `{"kind": "thinking", "text": ...}` for each `thinking_delta`. MiniMax
+    returns reasoning as its own content block; we forward it verbatim and keep
+    it OUT of `full_text_parts` (it is never answer text — see `_extract_text`).
+    Only what the provider actually sent is emitted, so a build with thinking
+    off produces no `thinking` events rather than a reconstructed one.
     """
     client = _get_client()
     kwargs = _build_request(
@@ -250,6 +255,10 @@ async def stream_with_tools(
                     if chunk:
                         full_text_parts.append(chunk)
                         yield {"kind": "delta", "text": chunk}
+                elif dt == "thinking_delta":
+                    chunk = getattr(delta, "thinking", "") or ""
+                    if chunk:
+                        yield {"kind": "thinking", "text": chunk}
                 elif dt == "input_json_delta":
                     idx = getattr(event, "index", 0) or 0
                     if idx in tool_buckets:

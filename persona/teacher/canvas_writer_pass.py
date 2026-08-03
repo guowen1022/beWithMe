@@ -20,6 +20,28 @@ product, which is why ground truth is compared against it. So `calls` is the res
 else that happened is `trace`, and both loops used to throw all of it away (`if kind !=
 "tool_call": continue`) — including the model's own account of why it did nothing, which is
 usually the fastest explanation of a surprising score.
+
+THE TRACE IS A SPECIFICATION, not a log. skillforge's reflective optimizer rewrites the menu by
+reading what actually happened; it cannot read our logs, our database or our model provider, so
+this list is the only evidence it gets. A reader holding ONLY the trace must be able to answer
+five questions, and each is one event kind:
+
+  1. what was the model asked?          → `prompt`, one event per role, AS SENT after templating
+  2. what did it say, and why?          → `text`, and `thinking` when the provider returns any
+  3. what did it call, with what args?  → `call`, with `args`
+  4. what came back from each call?     → `result`, with `ok` and the returned `text`
+  5. why did it stop?                   → `done` / `error`
+
+(4) is the one hosts skip. When the writer opens a guide and then authors from it, the guide's
+CONTENTS are an input to the rest of that same turn — record the call and drop the response and
+the second half of the run has no visible cause.
+
+Two rules bound what goes in. Bound it: truncate long fields, never drop events. And never
+synthesise: if the provider returned no reasoning, there is no `thinking` event — an absent
+event is honest, a reconstructed one reads as evidence and is not.
+
+Storing reasoning is not showing it. The trace is offline, read by optimizers and operators;
+nothing here reaches a UI (every stream consumer dispatches on the kinds it knows).
 """
 from __future__ import annotations
 
@@ -52,8 +74,11 @@ TERMINAL_TOOLS = {"mount_template", "edit_note"}
 PROFILE = "voice"
 
 # Trace is evidence, not a log: bounded so a recorded run stays readable and storable.
-_TRACE_MAX_ENTRIES = 40
-_TRACE_TEXT_MAX = 2000
+# skillforge stores the list verbatim and enforces no limit, so the bound is ours to keep.
+# ~8 KB per text field, a couple hundred events. The old 2000 predates `prompt` events and
+# would have cut this writer's 15 KB system prompt to a fifth of itself.
+_TRACE_MAX_ENTRIES = 200
+_TRACE_TEXT_MAX = 8000
 
 
 class WriterContractError(ValueError):
@@ -95,7 +120,9 @@ class WriterPass:
     """What the pass produced.
 
     `calls` is the OUTPUT — what was handed to each child, keyed by child name, present only
-    when that child was actually called. `trace` is everything else. `failed_because` is set
+    when that child was actually called. `trace` is the NARRATIVE — ordering, arguments as
+    sent, and what came back. Both are sent to skillforge and they are not redundant: an
+    evaluator scores the first, a reflective emitter reads the second. `failed_because` is set
     only for a failure this function itself can name; a caller's own verdict (wrong guide,
     off-menu) is the caller's to name.
     """
@@ -128,28 +155,79 @@ def writer_tools(user_id: UUID,
 
 
 def _truncate(text: str, limit: int = _TRACE_TEXT_MAX) -> str:
-    return text if len(text) <= limit else text[:limit] + f"… (+{len(text) - limit} chars)"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…[truncated {len(text) - limit} chars]"
+
+
+def _truncate_middle(text: str, limit: int = _TRACE_TEXT_MAX) -> str:
+    """Bound a prompt while keeping both ends.
+
+    Head-first truncation is wrong for exactly this prompt: the writer's system
+    message is ~15 KB of canvas skills with the TUNED MENU appended last, so
+    cutting the tail throws away the artifact skillforge is optimizing while
+    faithfully preserving four skills it cannot change. Keep both ends and say
+    in the middle how much is missing.
+    """
+    if len(text) <= limit:
+        return text
+    head = (limit * 2) // 3
+    tail = limit - head
+    return (text[:head]
+            + f"\n…[truncated {len(text) - limit} chars]\n"
+            + text[len(text) - tail:])
+
+
+def _bounded_args(value: Any, depth: int = 0) -> Any:
+    """Tool arguments with every string bounded — the note markdown is the big one.
+
+    Arguments go in as sent (recovered exactly as the executor sees them); only
+    their length is touched, and a truncated string says so in-band.
+    """
+    if isinstance(value, str):
+        return _truncate(value)
+    if depth >= 4:
+        return value
+    if isinstance(value, dict):
+        return {k: _bounded_args(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_bounded_args(v, depth + 1) for v in value]
+    return value
 
 
 class _Trace:
-    """Ordered, bounded record of everything that is not a tool call."""
+    """Ordered, bounded record of a run — the five evidence kinds, in order.
+
+    Streamed text arrives as many chunks and one `kind`; `chunk()` coalesces a
+    contiguous run of them into a single event and flushes automatically when
+    the kind changes or a discrete event (a call, a result) interleaves. That
+    keeps `thinking` and `text` from being spliced into each other while
+    preserving the order they actually happened in.
+    """
 
     def __init__(self):
         self.entries: List[dict] = []
-        self._text: List[str] = []
+        self._pending_kind: Optional[str] = None
+        self._pending: List[str] = []
 
-    def text_chunk(self, chunk: str) -> None:
-        if chunk:
-            self._text.append(chunk)
+    def chunk(self, kind: str, text: str) -> None:
+        if not text:
+            return
+        if self._pending_kind is not None and self._pending_kind != kind:
+            self.flush()
+        self._pending_kind = kind
+        self._pending.append(text)
 
-    def flush_text(self) -> None:
-        joined = "".join(self._text).strip()
-        self._text.clear()
-        if joined:
-            self._add({"kind": "text", "text": _truncate(joined)})
+    def flush(self) -> None:
+        joined = "".join(self._pending).strip()
+        kind = self._pending_kind
+        self._pending.clear()
+        self._pending_kind = None
+        if joined and kind:
+            self._add({"kind": kind, "text": _truncate(joined)})
 
     def add(self, entry: dict) -> None:
-        self.flush_text()
+        self.flush()
         self._add(entry)
 
     def _add(self, entry: dict) -> None:
@@ -247,6 +325,21 @@ async def run_writer_pass(
 
     out = WriterPass()
     trace = _Trace()
+
+    # Q1 — what was the model asked. Every message AS SENT, after templating, one
+    # event per role, taken from the same `parts` handed to the loop below rather
+    # than rebuilt (a re-render is a plausible prompt, not the one that ran).
+    trace.add({"kind": "prompt", "role": "system",
+               "text": _truncate_middle(parts.static_system or "")})
+    for message in (parts.static_user_passage, parts.dynamic_user):
+        if (message or "").strip():
+            trace.add({"kind": "prompt", "role": "user",
+                       "text": _truncate_middle(message)})
+
+    # The loop's final `done` carries the whole answer text accumulated across
+    # turns, which the deltas already delivered. Record it only when no delta
+    # ever did — otherwise every streamed turn lands in the trace twice.
+    saw_streamed_text = False
     t0 = time.perf_counter()
     try:
         async for evt in run_teacher_tool_loop(
@@ -264,30 +357,50 @@ async def run_writer_pass(
         ):
             kind = evt.get("kind")
             if kind == "tool_call":
+                # Q3 — what it called, WITH THE ARGUMENTS AS SENT. A name alone says a
+                # run went wrong and nothing about why; `load_guide` with no `ids` cannot
+                # be told apart from `load_guide(['mermaid'])` on a plotting request.
                 name = evt.get("name")
                 args, truncated = recovered_args(evt.get("arguments") or {})
                 _record_call(out, name, args)
+                entry = {"kind": "call", "name": name, "args": _bounded_args(args)}
                 # A truncated authoring call is the one failure the writer can recover from
                 # by retrying, so it belongs in the record rather than looking like a call
                 # that simply carried no content.
-                trace.add({"kind": "call", "name": name, "truncated": True}
-                          if truncated else {"kind": "call", "name": name})
+                if truncated:
+                    entry["truncated"] = True
+                trace.add(entry)
+            elif kind == "tool_result":
+                # Q4 — what came back. The guide body `load_guide` returns is an INPUT to
+                # the rest of this same turn: the note authored two events later was
+                # written from it, so without this the second half of the run has no
+                # visible cause. This is the gap hosts most often leave.
+                trace.add({"kind": "result",
+                           "name": evt.get("name"),
+                           "ok": bool(evt.get("ok")),
+                           "text": _truncate(str(evt.get("text") or ""))})
             elif kind == "delta":
-                trace.text_chunk(evt.get("text") or "")
+                chunk = evt.get("text") or ""
+                saw_streamed_text = saw_streamed_text or bool(chunk.strip())
+                trace.chunk("text", chunk)
+            elif kind == "thinking":
+                # Q2's second half — the model's reasoning, verbatim, ONLY when the
+                # provider actually returned some. No provider reasoning, no event: a
+                # rationale reconstructed after the fact reads as evidence and is not one.
+                trace.chunk("thinking", evt.get("text") or "")
             elif kind == "done":
                 # The model's own account of the turn. This is the sentence that would have
                 # made the original month-long investigation a five-minute one.
-                trace.text_chunk(evt.get("text") or "")
+                if not saw_streamed_text:
+                    trace.chunk("text", evt.get("text") or "")
                 trace.add({"kind": "done",
                            "stop_reason": evt.get("stop_reason"),
                            "tool_rounds": evt.get("tool_rounds"),
                            "deadline_hit": evt.get("deadline_hit")})
-            elif kind == "tool_result":
-                trace.add({"kind": "tool_result", "name": evt.get("name")})
     except Exception as e:
         out.failed_because = f"crashed:{type(e).__name__}: {e}"[:500]
-        trace.add({"kind": "error", "error": out.failed_because})
-    trace.flush_text()
+        trace.add({"kind": "error", "text": out.failed_because})
+    trace.flush()
     trace.add({"kind": "timing", "wall_ms": round((time.perf_counter() - t0) * 1000, 2)})
     out.trace = trace.entries
     return out
