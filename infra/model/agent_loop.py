@@ -8,12 +8,18 @@ teacher internals. Depends only on `infra.*`.
 
   1. Open `stream_with_tools` with the static system prompt + dynamic
      user message + the teacher's tool manifest.
-  2. Forward `delta` events to the caller as text tokens.
-  3. When the LLM emits `tool_call`s, execute them concurrently, collect
-     their results, then re-open the stream with the tool calls + results
-     appended as conversation turns. Repeat until the model says it's
-     done (`stop_reason != "tool_use"`).
+  2. Forward `delta` events to the caller as text tokens, and `thinking`
+     events (the provider's own reasoning) unchanged and separate.
+  3. When the LLM emits `tool_call`s, execute them concurrently, yield one
+     `tool_result` per call, then re-open the stream with the tool calls +
+     results appended as conversation turns. Repeat until the model says
+     it's done (`stop_reason != "tool_use"`).
   4. Yield a final `done` event with the assembled answer text + usage.
+
+The event stream is the ONLY record an offline reader (skillforge's
+reflective optimizer) ever gets of a run, so this loop forwards what it
+observes and filters nothing by kind. Consumers dispatch on the kinds they
+care about; a kind nobody matches costs one ignored dict.
 
 We pass tool call/result history back to the model as plain user/assistant
 messages with a stable text envelope. Both DeepSeek (OpenAI) and MiniMax
@@ -45,6 +51,24 @@ def _truncate(s: str, n: int) -> str:
     return s[:n] + f"\n…[truncated {len(s) - n} chars]"
 
 
+def _result_ok(text: str) -> bool:
+    """Did this tool result carry a payload, or an error?
+
+    Every failure path in this module returns `json.dumps({"error": ...})`, and
+    tools follow the same convention for their own refusals. So "ok" here is an
+    OBSERVATION of the payload the executor returned, not a guess: a JSON object
+    with an `error` key is the failure shape, everything else is a result.
+    """
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("{"):
+        return True
+    try:
+        parsed = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return True
+    return not (isinstance(parsed, dict) and "error" in parsed)
+
+
 async def _execute_tool_calls(
     calls: List[Dict[str, Any]],
     tools: List[ToolSpec],
@@ -53,17 +77,22 @@ async def _execute_tool_calls(
 ) -> List[Dict[str, Any]]:
     """Run every tool concurrently. Unknown tools surface as error strings.
 
-    Each entry has `result` (truncated for the model's context) and
-    `result_raw` (untruncated, for callers that need to introspect the
-    structured payload — e.g. recipe-recording needs the full snapshot
-    refs list which is too big to fit in `result`)."""
+    Each entry has `result` (truncated for the model's context), `result_raw`
+    (untruncated, for callers that need to introspect the structured payload —
+    e.g. recipe-recording needs the full snapshot refs list which is too big to
+    fit in `result`), and `ok` (did the child answer or fail).
+
+    `ok` is recorded here rather than re-derived by callers: this function is the
+    only place that knows a call never reached its executor at all (unknown tool,
+    denied grant, raised exception) as opposed to running and returning an error.
+    """
     by_name = {t.name: t for t in tools}
 
     async def _one(call: Dict[str, Any]) -> Dict[str, Any]:
         spec = by_name.get(call.get("name") or "")
         if spec is None:
             err = json.dumps({"error": f"unknown tool {call.get('name')!r}"})
-            return {"call": call, "result": err, "result_raw": err}
+            return {"call": call, "result": err, "result_raw": err, "ok": False}
         # Dispatch-time authorization (defense in depth — assembly already
         # filtered). A persona may select a tool only if its domain is granted.
         if grant is not None and not authorize(grant, spec):
@@ -73,15 +102,18 @@ async def _execute_tool_calls(
                     f"persona {grant.persona!r} grant"
                 )
             })
-            return {"call": call, "result": err, "result_raw": err}
+            return {"call": call, "result": err, "result_raw": err, "ok": False}
         try:
             result_text = await spec.executor(call.get("arguments") or {})
         except Exception as e:
             result_text = json.dumps({"error": f"{type(e).__name__}: {e}"})
+            return {"call": call, "result": result_text,
+                    "result_raw": result_text, "ok": False}
         return {
             "call": call,
             "result": _truncate(result_text, truncate_chars),
             "result_raw": result_text,
+            "ok": _result_ok(result_text),
         }
 
     return await asyncio.gather(*(_one(c) for c in calls))
@@ -234,10 +266,15 @@ async def run(
     also exempt from the iteration cap, so the final authoring call always
     lands even when guide-loading used the budget.
 
-    Final `done` shape:
+    Yields, in observed order:
+      {"kind": "delta",       "text": str}
+      {"kind": "thinking",    "text": str}                   # provider reasoning
+      {"kind": "tool_call",   "id", "name", "arguments"}
+      {"kind": "tool_result", "id", "name", "ok": bool, "text": str}
+                                                             # + "action"/"result"
+                                                             #   for browser snapshots
       {"kind": "done", "text": full_answer, "usage": last_usage,
-       "stop_reason": "end_turn", "tool_rounds": int,
-       "deadline_hit": bool}
+       "stop_reason": "end_turn", "tool_rounds": int, "deadline_hit": bool}
     """
     history: List[Dict[str, Any]] = list(prior_messages or [])
     full_text_parts: List[str] = []
@@ -340,6 +377,12 @@ async def run(
                     _first_delta_seen = True
                 full_text_parts.append(text_chunk)
                 yield {"kind": "delta", "text": text_chunk}
+            elif kind == "thinking":
+                # The model's own reasoning, forwarded verbatim and NOT added to
+                # the answer text. Offline recorders (the skillforge trace) keep
+                # it; every UI consumer dispatches on known kinds and ignores it,
+                # which is what keeps "store reasoning" from becoming "show it".
+                yield {"kind": "thinking", "text": evt.get("text", "")}
             elif kind == "tool_call":
                 call_name = evt.get("name")
                 if phases is not None and not _first_speak_seen and call_name == "speak":
@@ -424,6 +467,37 @@ async def run(
             for e in executed
         )
         tool_rounds += 1
+
+        # EVERY call's result goes upstream, before any break below. What a
+        # child returned is an input to the rest of the same turn — the guide
+        # `load_guide` handed back is what the note that follows was written
+        # from — so a recorder that keeps the call and drops the response leaves
+        # the second half of the run with no visible cause. This used to fire
+        # only for `browser_set` snapshots, which meant the writer (whose
+        # terminal mount breaks two statements below) never emitted one at all.
+        for e in executed:
+            call = e.get("call") or {}
+            evt_out: Dict[str, Any] = {
+                "kind": "tool_result",
+                "id": call.get("id"),
+                "name": call.get("name") or "",
+                "ok": bool(e.get("ok")),
+                "text": e.get("result") or "",
+            }
+            # Snapshot results additionally carry the PARSED tree: callers
+            # capture ARIA refs at record time (workshop/research recipes), and
+            # `result` is mid-JSON once the tree is large (Wikipedia ≈ 24 KB).
+            args = call.get("arguments") or {}
+            if (call.get("name") == "browser_set"
+                    and (args.get("action") or "").lower() == "snapshot"):
+                try:
+                    evt_out["action"] = "snapshot"
+                    evt_out["result"] = json.loads(
+                        e.get("result_raw") or e.get("result") or "{}")
+                except Exception:
+                    evt_out.pop("action", None)
+            yield evt_out
+
         # Terminal-tool round: stop ONLY when a terminal authoring call
         # (mount/edit) actually SUCCEEDED. Re-prompting after a real mount would
         # let the model fire a SECOND one (duplicate appends / highlight spam).
@@ -443,33 +517,6 @@ async def run(
         )
         if terminal_succeeded:
             break
-        # Propagate snapshot results upstream so callers can capture
-        # ARIA refs at record time (used by workshop/research recipes).
-        # Other tool results are intentionally NOT propagated — the
-        # truncated text already feeds back into the model on the next
-        # turn, and snapshot is the only result whose structured shape
-        # external callers need to introspect.
-        for e in executed:
-            call = e.get("call") or {}
-            if call.get("name") != "browser_set":
-                continue
-            args = call.get("arguments") or {}
-            if (args.get("action") or "").lower() != "snapshot":
-                continue
-            # Use `result_raw` (untruncated) — the truncated `result` is
-            # mid-JSON when the snapshot tree is large (Wikipedia ≈ 24 KB)
-            # and would fail to parse.
-            raw = e.get("result_raw") or e.get("result") or "{}"
-            try:
-                parsed = json.loads(raw)
-            except Exception:
-                continue
-            yield {
-                "kind": "tool_result",
-                "name": "browser_set",
-                "action": "snapshot",
-                "result": parsed,
-            }
         history.extend(_format_tool_round_for_history(executed))
         # Subsequent turns continue the same conversation — the user's
         # original `dynamic_user` shouldn't be re-sent. Move it into

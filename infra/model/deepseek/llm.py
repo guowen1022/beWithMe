@@ -19,6 +19,26 @@ from infra.model.tools import ToolSpec
 _client: Optional[AsyncOpenAI] = None
 
 
+def _reasoning_chunk(delta) -> str:
+    """The model's own reasoning for this streamed chunk, if the provider sent one.
+
+    DeepSeek's thinking mode returns chain-of-thought on `delta.reasoning_content`,
+    a field beside `content` rather than inside it (some builds spell it
+    `reasoning`). The OpenAI SDK's delta model allows extra fields, so it survives
+    deserialization — we were simply never reading it, which is why an offline
+    trace could record WHAT the model did and never WHY.
+
+    Read-only and never folded into the answer text: this is evidence for the
+    offline record, not output. Returns "" when the provider sent nothing, so a
+    caller can only ever record reasoning that actually arrived.
+    """
+    for field in ("reasoning_content", "reasoning"):
+        chunk = getattr(delta, field, None)
+        if isinstance(chunk, str) and chunk:
+            return chunk
+    return ""
+
+
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
@@ -201,8 +221,13 @@ async def stream_with_tools(
 
     Yield shape (matches infra.model.tools docstring):
       {"kind": "delta", "text": "..."}
+      {"kind": "thinking", "text": "..."}    ← only when thinking mode is on
       {"kind": "tool_call", "id": "...", "name": "...", "arguments": {...}}
       {"kind": "done", "text": full_text, "usage": {...}, "stop_reason": "..."}
+
+    `thinking` is the provider's `reasoning_content`, forwarded verbatim and kept
+    OUT of `full_text` — it is never part of the answer. Consumers dispatch on
+    known kinds, so a caller that does not want it simply never matches it.
 
     Tool-call deltas arrive piece-meal in OpenAI's streaming format
     (`delta.tool_calls[i]` with growing `function.arguments`). We
@@ -251,6 +276,11 @@ async def stream_with_tools(
             finish_reason = choice.finish_reason
 
         delta = choice.delta
+        reasoning = _reasoning_chunk(delta)
+        if reasoning:
+            # Deliberately not appended to full_text_parts — reasoning is not answer.
+            yield {"kind": "thinking", "text": reasoning}
+
         text = getattr(delta, "content", None)
         if text:
             full_text_parts.append(text)
