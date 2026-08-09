@@ -49,6 +49,17 @@ x-core: &core
     context: .
     dockerfile: docker/Dockerfile
     target: core
+    args:
+      # Empty = upstream mirrors. Set these in .env when building from a
+      # network where deb.debian.org/pypi.org are slow (see docker/Dockerfile).
+      APT_MIRROR: ${APT_MIRROR:-}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+      # BuildKit treats these three specially: forwarded to RUN steps but never
+      # baked into the image. Needed where cdn.playwright.dev (177MB Chromium)
+      # resets mid-transfer; NO_PROXY keeps the domestic mirrors direct.
+      HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+      HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+      NO_PROXY: ${BUILD_NO_PROXY:-}
   restart: unless-stopped
   environment: *common-env
   volumes:
@@ -63,6 +74,12 @@ x-media: &media
     context: .
     dockerfile: docker/Dockerfile
     target: media
+    args:
+      APT_MIRROR: ${APT_MIRROR:-}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+      HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+      HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+      NO_PROXY: ${BUILD_NO_PROXY:-}
   restart: unless-stopped
   environment: *common-env
   volumes:

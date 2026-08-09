@@ -57,7 +57,10 @@ def _imports_json(tree: ast.AST) -> bool:
     "path", _tool_modules(), ids=lambda p: str(p.relative_to(_ROOT))
 )
 def test_tool_module_imports_json_if_used(path: Path) -> None:
-    tree = ast.parse(path.read_text(), filename=str(path))
+    # Explicit encoding: bare read_text() uses the locale default, which on a
+    # zh-CN Windows box is GBK and blows up on the UTF-8 punctuation these
+    # sources contain. Linux CI defaults to UTF-8 and never sees it.
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     if _uses_json_attribute(tree):
         assert _imports_json(tree), (
             f"{path.relative_to(_ROOT)} uses json.* in an executor but does not "

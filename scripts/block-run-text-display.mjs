@@ -15,7 +15,7 @@
 // Exits 0 on success with the body HTML on stdout. Exits 1 + a short
 // error on stderr otherwise.
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import vm from "node:vm";
 
@@ -24,8 +24,14 @@ const __dirname = path.dirname(__filename);
 
 // Pull marked from the frontend's node_modules so this script doesn't
 // need its own dep tree.
+// pathToFileURL, not a bare path: on Windows an absolute path starts with a
+// drive letter and Node's ESM loader reads "d:" as an unsupported URL scheme
+// (ERR_UNSUPPORTED_ESM_URL_SCHEME). POSIX tolerates the bare path, so this
+// only ever failed on Windows.
 const { marked } = await import(
-  path.join(__dirname, "..", "frontend", "node_modules", "marked", "lib", "marked.esm.js")
+  pathToFileURL(
+    path.join(__dirname, "..", "frontend", "node_modules", "marked", "lib", "marked.esm.js")
+  ).href
 );
 marked.setOptions({ gfm: true, breaks: true });
 // Mirror the host's renderer override (frontend/components/Block.tsx)

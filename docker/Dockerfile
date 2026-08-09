@@ -1,4 +1,12 @@
-# syntax=docker/dockerfile:1.7
+# NOTE: deliberately no `# syntax=docker/dockerfile:1.7` directive.
+#
+# That directive makes BuildKit fetch the frontend image from Docker Hub before
+# it will even parse this file, which turns every build into a network call and
+# hard-fails on networks that can't reach registry-1.docker.io. The only 1.7-era
+# feature used here is `RUN --mount=type=cache` (below), which BuildKit's
+# built-in frontend has supported since Docker 23 -- so the pin bought us
+# nothing and cost us offline builds. Re-add it only if this file starts using
+# a feature the built-in frontend lacks.
 #
 # beWithMe service image.
 #
@@ -21,12 +29,32 @@
 # =============================================================================
 FROM python:3.12-slim AS base
 
+# Package mirrors. Empty = upstream (deb.debian.org / pypi.org), which is right
+# for GitHub Actions. Building from mainland China, upstream measures ~19 KB/s
+# for apt and ~31 KB/s for pip -- slow enough to look like a hang -- so set
+# these to a local mirror there. The same applies on an Alibaba ECS box.
+#
+#   APT_MIRROR=mirrors.aliyun.com
+#   PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG APT_MIRROR=""
+ARG PIP_INDEX_URL=""
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 
 WORKDIR /app
+
+# Point apt at the mirror when one is given. Trixie ships the deb822 format at
+# sources.list.d/debian.sources; older images use the one-line sources.list.
+# Handle whichever is present so this does not silently no-op on a base bump.
+RUN if [ -n "$APT_MIRROR" ]; then \
+        for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+            [ -f "$f" ] && sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f" || true; \
+        done; \
+    fi
 
 # Build-only toolchain for wheels that compile (pywhispercpp, webrtcvad, nh3).
 # Installed here and NOT carried into the runtime layers below.
@@ -50,7 +78,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM base AS core
 
 # Drop the build toolchain; keep only what the app needs at runtime.
-RUN apt-get purge -y build-essential cmake git && \
+#
+# git is NOT purged: it looks like build tooling, but each user's canvas
+# workspace is a real git repo (agents/frontend_engineer/workspace.py
+# `ensure_workspace` / `_run_git`), so persona shells out to it at runtime.
+# Purging it made GET /api/dynamic/canvas 500 with FileNotFoundError: 'git'.
+RUN apt-get purge -y build-essential cmake && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
